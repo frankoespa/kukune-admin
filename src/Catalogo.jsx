@@ -366,6 +366,29 @@ function Precios({ perfume, ajustes, onCambiar }) {
       {campo("costo")}
       {campo("precioPublico")}
 
+      {/* La ganancia en pesos va en ámbar porque es lo que queda en el bolsillo,
+          que es lo único que lleva ese color en toda la app. Al lado del margen
+          y no lejos: son la misma cuenta mirada de dos maneras — cuántos pesos
+          y qué proporción del costo. */}
+      <div
+        className="w-[92px] text-right"
+        title={
+          r.ganancia === null
+            ? "Poné costo y precio de venta para ver cuánto te queda"
+            : `Vendiendo directo a ${pesos(perfume.precioPublico)} te quedan ${pesos(r.ganancia)} por unidad, sobre un costo de ${pesos(perfume.costo)}. No incluye la comisión ni el envío de Mercado Libre.`
+        }
+      >
+        <div
+          className="k-num text-[13px] font-semibold"
+          style={{ color: r.ganancia === null ? "var(--humo-claro)" : r.ganancia >= 0 ? "var(--ambar)" : "var(--oxido)" }}
+        >
+          {r.ganancia === null ? "—" : pesos(r.ganancia)}
+        </div>
+        <div className="k-col" style={{ color: "var(--humo-claro)" }}>
+          ganancia
+        </div>
+      </div>
+
       <div className="w-[74px] text-right">
         <div className="k-num text-[13px] font-semibold" style={{ color: tono }}>
           {r.margen === null ? "—" : pctCorto(r.margen)}
@@ -390,7 +413,10 @@ function Precios({ perfume, ajustes, onCambiar }) {
                 : `Si en cambio publicaras los ${pesos(perfume.precioPublico)} en ML, te quedaría ${pctCorto(r.margenEnML)}.`)
         }
       >
-        <div className="k-num text-[13px]" style={{ color: "var(--ambar)" }}>
+        {/* Antes iba en ámbar, pero el precio de publicación no es ganancia:
+            con la columna de ganancia al lado, dos ámbares seguidos borraban
+            el significado del color. */}
+        <div className="k-num text-[13px]" style={{ color: "var(--tinta)" }}>
           {r.precioML === null ? "—" : pesos(r.precioML)}
         </div>
         <div className="k-col" style={{ color: "var(--humo-claro)" }}>

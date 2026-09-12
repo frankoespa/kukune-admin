@@ -178,6 +178,17 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   números son comparables), **a cuánto publicar en ML para ganar lo mismo** que
   vendiendo directo, y cuánto quedaría si se publicara el precio directo tal cual
   en ML.
+- La fila muestra **ganancia en pesos** (`precioPublico − costo`, por unidad) al
+  lado del **margen**: son la misma cuenta mirada de dos maneras, cuántos pesos y
+  qué proporción del costo, y una sola de las dos siempre deja la otra pregunta
+  abierta. La ganancia va en **ámbar** —es plata que queda, el único uso legítimo
+  de ese color— y en óxido si el precio no cubre el costo.
+- Por eso el precio "publicar en ML" **dejó de ser ámbar** y es tinta: es un
+  precio, no ganancia. Con las dos celdas juntas, dos ámbares seguidos borraban
+  el significado del color.
+- **Nada de esto va al PDF de precios**: al PDF se le pasan solo `nombre`,
+  `precioPublico` y `foto`, y `pdf.js` no menciona costo, margen ni ganancia. Es
+  para el cliente.
 - De esos tres, en pantalla van **dos**: el margen y el precio de ML. El tercero
   vive en el tooltip. Estaban los dos últimos apilados en la misma celda y se
   leían como una contradicción ("el precio para ganar lo mismo" arriba, "perdés
@@ -376,6 +387,32 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   por separado, las columnas se superponen al hacer scroll lateral. Los
   `GroupHead` no son sticky en horizontal, así que los títulos de grupo se
   deslizan por encima de esas dos columnas (es así desde antes).
+
+## Los datos del usuario NO se tocan
+**Regla dura, por encima de cualquier necesidad de verificar.** `datos/` es el
+negocio del usuario: costos, precios y márgenes que no están en ningún otro lado
+y que él mismo dijo que si pierde "está en problemas". Ya se perdieron datos dos
+veces por probar encima.
+
+- **No escribir ni restaurar nada de `datos/` para verificar.** Ni con respaldo.
+  Ni "lo dejo como estaba". La verificación se hace en una **copia del proyecto**
+  (repo + `datos/`) en el scratchpad, con su propio `npm run dev` en otro puerto.
+  Ahí se puede romper todo.
+- Sobre los datos reales, **solo lectura**: `GET` a la API, leer los JSON, mirar
+  el DOM. Nada de clics que guarden.
+- **Restaurar un archivo con la app abierta no alcanza**, y por eso ni siquiera
+  es una salida de emergencia: el guardado es un `setTimeout` de 800 ms sobre el
+  estado de React, así que un temporizador pendiente se despierta después de la
+  restauración y vuelve a escribir lo viejo. Si alguna vez hay que restaurar:
+  recargar la página primero, restaurar después, verificar el md5 unos segundos
+  más tarde — y decírselo al usuario.
+- **Lo que aparezca en los datos y no se reconozca es del usuario, no basura de
+  una prueba.** Él trabaja en la app mientras nosotros editamos código. Si algo
+  no cierra, se pregunta; no se restaura por cuenta propia. Así se borraron
+  precios que él había cargado y los cambios que le había hecho a un pedido.
+- OneDrive guarda historial por archivo y es la única red real: botón derecho →
+  Historial de versiones. Conviene nombrarle la hora exacta en que se escribió
+  encima.
 
 ## Entorno de esta máquina
 - Node no está en el `PATH`: vive en `C:\Program Files\nodejs`. Por eso
