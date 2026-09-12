@@ -186,10 +186,20 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - La comisión y el envío de ML del catálogo viven en `perfumes.json` bajo
   `ajustes`, no en cada pedido: el precio de lista no depende de a quién le
   compraste. `AJUSTES_POR_DEFECTO` está en `almacenamiento.js`.
-- **"Pasar costos al catálogo"** (banda de acciones del pedido) copia el Precio
-  sin Ganancia de las filas **incluidas** al `costo` del perfume: es el mismo
-  número (costo del proveedor × dólar + su parte de los costos extras), así que
-  no hay conversión ninguna, solo el traslado. Ofrece dos salidas y no elige por
+- **"Pasar costos al catálogo"** copia el Precio sin Ganancia al `costo` del
+  perfume. Hay dos disparadores sobre la misma función: el botón de la banda de
+  acciones, que toma **todas las filas incluidas**, y un atajo **por fila** en la
+  celda de Precio s/Ganancia. `costosParaElCatalogo(filas, perfumePorId)` es puro
+  y recibe las filas; quién lo llama decide cuáles.
+- El atajo de la fila aparece al pasar el mouse (`group-hover`, con `group` en el
+  `<tr>`) y no ocupa lugar cuando no está: son 21 columnas y una más no entra. Va
+  en la celda del número que se copia, así no hay que explicar qué se pasa, y
+  **funciona también en filas no incluidas** — el clic es explícito. Abre el mismo
+  diálogo con un solo renglón, y el aviso de resultado es un tilde en esa fila,
+  no el texto en el botón de la banda: el aviso tiene que estar donde estaba el
+  ojo. Una fila huérfana no muestra el atajo.
+- Es el mismo número (costo del proveedor × dólar + su parte de los costos
+  extras), así que no hay conversión ninguna, solo el traslado. Ofrece dos salidas y no elige por
   el usuario: **Reemplazar** (este pedido es la referencia nueva) o **Promediar**
   50/50 con el costo guardado, que es la cuenta que se hacía a mano cuando el
   mismo perfume se le compró a dos proveedores. "Promediar" solo aparece si
