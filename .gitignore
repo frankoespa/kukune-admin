@@ -6,6 +6,7 @@ dist-ssr
 .vscode/*
 !.vscode/extensions.json
 
-# Respaldos y temporales que escribe la app sola en cada guardado
-datos/**/*.bak.json
-datos/**/*.tmp.json
+# Los datos del negocio NO se versionan: pedidos con costos, precios y márgenes,
+# el catálogo y las fotos. Quedan solo en el disco, con OneDrive como respaldo.
+# Este repo es publicable porque acá no hay nada del negocio.
+datos/
