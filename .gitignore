@@ -10,3 +10,6 @@ dist-ssr
 # el catálogo y las fotos. Quedan solo en el disco, con OneDrive como respaldo.
 # Este repo es publicable porque acá no hay nada del negocio.
 datos/
+
+# Configuración local de Claude Code: rutas y permisos de esta máquina.
+.claude/settings.local.json
