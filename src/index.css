@@ -1,0 +1,99 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   KUKUNE · mesa de precios
+
+   Paleta sacada del producto, no de una plantilla: el fondo es vidrio
+   esmerilado de frasco (sage frío), la tinta va corrida al marrón como el oud,
+   y el ámbar de la marca queda reservado para una sola cosa — lo que te queda
+   a vos. Si aparece el ámbar, es plata tuya.
+   ============================================================ */
+:root {
+  --vidrio: #e6e9e3; /* fondo de trabajo */
+  --vidrio-hondo: #dce0d8; /* franjas y hover */
+  --tinta: #22201c; /* texto y bandas oscuras */
+  --tinta-suave: #34322b;
+  --humo: #6e7269; /* texto secundario */
+  --humo-claro: #9aa094;
+  --linea: #cfd4c9; /* hairlines sobre el fondo */
+  --papel: #ffffff; /* celdas que se editan */
+  --ambar: #b8862f; /* la ganancia, y nada más */
+  --ambar-vivo: #d9a63f;
+  --verde: #1f6b4f;
+  --oxido: #a63a2a;
+
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+  --sans: "Montserrat", ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  background: var(--vidrio);
+  color: var(--tinta);
+}
+
+/* Toda cifra de la app va en mono: acá los números son el contenido, no el
+   relleno entre etiquetas. */
+.k-num {
+  font-family: var(--mono);
+  font-feature-settings: "tnum" 1;
+  letter-spacing: -0.01em;
+}
+
+.k-rotulo {
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--humo);
+}
+
+.k-col {
+  font-family: var(--mono);
+  font-weight: 400;
+  font-size: 9.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+/* Barra espejo: la misma barra de scroll horizontal de la tabla, pero arriba,
+   para no tener que bajar hasta el final de la lista para mover las columnas. */
+.k-scroll-espejo {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.k-scroll-espejo::-webkit-scrollbar {
+  height: 10px;
+}
+.k-scroll-espejo::-webkit-scrollbar-track {
+  background: var(--vidrio-hondo);
+  border-radius: 5px;
+}
+.k-scroll-espejo::-webkit-scrollbar-thumb {
+  background: #a9aea3;
+  border-radius: 5px;
+}
+.k-scroll-espejo::-webkit-scrollbar-thumb:hover {
+  background: var(--humo);
+}
+
+/* Foco visible en todo lo que se puede tocar con el teclado. */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--ambar);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+
+# Respaldos y temporales que escribe la app sola en cada guardado
+datos/**/*.bak.json
+datos/**/*.tmp.json
