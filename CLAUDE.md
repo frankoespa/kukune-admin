@@ -95,6 +95,13 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   proveedor. Los globales se heredan del pedido que estabas mirando.
 - La migración del pedido único a `datos/pedidos/` corre sola la primera vez y
   **deja `analisis-pedido.json` donde estaba, entero**. No borra nada.
+- Borrar un pedido manda a la papelera **el `.json` y su `.bak.json`**, con el
+  mismo sello de fecha para que queden juntos. El `.bak` es la versión anterior
+  de ese pedido: si lo borraste por error y el principal ya estaba dañado, es lo
+  único que queda. Antes solo se movía el principal y el `.bak` quedaba huérfano
+  en `pedidos/`, juntando basura de pedidos que ya no existían. Si el `.bak`
+  todavía no existe (recién al 2º guardado), el borrado igual funciona y la
+  respuesta trae `conRespaldo: false`.
 
 ## Catálogo de perfumes
 - El nombre y la foto de cada perfume viven **una sola vez** en

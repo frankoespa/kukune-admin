@@ -238,11 +238,28 @@ export default function pluginDatos() {
         }
 
         if (req.method === "DELETE" && id) {
-          // A la papelera, no al vacío.
+          // A la papelera, no al vacío. Se lleva también el `.bak.json`: es la
+          // versión anterior de ESE pedido, así que si lo borraste por error y
+          // el archivo principal ya estaba dañado, sigue siendo lo único que
+          // te puede salvar. Si se quedaba en `pedidos/`, además, iba juntando
+          // huérfanos de pedidos que ya no existen.
           await mkdir(dirPapelera, { recursive: true });
           const sello = new Date().toISOString().replace(/[:.]/g, "-");
-          await rename(archivoPedido(id), path.join(dirPapelera, `${sello}__${id}.json`));
-          return responder(res, { ok: true, papelera: `${DIR}/${PAPELERA}` });
+          const aPapelera = async (sufijo) => {
+            try {
+              await rename(
+                path.join(dirPedidos, `${id}${sufijo}`),
+                path.join(dirPapelera, `${sello}__${id}${sufijo}`)
+              );
+              return true;
+            } catch (e) {
+              return false; // puede no existir: el .bak recién aparece al 2º guardado
+            }
+          };
+          if (!(await aPapelera(".json")))
+            return responder(res, { error: "No existe ese pedido" }, 404);
+          const conRespaldo = await aPapelera(".bak.json");
+          return responder(res, { ok: true, papelera: `${DIR}/${PAPELERA}`, conRespaldo });
         }
 
         responder(res, { error: "Método no permitido" }, 405);
