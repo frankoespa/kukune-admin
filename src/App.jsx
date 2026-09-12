@@ -13,7 +13,12 @@ import {
   ImagePlus,
   X,
 } from "lucide-react";
-import { construirPDF, nombreArchivoPDF } from "./pdf";
+import {
+  construirPDF,
+  nombreArchivoPDF,
+  construirPDFPrecios,
+  nombreArchivoPrecios,
+} from "./pdf";
 import {
   listarPedidos,
   leerPedido,
@@ -23,12 +28,14 @@ import {
   urlDePedido,
   leerPerfumes,
   escribirPerfumes,
+  AJUSTES_POR_DEFECTO,
   subirFoto,
   fotoComoDataUrl,
   urlFoto,
 } from "./almacenamiento";
 import Catalogo, { buscarPerfumes, ConVistaPrevia } from "./Catalogo";
 import { resolverPrecios } from "./precios";
+import { NumberCell } from "./NumberCell";
 
 /* ============================================================
    KUKUNE · Análisis de Pedido
@@ -228,52 +235,6 @@ async function comprimirImagen(file) {
 }
 
 /* ---------- Inputs controlados ---------- */
-function NumberCell({ value, onChange, align = "right", suffix, className = "", style }) {
-  const [s, setS] = useState(String(value ?? ""));
-  const focused = useRef(false);
-  useEffect(() => {
-    if (!focused.current) setS(value === 0 || value ? String(value) : "");
-  }, [value]);
-  return (
-    <div className="relative">
-      <input
-        inputMode="decimal"
-        value={s}
-        onFocus={() => (focused.current = true)}
-        onBlur={() => {
-          focused.current = false;
-          setS(value === 0 || value ? String(value) : "");
-        }}
-        onChange={(e) => {
-          const raw = e.target.value.replace(",", ".");
-          setS(e.target.value);
-          const num = parseFloat(raw);
-          onChange(Number.isFinite(num) ? num : 0);
-        }}
-        className={`k-num w-full rounded-[3px] border py-1.5 pl-2 ${
-          suffix ? "pr-8" : "pr-2"
-        } text-[12.5px] transition focus:outline-none ${
-          align === "right" ? "text-right" : "text-left"
-        } ${className}`}
-        style={{
-          background: "var(--papel)",
-          borderColor: "var(--linea)",
-          color: "var(--tinta)",
-          ...style,
-        }}
-      />
-      {suffix && (
-        <span
-          className="k-col pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[9px]"
-          style={{ color: "var(--humo-claro)" }}
-        >
-          {suffix}
-        </span>
-      )}
-    </div>
-  );
-}
-
 function TextCell({ value, onChange, placeholder }) {
   return (
     <input
@@ -846,6 +807,8 @@ export default function App() {
   const [dialogo, setDialogo] = useState(null);
 
   const [perfumes, setPerfumes] = useState([]);
+  const [ajustes, setAjustes] = useState(AJUSTES_POR_DEFECTO);
+  const [armandoPrecios, setArmandoPrecios] = useState(false);
   const perfumePorId = useMemo(() => new Map(perfumes.map((p) => [p.id, p])), [perfumes]);
 
   // Foto del estado tal como se cargó, para saber si el usuario cambió algo.
@@ -945,8 +908,9 @@ export default function App() {
     let vigente = true;
     leerPerfumes().then((r) => {
       if (!vigente) return;
-      catalogoInicial.current = JSON.stringify(r.perfumes);
+      catalogoInicial.current = JSON.stringify({ perfumes: r.perfumes, ajustes: r.ajustes });
       setPerfumes(r.perfumes);
+      setAjustes(r.ajustes);
     });
     return () => {
       vigente = false;
@@ -956,7 +920,7 @@ export default function App() {
   const guardaCatalogo = useRef(null);
   useEffect(() => {
     if (catalogoInicial.current === null) return; // todavía no cargó
-    const json = JSON.stringify(perfumes);
+    const json = JSON.stringify({ perfumes, ajustes });
     if (json === catalogoInicial.current) return; // nada cambió
     // La marca se actualiza ACÁ, no cuando el PUT responde. Si se esperara a la
     // respuesta, un cambio hecho mientras la escritura anterior está en vuelo se
@@ -967,13 +931,13 @@ export default function App() {
     catalogoInicial.current = json;
     clearTimeout(guardaCatalogo.current);
     guardaCatalogo.current = setTimeout(() => {
-      escribirPerfumes(perfumes).catch((e) => {
+      escribirPerfumes(perfumes, ajustes).catch((e) => {
         // Se suelta la marca para que el próximo cambio reintente.
         catalogoInicial.current = "";
         setErrorGuardado(`No se pudo guardar el catálogo (${e.message}).`);
       });
     }, 800);
-  }, [perfumes]);
+  }, [perfumes, ajustes]);
 
   const [showHelp, setShowHelp] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -1115,6 +1079,28 @@ export default function App() {
     const creado = await crearPedido({ nombre, globals, productos: filas });
     abrirPedido(creado.id, creado);
     refrescarLista();
+  };
+
+  // Lista de precios para clientes: solo los que tienen precio de venta, con la
+  // foto traída del disco como en el PDF del proveedor.
+  const exportarPrecios = async () => {
+    setArmandoPrecios(true);
+    try {
+      const fecha = new Date();
+      const conPrecio = perfumes
+        .filter((p) => (p.precioPublico || 0) > 0)
+        .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+      const items = await Promise.all(
+        conPrecio.map(async (p) => ({
+          nombre: p.nombre,
+          precioPublico: p.precioPublico,
+          foto: await fotoComoDataUrl(p.foto),
+        }))
+      );
+      construirPDFPrecios(items, { fecha }).save(nombreArchivoPrecios(fecha));
+    } finally {
+      setArmandoPrecios(false);
+    }
   };
 
   const renombrarPedido = () =>
@@ -1489,6 +1475,10 @@ export default function App() {
         <Catalogo
           perfumes={perfumes}
           usos={usosPorPerfume}
+          ajustes={ajustes}
+          onAjustes={(campos) => setAjustes((a) => ({ ...a, ...campos }))}
+          onExportarPrecios={exportarPrecios}
+          exportando={armandoPrecios}
           onCambiar={cambiarPerfume}
           onCrear={crearPerfume}
           onBorrar={borrarPerfume}

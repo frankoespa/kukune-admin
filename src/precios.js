@@ -72,3 +72,36 @@ export function resolverPrecios(globals, productos) {
   // no se invalidan y no se dispara un guardado por abrir la pantalla.
   return hubo ? resueltos : productos;
 }
+
+/* ============================================================
+   Precios del catálogo (no de un pedido).
+
+   En el catálogo cada perfume tiene un costo y un precio de venta directa.
+   De ahí salen tres cosas:
+
+   · el margen sobre el costo, que es cuánto le agregás encima;
+   · a cuánto habría que publicarlo en Mercado Libre para ganar LO MISMO,
+     porque ML se lleva su comisión y el envío;
+   · y cuánto ganarías si publicaras el precio directo tal cual en ML,
+     que es el número que te dice si ese precio te sirve en ese canal.
+   ============================================================ */
+export function analisisDePrecio({ costo, precioPublico, comisionML, envioML }) {
+  const c = Number(costo) || 0;
+  const p = Number(precioPublico) || 0;
+  const k = 1 - (Number(comisionML) || 0);
+  const envio = Number(envioML) || 0;
+
+  if (!(c > 0)) return { margen: null, ganancia: null, precioML: null, margenEnML: null };
+
+  const ganancia = p > 0 ? p - c : null;
+  const margen = p > 0 ? ganancia / c : null;
+
+  // Para ganar lo mismo en ML: precio = (costo + ganancia + envío) / (1 − comisión)
+  const precioML = p > 0 && k > 0 ? Math.round((p + envio) / k) : null;
+
+  // Y si publicara el precio directo tal cual en ML, ¿cuánto quedaría?
+  const netaEnML = p > 0 ? p * k - envio - c : null;
+  const margenEnML = netaEnML === null ? null : netaEnML / c;
+
+  return { margen, ganancia, precioML, margenEnML };
+}

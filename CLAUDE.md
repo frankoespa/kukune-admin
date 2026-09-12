@@ -169,6 +169,43 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   acentos (`buscarPerfumes` en `Catalogo.jsx`), y si no hay coincidencia ofrece
   crear la entrada con ese nombre. El nombre no se tipea libre.
 
+## Precios del catálogo
+- Cada perfume tiene `costo` y `precioPublico` (venta directa), **puestos a mano**.
+  No se sugieren desde el último pedido: el costo de un pedido es lo que cobró
+  ESE proveedor en ESA compra, y el del catálogo es la referencia actual.
+- `analisisDePrecio()` en `src/precios.js` devuelve tres cosas: el margen sobre
+  el costo (misma definición que la columna Margen de los pedidos, así que los
+  números son comparables), **a cuánto publicar en ML para ganar lo mismo** que
+  vendiendo directo, y cuánto quedaría si se publicara el precio directo tal cual
+  en ML.
+- De esos tres, en pantalla van **dos**: el margen y el precio de ML. El tercero
+  vive en el tooltip. Estaban los dos últimos apilados en la misma celda y se
+  leían como una contradicción ("el precio para ganar lo mismo" arriba, "perdés
+  17%" abajo), porque el rótulo no decía a qué precio se refería cada uno. Cada
+  número visible tiene que contestar una sola pregunta y decir cuál es.
+- La comisión y el envío de ML del catálogo viven en `perfumes.json` bajo
+  `ajustes`, no en cada pedido: el precio de lista no depende de a quién le
+  compraste. `AJUSTES_POR_DEFECTO` está en `almacenamiento.js`.
+- El orden "Por margen" **no se congela** como el alfabético, porque mira los
+  precios: es para revisar, no para escribir. Los sin precio van al final.
+- "PDF de precios" (`construirPDFPrecios`) es para clientes: nombre, foto y
+  **precio de venta directa**, nunca el de ML ni el margen. Acá sí va la marca
+  KUKUNE, al contrario del PDF del proveedor.
+- Va en **filas, no en cuadrícula**: foto, nombre y precio alineado a la derecha.
+- **La perilla es `FILAS_POR_PAGINA` (hoy 7), no el tamaño de la foto.** De ahí
+  salen `ALTO_FILA` y `FOTO_LADO` repartiendo el alto útil de la hoja. Está al
+  revés a propósito: "quiero ver 9 por hoja" es la decisión real y el tamaño de
+  la foto es la consecuencia. Subir el número achica la foto, y no hay forma de
+  desbordar la página. Hoy: fila de 35mm, foto de 31mm, última fila en y=277 de
+  297. **Ojo al hablarlo con el usuario: decir siempre la unidad** — se pidió
+  "probá en 9" pensando en filas y se interpretó como 9mm de foto. El ancho disponible para el nombre se
+  calcula **restando el ancho del precio ya medido** (`getTextWidth`) más 8mm de
+  aire, así que un nombre largo se corta antes de invadirlo — verificado sobre
+  los 34 del catálogo más un nombre de 95 caracteres y un precio de 8 dígitos:
+  el menor aire fue 8,2mm (ese caso extremo; los nombres reales quedan holgados).
+- `dibujarFotoEn(doc, foto, x, y, w, h)` sirve a los dos PDF; `dibujarFoto`
+  quedó como el atajo con las medidas de la cuadrícula del proveedor.
+
 ## Fórmulas (idénticas al Excel)
 - Factor de Gasto = Costos Extras (ARS) ÷ Inversión Total (USD) → ARS por USD de costo
 - Costos Extras (ARS) = Comisión Red (USD) × Dólar + Envío Correo
@@ -243,8 +280,22 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   se edita es una caja blanca con borde (`NumberCell` / `TextCell` / `CheckCell`),
   lo calculado va suelto sobre la fila, sin caja (`CalcCell`, con
   `tone="pos" | "neg"`). Antes era blanco vs gris.
-- `NumberCell` mantiene un string local mientras el campo tiene foco (`focused` ref)
-  para no pelear con lo que se está tipeando, y acepta coma como decimal.
+- **`NumberCell` vive en `src/NumberCell.jsx`, compartido** por la tabla de
+  pedidos y el catálogo; el parseo está en `src/numeros.js` (`aNumero`, puro y
+  testeable desde Node). No escribir `<input>` de número a mano en ninguna
+  pantalla: el catálogo lo hizo y perdió el string local mientras se escribe.
+- Mantiene un string local mientras el campo tiene foco (`focused` ref) para no
+  pelear con lo que se está tipeando. **La coma es el decimal; el punto se deja
+  tal cual**, así que "38.155" son 38,155 y no 38155. Se probó interpretarlo como
+  separador de miles y **se volvió atrás a pedido del usuario**: la regla para
+  distinguir "38.155" (miles) de "15.32" (decimal) mira la cantidad de dígitos
+  del grupo, funciona, pero es sutil y no la tenés en la cabeza cuando algo sale
+  raro. No reponerla sin preguntar.
+- Por eso los porcentajes del catálogo usan `pctSinMiles` (`useGrouping: false`):
+  un costo cargado como 38,155 en vez de 38.155 da 117840% de margen, y con
+  agrupación `Intl` lo escribía **"117.840%"**, indistinguible de 117,8%. Sin
+  agrupar, el error de carga se ve. **Esta parte sí queda**: es la red que hace
+  visible el problema que el parseo simple no evita.
 - Montos con `Intl.NumberFormat("es-AR")` mediante los helpers `ars` (0 decimales),
   `arsExact` (2), `usd` y `pct`.
 - Para colores que deben verse sí o sí, usar estilos en línea (`style={{...}}`),

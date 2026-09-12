@@ -85,22 +85,30 @@ const URL_FOTOS = "/api/fotos";
 
 export const urlFoto = (archivo) => (archivo ? `/datos/fotos/${archivo}` : null);
 
+/* Ajustes del catálogo: lo que Mercado Libre se lleva. Van acá y no en cada
+   pedido porque el precio de lista no depende de a quién le compraste. */
+export const AJUSTES_POR_DEFECTO = { comisionML: 0.1532, envioML: 7470 };
+
 export async function leerPerfumes() {
   try {
     const r = await fetch(URL_PERFUMES);
-    if (!r.ok) return { estado: "sin-servidor", perfumes: [] };
+    if (!r.ok) return { estado: "sin-servidor", perfumes: [], ajustes: AJUSTES_POR_DEFECTO };
     const datos = await r.json();
-    return { estado: "ok", perfumes: Array.isArray(datos.perfumes) ? datos.perfumes : [] };
+    return {
+      estado: "ok",
+      perfumes: Array.isArray(datos.perfumes) ? datos.perfumes : [],
+      ajustes: { ...AJUSTES_POR_DEFECTO, ...(datos.ajustes || {}) },
+    };
   } catch (e) {
-    return { estado: "sin-servidor", perfumes: [] };
+    return { estado: "sin-servidor", perfumes: [], ajustes: AJUSTES_POR_DEFECTO };
   }
 }
 
-export async function escribirPerfumes(perfumes) {
+export async function escribirPerfumes(perfumes, ajustes) {
   const r = await fetch(URL_PERFUMES, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ perfumes }),
+    body: JSON.stringify({ perfumes, ajustes }),
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();

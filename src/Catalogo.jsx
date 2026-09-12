@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Plus, Trash2, ImagePlus, Search, X } from "lucide-react";
+import { Plus, Trash2, ImagePlus, Search, X, FileDown } from "lucide-react";
 import { urlFoto } from "./almacenamiento";
+import { analisisDePrecio } from "./precios";
+import { NumberCell } from "./NumberCell";
+import { pctSinMiles as pctCorto } from "./numeros";
 
 /* ---------- Vista previa de la foto al pasar el mouse ----------
    Va en un portal al body y con `position: fixed` a propósito: la tabla del
@@ -106,12 +109,25 @@ export function buscarPerfumes(perfumes, consulta) {
   });
 }
 
-export default function Catalogo({ perfumes, usos, onCambiar, onCrear, onBorrar, onFoto }) {
+export default function Catalogo({
+  perfumes,
+  usos,
+  ajustes,
+  onCambiar,
+  onCrear,
+  onBorrar,
+  onFoto,
+  onAjustes,
+  onExportarPrecios,
+  exportando,
+}) {
   const [consulta, setConsulta] = useState("");
   const [soloSinFoto, setSoloSinFoto] = useState(false);
+  const [porMargen, setPorMargen] = useState(false);
   const [nuevo, setNuevo] = useState("");
 
   const sinFoto = perfumes.filter((p) => !p.foto).length;
+  const conPrecio = perfumes.filter((p) => (p.precioPublico || 0) > 0).length;
 
   /* El orden alfabético se recalcula solo cuando cambia el CONJUNTO de perfumes
      visibles (alta, baja o búsqueda), nunca cuando cambia un nombre. Si se
@@ -124,6 +140,16 @@ export default function Catalogo({ perfumes, usos, onCambiar, onCrear, onBorrar,
     const base = soloSinFoto ? perfumes.filter((p) => !p.foto) : perfumes;
     const filtrados = buscarPerfumes(base, consulta);
     const porId = new Map(filtrados.map((p) => [p.id, p]));
+
+    // Ordenar por margen sí mira los precios, así que ese orden no se congela:
+    // es para revisar, no para escribir.
+    if (porMargen) {
+      const m = (p) =>
+        (p.costo || 0) > 0 && (p.precioPublico || 0) > 0
+          ? (p.precioPublico - p.costo) / p.costo
+          : Infinity; // los que no tienen precio, al final
+      return filtrados.slice().sort((a, b) => m(a) - m(b));
+    }
 
     const clave = filtrados
       .map((p) => p.id)
@@ -139,7 +165,7 @@ export default function Catalogo({ perfumes, usos, onCambiar, onCrear, onBorrar,
       };
     }
     return orden.current.ids.map((id) => porId.get(id)).filter(Boolean);
-  }, [perfumes, consulta, soloSinFoto]);
+  }, [perfumes, consulta, soloSinFoto, porMargen]);
 
   const crear = () => {
     const nombre = nuevo.trim();
@@ -215,6 +241,56 @@ export default function Catalogo({ perfumes, usos, onCambiar, onCrear, onBorrar,
             {soloSinFoto && sinFoto === 0 ? "Ver todos" : `${sinFoto} sin foto`}
           </button>
         )}
+
+        <button
+          onClick={() => setPorMargen((v) => !v)}
+          aria-pressed={porMargen}
+          title="Ordena de menor a mayor margen: arriba queda lo que estas vendiendo mas barato"
+          className="k-col rounded-[3px] border px-3 py-[7px] transition"
+          style={{
+            borderColor: porMargen ? "var(--ambar)" : "var(--linea)",
+            color: porMargen ? "var(--ambar)" : "var(--humo)",
+            background: porMargen ? "#FFFDF7" : "transparent",
+          }}
+        >
+          Por margen
+        </button>
+
+        <div className="ml-auto flex items-end gap-3">
+          <label className="block">
+            <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
+              Comision ML
+            </span>
+            <div className="w-[76px]">
+              <NumberCell
+                value={+((ajustes.comisionML || 0) * 100).toFixed(2)}
+                onChange={(v) => onAjustes({ comisionML: v / 100 })}
+                suffix="%"
+              />
+            </div>
+          </label>
+          <label className="block">
+            <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
+              Envio ML
+            </span>
+            <div className="w-[96px]">
+              <NumberCell value={ajustes.envioML || 0} onChange={(v) => onAjustes({ envioML: v })} />
+            </div>
+          </label>
+          <button
+            onClick={onExportarPrecios}
+            disabled={conPrecio === 0 || exportando}
+            title={
+              conPrecio === 0
+                ? "Ningun perfume tiene precio de venta todavia"
+                : `Lista de precios de ${conPrecio} perfume(s) con el precio de venta directa`
+            }
+            className="k-col flex items-center gap-1.5 whitespace-nowrap rounded-[3px] border px-3 py-[7px] transition disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ borderColor: "var(--ambar)", color: "var(--ambar)" }}
+          >
+            <FileDown size={14} /> {exportando ? "Armando..." : "PDF de precios"}
+          </button>
+        </div>
       </div>
 
       {visibles.length === 0 ? (
@@ -243,6 +319,7 @@ export default function Catalogo({ perfumes, usos, onCambiar, onCrear, onBorrar,
               key={p.id}
               perfume={p}
               usos={usos[p.id] || 0}
+              ajustes={ajustes}
               onCambiar={onCambiar}
               onBorrar={onBorrar}
               onFoto={onFoto}
@@ -254,7 +331,86 @@ export default function Catalogo({ perfumes, usos, onCambiar, onCrear, onBorrar,
   );
 }
 
-function FilaPerfume({ perfume, usos, onCambiar, onBorrar, onFoto }) {
+/* Los dos precios y lo que sale de ellos.
+
+   El margen es sobre el costo, la misma definición que usa la columna Margen de
+   los pedidos, así que los números son comparables entre pantallas.
+
+   "En ML" es a cuánto habría que publicarlo para ganar LO MISMO que vendiendo
+   directo, porque la plataforma se lleva comisión y envío. El porcentaje chico
+   de abajo es lo que quedaría si publicaras el precio directo tal cual: es el
+   número que avisa cuando un precio que parece bueno no sirve en ese canal. */
+function Precios({ perfume, ajustes, onCambiar }) {
+  const r = analisisDePrecio({
+    costo: perfume.costo,
+    precioPublico: perfume.precioPublico,
+    comisionML: ajustes.comisionML,
+    envioML: ajustes.envioML,
+  });
+
+  // NumberCell y no un <input> a mano: trae el string local mientras se escribe
+  // y lee "38.155" como 38155, que es como se tipea un precio en Argentina.
+  const campo = (clave) => (
+    <div className="w-[96px]">
+      <NumberCell
+        value={perfume[clave] ?? 0}
+        onChange={(v) => onCambiar(perfume.id, { [clave]: v })}
+      />
+    </div>
+  );
+
+  const tono = r.margen === null ? "var(--humo-claro)" : r.margen >= 0 ? "var(--verde)" : "var(--oxido)";
+
+  return (
+    <>
+      {campo("costo")}
+      {campo("precioPublico")}
+
+      <div className="w-[74px] text-right">
+        <div className="k-num text-[13px] font-semibold" style={{ color: tono }}>
+          {r.margen === null ? "—" : pctCorto(r.margen)}
+        </div>
+        <div className="k-col" style={{ color: "var(--humo-claro)" }}>
+          margen
+        </div>
+      </div>
+
+      {/* Un solo número visible y un rótulo que dice qué es. Antes acá abajo
+          había un segundo porcentaje ("directo dejaría −20%") que contestaba
+          otra pregunta y se leía como si se contradijera con el precio de
+          arriba. Ese dato pasó al tooltip: disponible, pero sin competir. */}
+      <div
+        className="w-[104px] text-right"
+        title={
+          r.precioML === null
+            ? "Poné costo y precio de venta para ver a cuánto publicarlo en ML"
+            : `Publicando a ${pesos(r.precioML)} en Mercado Libre ganás lo mismo que vendiendo directo a ${pesos(perfume.precioPublico)}. ` +
+              (r.margenEnML === null
+                ? ""
+                : `Si en cambio publicaras los ${pesos(perfume.precioPublico)} en ML, te quedaría ${pctCorto(r.margenEnML)}.`)
+        }
+      >
+        <div className="k-num text-[13px]" style={{ color: "var(--ambar)" }}>
+          {r.precioML === null ? "—" : pesos(r.precioML)}
+        </div>
+        <div className="k-col" style={{ color: "var(--humo-claro)" }}>
+          publicar en ML
+        </div>
+      </div>
+    </>
+  );
+}
+
+const pesos = (n) =>
+  new Intl.NumberFormat("es-AR", {
+    style: "currency",
+    currency: "ARS",
+    maximumFractionDigits: 0,
+  }).format(Number.isFinite(n) ? n : 0);
+
+
+
+function FilaPerfume({ perfume, usos, ajustes, onCambiar, onBorrar, onFoto }) {
   const inputRef = useRef(null);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState(false);
@@ -318,12 +474,14 @@ function FilaPerfume({ perfume, usos, onCambiar, onBorrar, onFoto }) {
         value={perfume.nombre}
         onChange={(e) => onCambiar(perfume.id, { nombre: e.target.value })}
         placeholder="Marca + nombre + ml"
-        className="flex-1 rounded-[3px] border px-2 py-1.5 text-[13px]"
+        className="min-w-[180px] flex-1 rounded-[3px] border px-2 py-1.5 text-[13px]"
         style={{ background: "var(--papel)", borderColor: "var(--linea)", color: "var(--tinta)" }}
       />
 
-      <span className="k-num w-[92px] text-right text-[11px]" style={{ color: "var(--humo-claro)" }}>
-        {usos === 0 ? "sin usar" : `en ${usos} fila${usos === 1 ? "" : "s"}`}
+      <Precios perfume={perfume} ajustes={ajustes} onCambiar={onCambiar} />
+
+      <span className="k-num w-[70px] text-right text-[11px]" style={{ color: "var(--humo-claro)" }}>
+        {usos === 0 ? "sin usar" : `en ${usos}`}
       </span>
 
       <button
