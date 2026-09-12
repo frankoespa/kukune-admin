@@ -186,6 +186,34 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - La comisión y el envío de ML del catálogo viven en `perfumes.json` bajo
   `ajustes`, no en cada pedido: el precio de lista no depende de a quién le
   compraste. `AJUSTES_POR_DEFECTO` está en `almacenamiento.js`.
+- **"Pasar costos al catálogo"** (banda de acciones del pedido) copia el Precio
+  sin Ganancia de las filas **incluidas** al `costo` del perfume: es el mismo
+  número (costo del proveedor × dólar + su parte de los costos extras), así que
+  no hay conversión ninguna, solo el traslado. Ofrece dos salidas y no elige por
+  el usuario: **Reemplazar** (este pedido es la referencia nueva) o **Promediar**
+  50/50 con el costo guardado, que es la cuenta que se hacía a mano cuando el
+  mismo perfume se le compró a dos proveedores. "Promediar" solo aparece si
+  algún perfume ya tenía costo.
+- Si el mismo perfume aparece en dos filas del pedido, se promedia **por unidad**
+  (ponderado por cantidad) antes de llegar al catálogo: el costo del catálogo es
+  por unidad, no por fila. Las filas huérfanas se saltean solas.
+- El diálogo muestra **todos** los perfumes que va a tocar, en una caja con
+  scroll propio (`max-h-[42vh]`), no una muestra de los primeros: es la
+  referencia para decidir, y recortada obliga a aceptar a ciegas.
+- Van las **tres cifras en columnas**: *En el catálogo* (lo que hay hoy), *Este
+  pedido* (lo que viaja) y *Promedio* (cómo quedaría promediando). Cada botón
+  deja la columna que lleva su nombre, y eso lo dice el texto de arriba. En
+  columnas y no en una frase con flechas porque lo que se hace es comparar una
+  contra otra; envueltas en renglones no se sabe cuál es de cuál.
+- La grilla es **una sola constante** (`COLUMNAS_COSTO`) para el encabezado y las
+  filas, y el encabezado va **adentro** de la caja que scrollea, sticky: afuera,
+  el ancho de la barra de scroll le corre las columnas y dejan de alinear.
+- El aviso del resultado vuelve como texto en el propio botón durante unos
+  segundos, no como un segundo diálogo.
+- `Dialogo` acepta `ancho` (una clase `max-w-*`, por defecto `max-w-md`) y pone
+  en cero el scroll de todo lo que lleve `data-scroll` cada vez que se abre: el
+  navegador conserva el scroll y la lista aparecía empezada por el medio.
+
 - El orden "Por margen" **no se congela** como el alfabético, porque mira los
   precios: es para revisar, no para escribir. Los sin precio van al final.
 - "PDF de precios" (`construirPDFPrecios`) es para clientes: nombre, foto y

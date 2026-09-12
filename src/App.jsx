@@ -610,10 +610,14 @@ function FotoDeFila({ perfume, huerfana }) {
 function Dialogo({ dialogo, onCerrar }) {
   const [valor, setValor] = useState("");
   const campo = useRef(null);
+  const caja = useRef(null);
 
   useEffect(() => {
     setValor(dialogo?.valor ?? "");
     if (dialogo?.conCampo) setTimeout(() => campo.current?.select(), 30);
+    // Una lista larga tiene que abrirse arriba de todo: el navegador a veces
+    // conserva el scroll y el diálogo aparece empezado por el medio.
+    caja.current?.querySelectorAll("[data-scroll]").forEach((e) => (e.scrollTop = 0));
   }, [dialogo]);
 
   if (!dialogo) return null;
@@ -629,11 +633,13 @@ function Dialogo({ dialogo, onCerrar }) {
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4"
       onClick={onCerrar}
     >
+      {/* `ancho` lo usan los diálogos que muestran una lista; el resto queda en md. */}
       <div
+        ref={caja}
         role="dialog"
         aria-modal="true"
         aria-label={dialogo.titulo}
-        className="w-full max-w-md rounded-[5px] p-5 shadow-xl"
+        className={`w-full ${dialogo.ancho ?? "max-w-md"} rounded-[5px] p-5 shadow-xl`}
         style={{ background: "var(--papel)" }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -694,6 +700,10 @@ function Dialogo({ dialogo, onCerrar }) {
     </div>
   );
 }
+
+/* Encabezado y filas del diálogo de costos comparten esta grilla: si se
+   escribieran por separado, se desalinean al primer cambio de ancho. */
+const COLUMNAS_COSTO = "grid grid-cols-[minmax(0,1fr)_96px_96px_96px] gap-x-3 items-baseline";
 
 /* Celda calculada (solo lectura) */
 function CalcCell({ children, tone = "default", strong = false }) {
@@ -946,6 +956,7 @@ export default function App() {
   const [copiado, setCopiado] = useState(false);
   const [errorGuardado, setErrorGuardado] = useState("");
   const [margenMasivo, setMargenMasivo] = useState(30);
+  const [pasadosAlCatalogo, setPasadosAlCatalogo] = useState("");
 
   // Guardar en localStorage ante cualquier cambio.
   // Abrir la app NO escribe nada: mientras el estado siga siendo idéntico al que
@@ -1330,6 +1341,128 @@ export default function App() {
       )
     );
 
+  /* ---------- Pasar los costos de este pedido al catálogo ----------
+     El Precio sin Ganancia de la fila es lo que el perfume terminó costando
+     puesto acá (costo del proveedor × dólar + su parte de los costos extras), y
+     eso es exactamente lo que el catálogo llama `costo`. Va solo lo incluido,
+     igual que el PDF del proveedor y los totales.
+     Hay dos salidas y elegir una sola sería decidir algo que no nos toca:
+     reemplazar (este pedido es la referencia nueva) o promediar con lo que ya
+     estaba (el mismo perfume comprado a dos proveedores distintos). Promediar
+     pesa 50/50 contra el valor guardado: es la cuenta que se hacía a mano.
+     Si el mismo perfume está en dos filas del pedido, se promedia por unidad
+     antes de salir de acá — el costo del catálogo es por unidad, no por fila. */
+  const paraElCatalogo = useMemo(() => {
+    const porPerfume = new Map();
+    for (const f of R.filas) {
+      if (!f.incluir || !f.perfumeId || !(f.precioSinGanPesos > 0)) continue;
+      const perfume = perfumePorId.get(f.perfumeId);
+      if (!perfume) continue; // fila huérfana: el perfume ya no está en el catálogo
+      const unidades = Math.max(1, Number(f.cantidad) || 1);
+      const acum = porPerfume.get(f.perfumeId) ?? { perfume, pesos: 0, unidades: 0 };
+      acum.pesos += f.precioSinGanPesos * unidades;
+      acum.unidades += unidades;
+      porPerfume.set(f.perfumeId, acum);
+    }
+    return [...porPerfume.values()]
+      .map(({ perfume, pesos, unidades }) => ({
+        id: perfume.id,
+        nombre: perfume.nombre,
+        actual: Number(perfume.costo) || 0,
+        nuevo: Math.round(pesos / unidades),
+      }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+  }, [R.filas, perfumePorId]);
+
+  const yaConCosto = paraElCatalogo.filter((p) => p.actual > 0);
+
+  const aplicarAlCatalogo = (promediando) => {
+    const nuevos = new Map(
+      paraElCatalogo.map((p) => [
+        p.id,
+        promediando && p.actual > 0 ? Math.round((p.actual + p.nuevo) / 2) : p.nuevo,
+      ])
+    );
+    setPerfumes((ps) => ps.map((p) => (nuevos.has(p.id) ? { ...p, costo: nuevos.get(p.id) } : p)));
+    setPasadosAlCatalogo(
+      `${nuevos.size} ${nuevos.size === 1 ? "costo" : "costos"} ${promediando ? "promediados" : "pasados"}`
+    );
+    setTimeout(() => setPasadosAlCatalogo(""), 4000);
+  };
+
+  const pasarAlCatalogo = () =>
+    setDialogo({
+      titulo: "Pasar los costos al catálogo",
+      ancho: "max-w-2xl",
+      texto: (
+        <>
+          <span className="block mb-2">
+            El <b>Precio sin Ganancia</b> de {paraElCatalogo.length}{" "}
+            {paraElCatalogo.length === 1 ? "perfume incluido" : "perfumes incluidos"} pasa a ser su{" "}
+            <b>costo</b> en el catálogo. Cada botón deja la columna que lleva su nombre.
+          </span>
+          {/* Las tres cifras en columnas, no una frase con flechas: lo que se
+              compara es una contra otra, y en renglones envueltos no se sabe
+              cuál es de cuál. La lista va entera, con scroll propio — recortada
+              a unos pocos obliga a aceptar a ciegas. */}
+          <span
+            data-scroll
+            className="block max-h-[42vh] overflow-y-auto rounded-[3px] border px-2.5 pb-2"
+            style={{ borderColor: "var(--linea)" }}
+          >
+            {/* El encabezado va adentro de la caja que scrollea: afuera, la barra
+                de scroll le corre las columnas a las filas y dejan de alinear.
+                Sticky para que no se pierda al bajar. */}
+            <span
+              className={`${COLUMNAS_COSTO} k-col sticky top-0 pt-2 pb-1`}
+              style={{ color: "var(--humo)", background: "var(--papel)" }}
+            >
+              <span />
+              <span className="text-right">En el catálogo</span>
+              <span className="text-right">Este pedido</span>
+              <span className="text-right">Promedio</span>
+            </span>
+            {paraElCatalogo.map((p) => (
+              <span key={p.id} className={`${COLUMNAS_COSTO} text-[11.5px] leading-[1.75]`}>
+                <span className="truncate" style={{ color: "var(--humo)" }} title={p.nombre}>
+                  {p.nombre}
+                </span>
+                <span className="k-num text-right" style={{ color: "var(--humo)" }}>
+                  {p.actual > 0 ? ars(p.actual) : "—"}
+                </span>
+                <span className="k-num text-right" style={{ color: "var(--tinta)" }}>
+                  {ars(p.nuevo)}
+                </span>
+                <span className="k-num text-right" style={{ color: "var(--humo)" }}>
+                  {p.actual > 0 ? ars(Math.round((p.actual + p.nuevo) / 2)) : "—"}
+                </span>
+              </span>
+            ))}
+          </span>
+          <span className="block mt-2">
+            {yaConCosto.length > 0 ? (
+              <>
+                {yaConCosto.length}{" "}
+                {yaConCosto.length === 1
+                  ? "ya tenía un costo cargado"
+                  : "ya tenían un costo cargado"}
+                . <b>Promediar</b> los deja en la mitad entre ese valor y el de este pedido, para
+                cuando compraste el mismo perfume a dos proveedores; a los demás les pone el de
+                este pedido.
+              </>
+            ) : (
+              <>Ninguno tenía un costo cargado todavía, así que no hay nada que promediar.</>
+            )}
+          </span>
+        </>
+      ),
+      etiquetaOk: "Reemplazar",
+      onAceptar: () => aplicarAlCatalogo(false),
+      ...(yaConCosto.length > 0
+        ? { segunda: { etiqueta: "Promediar", onAceptar: () => aplicarAlCatalogo(true) } }
+        : {}),
+    });
+
   const AMBER = "#B8862F";
 
   return (
@@ -1635,6 +1768,19 @@ export default function App() {
               Aplicar margen
             </button>
           </div>
+          <button
+            onClick={pasarAlCatalogo}
+            disabled={paraElCatalogo.length === 0}
+            title={
+              paraElCatalogo.length === 0
+                ? "Ninguna fila incluida tiene perfume del catálogo y Precio sin Ganancia calculado"
+                : `Pasa el Precio sin Ganancia de ${paraElCatalogo.length} perfume(s) incluido(s) al costo del catálogo. Podés reemplazar o promediar con lo que ya había.`
+            }
+            className="k-col rounded-[3px] border px-3 py-[7px] transition disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ borderColor: "var(--linea)", color: "var(--humo)" }}
+          >
+            {pasadosAlCatalogo || "Pasar costos al catálogo"}
+          </button>
           <button
             onClick={addP}
             className="flex items-center gap-1.5 rounded-[3px] px-4 py-2 text-[13px] font-medium text-white transition"
