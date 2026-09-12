@@ -1464,23 +1464,48 @@ export default function App() {
               <span className="text-right">Este pedido</span>
               <span className="text-right">Promedio</span>
             </span>
-            {lista.map((p) => (
-              <span key={p.id} className={`${COLUMNAS_COSTO} text-[11.5px] leading-[1.75]`}>
-                <span className="truncate" style={{ color: "var(--humo)" }} title={p.nombre}>
-                  {p.nombre}
+            {lista.map((p) => {
+              /* El color contesta "¿cambia algo?" de un vistazo: verde si este
+                 pedido salió más barato que lo que hay guardado, óxido si salió
+                 más caro, gris si es el mismo número. Sin costo previo no hay
+                 con qué comparar y queda en tinta. Ámbar no: está reservado
+                 para la ganancia. */
+              const dif = p.actual > 0 ? p.nuevo - p.actual : null;
+              const color =
+                dif === null ? "var(--tinta)" : dif === 0 ? "var(--humo)" : dif < 0 ? "var(--verde)" : "var(--oxido)";
+              return (
+                <span
+                  key={p.id}
+                  className={`${COLUMNAS_COSTO} text-[11.5px] leading-[1.75]`}
+                  title={
+                    dif === null || dif === 0
+                      ? p.nombre
+                      : `${p.nombre} · ${dif > 0 ? "más caro" : "más barato"} que el catálogo: ${ars(Math.abs(dif))} (${pct(Math.abs(dif) / p.actual, 1)})`
+                  }
+                >
+                  <span className="truncate" style={{ color: "var(--humo)" }}>
+                    {p.nombre}
+                  </span>
+                  <span className="k-num text-right" style={{ color: "var(--humo)" }}>
+                    {p.actual > 0 ? ars(p.actual) : "—"}
+                  </span>
+                  <span className="k-num text-right font-medium" style={{ color }}>
+                    {ars(p.nuevo)}
+                  </span>
+                  <span className="k-num text-right" style={{ color: "var(--humo)" }}>
+                    {p.actual > 0 ? ars(promediado(p)) : "—"}
+                  </span>
                 </span>
-                <span className="k-num text-right" style={{ color: "var(--humo)" }}>
-                  {p.actual > 0 ? ars(p.actual) : "—"}
-                </span>
-                <span className="k-num text-right" style={{ color: "var(--tinta)" }}>
-                  {ars(p.nuevo)}
-                </span>
-                <span className="k-num text-right" style={{ color: "var(--humo)" }}>
-                  {p.actual > 0 ? ars(promediado(p)) : "—"}
-                </span>
-              </span>
-            ))}
+              );
+            })}
           </span>
+          {yaConCosto.length > 0 && (
+            <span className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5 text-[11px]">
+              <span style={{ color: "var(--verde)" }}>● más barato que el catálogo</span>
+              <span style={{ color: "var(--oxido)" }}>● más caro</span>
+              <span style={{ color: "var(--humo)" }}>● igual</span>
+            </span>
+          )}
           <span className="block mt-2">
             {yaConCosto.length > 0 ? (
               <>

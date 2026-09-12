@@ -215,6 +215,11 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   deja la columna que lleva su nombre, y eso lo dice el texto de arriba. En
   columnas y no en una frase con flechas porque lo que se hace es comparar una
   contra otra; envueltas en renglones no se sabe cuál es de cuál.
+- La columna *Este pedido* va **en color** cuando hay con qué comparar: verde si
+  este pedido salió más barato que el costo guardado, óxido si salió más caro,
+  gris si es el mismo número, y tinta si el perfume no tenía costo. Ámbar no —
+  está reservado para la ganancia. Abajo va la referencia de los tres colores, y
+  el `title` de cada renglón dice la diferencia en pesos y en porcentaje.
 - La grilla es **una sola constante** (`COLUMNAS_COSTO`) para el encabezado y las
   filas, y el encabezado va **adentro** de la caja que scrollea, sticky: afuera,
   el ancho de la barra de scroll le corre las columnas y dejan de alinear.
