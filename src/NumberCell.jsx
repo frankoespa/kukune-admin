@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { aNumero } from "./numeros";
+import { useBloqueo } from "./bloqueo";
 
 /* ============================================================
    Entrada de números, compartida por la tabla de pedidos y el catálogo.
@@ -13,6 +14,9 @@ import { aNumero } from "./numeros";
 export function NumberCell({ value, onChange, align = "right", suffix, className = "", style }) {
   const [s, setS] = useState(String(value ?? ""));
   const focused = useRef(false);
+  // Un pedido cerrado no se edita. El campo sigue mostrando su número —es un
+  // histórico, se consulta— pero apagado.
+  const bloqueado = useBloqueo();
 
   useEffect(() => {
     if (!focused.current) setS(value === 0 || value ? String(value) : "");
@@ -23,12 +27,15 @@ export function NumberCell({ value, onChange, align = "right", suffix, className
       <input
         inputMode="decimal"
         value={s}
+        readOnly={bloqueado}
+        aria-readonly={bloqueado || undefined}
         onFocus={() => (focused.current = true)}
         onBlur={() => {
           focused.current = false;
           setS(value === 0 || value ? String(value) : "");
         }}
         onChange={(e) => {
+          if (bloqueado) return;
           setS(e.target.value);
           onChange(aNumero(e.target.value) ?? 0);
         }}
@@ -38,9 +45,10 @@ export function NumberCell({ value, onChange, align = "right", suffix, className
           align === "right" ? "text-right" : "text-left"
         } ${className}`}
         style={{
-          background: "var(--papel)",
+          background: bloqueado ? "var(--vidrio-hondo)" : "var(--papel)",
           borderColor: "var(--linea)",
-          color: "var(--tinta)",
+          color: bloqueado ? "var(--humo)" : "var(--tinta)",
+          cursor: bloqueado ? "not-allowed" : undefined,
           ...style,
         }}
       />

@@ -103,6 +103,44 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   todavía no existe (recién al 2º guardado), el borrado igual funciona y la
   respuesta trae `conRespaldo: false`.
 
+## Pedidos abiertos y cerrados
+- `estado: "abierto" | "cerrado"` en el JSON del pedido. **Abierto** = los
+  productos todavía no llegaron y se puede tocar. **Cerrado** = ya está todo
+  calculado y es un registro histórico.
+- Lo que no tenga `estado` se lee como abierto y **eso no reescribe el archivo**:
+  los pedidos viejos quedan como están hasta que se cierre uno a mano.
+- **El candado tiene dos mitades y las dos hacen falta.** La UI: el contexto de
+  `src/bloqueo.js` (`ContextoBloqueo` + `useBloqueo()`), que envuelve la vista
+  del pedido y leen `NumberCell`, `TextCell`, `CheckCell`, `BuscadorPerfume`,
+  `SelectorMoneda` y `ParPrecioMargen`. Va por contexto y no por props porque son
+  21 columnas: pasar un `bloqueado` por celda es garantía de olvidarse justo la
+  que importa.
+- La otra mitad, la que de verdad protege el archivo: **el efecto que persiste no
+  programa ninguna escritura con el pedido cerrado**. Apagar la UI no alcanza —
+  cualquier camino que llame a `setProductos` escribiría igual.
+- **Un pedido cerrado acepta exactamente dos escrituras**:
+  1. el propio cambio de estado (`forzarGuardado`), y
+  2. la **sincronización del nombre** de un perfume renombrado en el catálogo. La
+     fila guarda una copia del nombre además del `perfumeId`; si no se
+     actualizara, el archivo envejecería con nombres que ya no existen.
+     Se distingue comparando el estado con `jsonInicial` **ignorando los
+     `producto`** (`sinNombres()`): si sin los nombres son idénticos, el único
+     cambio fue el nombre y se escribe; si difiere algo más, no se escribe nada.
+- Queda habilitado lo que **no** modifica el pedido: Reabrir, Exportar, PDF
+  proveedor y "pasar costos al catálogo" (escribe en el catálogo, y es justo el
+  momento en que los costos son definitivos). Trabado todo lo demás: celdas,
+  agregar/duplicar/borrar filas, soltar el margen, aplicar margen masivo, los
+  globales, el selector de moneda, Importar, Renombrar y Borrar el pedido.
+- **Nuevo** y **Duplicar** siguen disponibles y lo que nace, nace **abierto**:
+  duplicar un cerrado es la forma natural de arrancar el pedido que le sigue.
+- Cerrar y reabrir piden **confirmación los dos**, con `Dialogo`. El sello del
+  selector dice el estado, el desplegable marca los cerrados, y una franja gris
+  arriba de la tabla explica por qué no se puede escribir. Gris y no óxido:
+  cerrado no es un error ni un peligro, es un estado.
+- **Desde el catálogo tampoco se tocan**: si el perfume está en un pedido cerrado
+  —el de pantalla o cualquier otro—, el diálogo de borrado no ofrece borrar esas
+  filas, solo quitarlo del catálogo dejándolas huérfanas.
+
 ## Catálogo de perfumes
 - El nombre y la foto de cada perfume viven **una sola vez** en
   `datos/perfumes.json`; las filas del pedido apuntan por `perfumeId`. En la fila

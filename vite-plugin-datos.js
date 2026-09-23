@@ -230,6 +230,9 @@ export default function pluginDatos() {
         nombre: d.nombre || "Sin nombre",
         actualizado: d.actualizado || null,
         filas: Array.isArray(d.productos) ? d.productos.length : 0,
+        // Lo que no tenga estado es un pedido de antes: se lee como abierto y su
+        // archivo no se toca por eso.
+        estado: d.estado === "cerrado" ? "cerrado" : "abierto",
       }));
       return pedidos.sort((a, b) => String(b.actualizado).localeCompare(String(a.actualizado)));
     };
@@ -259,6 +262,9 @@ export default function pluginDatos() {
           const nuevo = {
             id: randomUUID(),
             nombre: String(datos.nombre || "Pedido nuevo").trim(),
+            // Lo que nace, nace abierto: duplicar un pedido cerrado es la forma
+            // natural de arrancar el que le sigue.
+            estado: "abierto",
             actualizado: new Date().toISOString(),
             globals: datos.globals || {},
             productos: Array.isArray(datos.productos) ? datos.productos : [],

@@ -13,6 +13,7 @@ import {
   ImagePlus,
   X,
   Check,
+  Lock,
   ArrowRightToLine,
 } from "lucide-react";
 import {
@@ -39,6 +40,7 @@ import {
 import Catalogo, { buscarPerfumes, ConVistaPrevia } from "./Catalogo";
 import { resolverPrecios } from "./precios";
 import { NumberCell } from "./NumberCell";
+import { ContextoBloqueo, useBloqueo } from "./bloqueo";
 
 /* ============================================================
    KUKUNE · Análisis de Pedido
@@ -239,30 +241,48 @@ async function comprimirImagen(file) {
 
 /* ---------- Inputs controlados ---------- */
 function TextCell({ value, onChange, placeholder }) {
+  const bloqueado = useBloqueo();
   return (
     <input
       value={value ?? ""}
       placeholder={placeholder}
-      onChange={(e) => onChange(e.target.value)}
+      readOnly={bloqueado}
+      onChange={(e) => !bloqueado && onChange(e.target.value)}
       className="w-full rounded-[3px] border px-2 py-1.5 text-[12.5px] transition focus:outline-none"
-      style={{ background: "var(--papel)", borderColor: "var(--linea)", color: "var(--tinta)" }}
+      style={{
+        background: bloqueado ? "var(--vidrio-hondo)" : "var(--papel)",
+        borderColor: "var(--linea)",
+        color: bloqueado ? "var(--humo)" : "var(--tinta)",
+        cursor: bloqueado ? "not-allowed" : undefined,
+      }}
     />
   );
 }
 
 function CheckCell({ value, onChange }) {
+  const bloqueado = useBloqueo();
   return (
     <button
       type="button"
-      onClick={() => onChange(!value)}
+      onClick={() => !bloqueado && onChange(!value)}
+      disabled={bloqueado}
       role="switch"
       aria-checked={value}
-      title={value ? "Activado — tocá para desactivar" : "Desactivado — tocá para activar"}
+      aria-disabled={bloqueado || undefined}
+      title={
+        bloqueado
+          ? "El pedido está cerrado"
+          : value
+          ? "Activado — tocá para desactivar"
+          : "Desactivado — tocá para activar"
+      }
       className="mx-auto block min-w-[44px] rounded-full px-3 py-1 text-[11px] font-bold tracking-wide"
       style={{
         backgroundColor: value ? "#2E7D5B" : "#E7E4DC",
         color: value ? "#FFFFFF" : "#8A857C",
         border: value ? "1px solid #2E7D5B" : "1px solid #D8D4CB",
+        opacity: bloqueado ? 0.55 : 1,
+        cursor: bloqueado ? "not-allowed" : undefined,
       }}
     >
       {value ? "SÍ" : "NO"}
@@ -352,6 +372,7 @@ function FotoCell({ value, onChange, nombre }) {
    clic para clavar la fila. La marca ámbar a la izquierda es la que dice, de un
    vistazo, qué filas están clavadas. */
 function ParPrecioMargen({ fila, setP, onSoltar }) {
+  const bloqueado = useBloqueo();
   const clavada = fila.margenObjetivo != null;
   const td = "px-2 py-1.5 border-b border-[#EFEDE7]";
 
@@ -382,7 +403,7 @@ function ParPrecioMargen({ fila, setP, onSoltar }) {
                 : undefined
             }
           />
-          {clavada && (
+          {clavada && !bloqueado && (
             <button
               type="button"
               onClick={() => onSoltar(fila.id, fila.precioFinal)}
@@ -405,6 +426,7 @@ function ParPrecioMargen({ fila, setP, onSoltar }) {
    la última opción de la lista lo da de alta con ese nombre y engancha la fila.
    Ese alta va sin foto: la foto se carga solo en la pantalla del catálogo. */
 function BuscadorPerfume({ fila, perfumes, huerfana, onElegir, onCrear }) {
+  const bloqueado = useBloqueo();
   const [consulta, setConsulta] = useState(null); // null = mostrando el nombre guardado
   const [abierto, setAbierto] = useState(false);
   const [resaltado, setResaltado] = useState(0);
@@ -433,6 +455,7 @@ function BuscadorPerfume({ fila, perfumes, huerfana, onElegir, onCrear }) {
   };
 
   const abrir = () => {
+    if (bloqueado) return; // pedido cerrado: la lista ni se despliega
     setConsulta("");
     setAbierto(true);
     medir();
@@ -480,23 +503,33 @@ function BuscadorPerfume({ fila, perfumes, huerfana, onElegir, onCrear }) {
         placeholder="Buscar en el catálogo"
         onFocus={abrir}
         onBlur={() => setTimeout(cerrar, 120)} // da tiempo al clic de la lista
-        onChange={(e) => { setConsulta(e.target.value); setAbierto(true); setResaltado(0); medir(); }}
-        onKeyDown={teclas}
+        readOnly={bloqueado}
+        onChange={(e) => {
+          if (bloqueado) return;
+          setConsulta(e.target.value);
+          setAbierto(true);
+          setResaltado(0);
+          medir();
+        }}
+        onKeyDown={bloqueado ? undefined : teclas}
         title={
-          huerfana
+          bloqueado
+            ? "El pedido está cerrado"
+            : huerfana
             ? "Este perfume ya no está en el catálogo. Elegí otro de la lista."
             : undefined
         }
         className="w-full rounded-[3px] border px-2 py-1.5 text-[12.5px] transition focus:outline-none"
         style={{
-          background: huerfana ? "#FDF3F1" : "var(--papel)",
+          background: bloqueado ? "var(--vidrio-hondo)" : huerfana ? "#FDF3F1" : "var(--papel)",
           // ámbar: falta elegir perfume · óxido: apunta a uno que ya no existe
           borderColor: huerfana
             ? "var(--oxido)"
             : fila.perfumeId
             ? "var(--linea)"
             : "var(--ambar)",
-          color: "var(--tinta)",
+          color: bloqueado ? "var(--humo)" : "var(--tinta)",
+          cursor: bloqueado ? "not-allowed" : undefined,
         }}
       />
       {abierto && opciones.length > 0 && caja && createPortal(
@@ -771,6 +804,19 @@ function CostoConPase({ valor, candidato, recienPasado, onPasar }) {
   );
 }
 
+/* El pedido sin los nombres cacheados de cada fila.
+
+   `producto` es una copia del nombre del catálogo: la referencia real es
+   `perfumeId`. Comparar ignorando esa copia es lo que permite que un pedido
+   cerrado acepte la sincronización de un nombre renombrado en el catálogo y
+   rechace cualquier otro cambio. */
+function sinNombres(globals, productos) {
+  return JSON.stringify({
+    globals,
+    productos: (productos ?? []).map(({ producto, ...resto }) => resto),
+  });
+}
+
 /* Celda calculada (solo lectura) */
 function CalcCell({ children, tone = "default", strong = false }) {
   const color =
@@ -874,6 +920,11 @@ export default function App() {
   const [pedidos, setPedidos] = useState([]);           // la lista, sin las filas
   const [pedidoId, setPedidoId] = useState(null);
   const [nombrePedido, setNombrePedido] = useState("");
+  /* "abierto" mientras el pedido está en curso; "cerrado" cuando ya llegó todo y
+     los números son definitivos. Lo que no tenga estado se lee como abierto, y
+     esa lectura NO reescribe el archivo: los pedidos viejos quedan como están
+     hasta que cierres uno a mano. */
+  const [estadoPedido, setEstadoPedido] = useState("abierto");
 
   // "cargando" | "archivo" (guarda en disco) | "sin-servidor"
   const [modoGuardado, setModoGuardado] = useState("cargando");
@@ -889,6 +940,10 @@ export default function App() {
 
   // Foto del estado tal como se cargó, para saber si el usuario cambió algo.
   const jsonInicial = useRef(null);
+  const sinNombresInicial = useRef(null);
+  // Se levanta una sola vez, para la escritura que cambia el estado del pedido:
+  // es lo único que un pedido cerrado acepta además de sincronizar nombres.
+  const forzarGuardado = useRef(false);
   // El id del pedido que está en pantalla, leído desde los temporizadores.
   const idActivo = useRef(null);
   idActivo.current = pedidoId;
@@ -943,9 +998,15 @@ export default function App() {
     setGlobals(normalizado.globals);
     setProductos(normalizado.productos);
     setNombrePedido(datos?.nombre || "Sin nombre");
+    setEstadoPedido(datos?.estado === "cerrado" ? "cerrado" : "abierto");
     setPedidoId(id);
     idActivo.current = id;
     jsonInicial.current = JSON.stringify(normalizado);
+    // Marca sin los nombres cacheados: con esto un pedido cerrado puede
+    // distinguir "solo se sincronizó un nombre del catálogo" de "alguien tocó
+    // un número". Ver la guarda del efecto que persiste.
+    sinNombresInicial.current = sinNombres(normalizado.globals, normalizado.productos);
+    forzarGuardado.current = false;
     yaGuarda.current = false;
     pendiente.current = null;
     clearTimeout(temporizador.current);
@@ -1038,6 +1099,7 @@ export default function App() {
   const [margenMasivo, setMargenMasivo] = useState(30);
   const [pasadosAlCatalogo, setPasadosAlCatalogo] = useState("");
   const [pasadoEnFila, setPasadoEnFila] = useState("");
+  const cerrado = estadoPedido === "cerrado";
   /* En qué pedidos está cada perfume, según los archivos. Se trae al entrar al
      catálogo y no más seguido: el pedido en pantalla se cuenta en vivo (ver
      `usosPorPerfume`) y al cambiar de pedido `guardarPendiente()` ya dejó el
@@ -1064,7 +1126,17 @@ export default function App() {
   useEffect(() => {
     if (modoGuardado !== "archivo" || !pedidoId) return;
     const json = JSON.stringify({ globals, productos: productosResueltos }); // para comparar
-    if (!yaGuarda.current) {
+
+    /* Un pedido cerrado está congelado, y esta guarda es la que de verdad lo
+       protege: apagar la UI no alcanza. Solo pasan dos cosas:
+       · el propio cambio de estado (`forzarGuardado`), y
+       · la sincronización de un nombre renombrado en el catálogo — la copia
+         guardada en la fila tiene que quedar al día o el archivo envejece con
+         nombres que ya no existen. Números, cantidades y precios no se tocan. */
+    if (estadoPedido === "cerrado" && !forzarGuardado.current) {
+      if (json === jsonInicial.current) return; // nada cambió
+      if (sinNombres(globals, productosResueltos) !== sinNombresInicial.current) return;
+    } else if (!yaGuarda.current) {
       if (json === jsonInicial.current) return; // nada cambió todavía
       yaGuarda.current = true;
     }
@@ -1078,7 +1150,12 @@ export default function App() {
     // solo para comparar contra el estado cargado (que no incluye el nombre).
     pendiente.current = {
       id: idAlProgramar,
-      json: JSON.stringify({ nombre: nombrePedido, globals, productos: productosResueltos }),
+      json: JSON.stringify({
+        nombre: nombrePedido,
+        estado: estadoPedido,
+        globals,
+        productos: productosResueltos,
+      }),
     };
     setGuardando(true);
     clearTimeout(temporizador.current);
@@ -1090,11 +1167,13 @@ export default function App() {
       try {
         const r = await escribirPedido(idAlProgramar, {
           nombre: nombrePedido,
+          estado: estadoPedido,
           globals,
           productos: productosResueltos,
         });
         setRutaArchivo(r.ruta);
         pendiente.current = null;
+        forzarGuardado.current = false;
         setErrorGuardado("");
       } catch (e) {
         setErrorGuardado(
@@ -1104,7 +1183,7 @@ export default function App() {
         setGuardando(false);
       }
     }, 800);
-  }, [globals, productosResueltos, modoGuardado, pedidoId, nombrePedido]);
+  }, [globals, productosResueltos, modoGuardado, pedidoId, nombrePedido, estadoPedido]);
 
   // Si cerrás la pestaña con un guardado a medio camino, se manda igual.
   useEffect(() => {
@@ -1199,6 +1278,36 @@ export default function App() {
       setArmandoPrecios(false);
     }
   };
+
+  /* Cerrar y reabrir, los dos con confirmación: cerrar apaga la escritura sobre
+     un pedido entero, y reabrir la vuelve a encender sobre algo que ya diste por
+     terminado. Ninguna de las dos es un clic al pasar. */
+  const cambiarEstadoPedido = (nuevo) => {
+    forzarGuardado.current = true; // es la única escritura que un cerrado acepta
+    yaGuarda.current = true;
+    setEstadoPedido(nuevo);
+  };
+
+  const cerrarPedido = () =>
+    setDialogo({
+      titulo: `¿Cerrar "${nombrePedido}"?`,
+      texto:
+        "Queda congelado: no vas a poder cambiar celdas, agregar o borrar filas, aplicar margen, " +
+        "renombrarlo ni borrarlo hasta que lo reabras. Podés seguir exportando, sacando el PDF del " +
+        "proveedor y pasando los costos al catálogo.",
+      etiquetaOk: "Cerrar pedido",
+      onAceptar: () => cambiarEstadoPedido("cerrado"),
+    });
+
+  const reabrirPedido = () =>
+    setDialogo({
+      titulo: `¿Reabrir "${nombrePedido}"?`,
+      texto:
+        "Vuelve a ser editable y sus números pueden cambiar. Si era un pedido terminado, " +
+        "conviene reabrirlo solo para corregir algo puntual y volver a cerrarlo.",
+      etiquetaOk: "Reabrir",
+      onAceptar: () => cambiarEstadoPedido("abierto"),
+    });
 
   const renombrarPedido = () =>
     setDialogo({
@@ -1401,6 +1510,9 @@ export default function App() {
 
     const enOtros = u.pedidos.filter((x) => !x.enPantalla);
     const listaDeOtros = enOtros.map((x) => `${x.nombre} (${filas(x.filas)})`).join(", ");
+    // Con el pedido en pantalla cerrado, sus filas son tan intocables como las
+    // de los demás: un pedido cerrado no se edita desde ningún lado.
+    const puedeBorrarAcá = u.enPantalla > 0 && !cerrado;
 
     // Está en otros pedidos: son los que NO se pueden tocar desde acá. Editar el
     // archivo de un pedido que el usuario no está mirando es justo lo que no se
@@ -1417,21 +1529,38 @@ export default function App() {
             </span>
             {u.enPantalla > 0 && (
               <span className="mt-2 block">
-                En este pedido hay {filas(u.enPantalla)}. Ésas sí puedo borrarlas, con sus
-                cantidades y costos.
+                En este pedido hay {filas(u.enPantalla)}.{" "}
+                {puedeBorrarAcá
+                  ? "Ésas sí puedo borrarlas, con sus cantidades y costos."
+                  : "Está cerrado, así que tampoco las toco: van a quedar huérfanas como las otras."}
               </span>
             )}
           </>
         ),
-        etiquetaOk: u.enPantalla > 0 ? `Quitar y borrar ${filas(u.enPantalla)} de acá` : "Quitar igual",
+        etiquetaOk: puedeBorrarAcá ? `Quitar y borrar ${filas(u.enPantalla)} de acá` : "Quitar igual",
         peligro: true,
-        ...(u.enPantalla > 0
+        ...(puedeBorrarAcá
           ? { segunda: { etiqueta: "Quitar y dejar todo", onAceptar: quitarDelCatalogo } }
           : {}),
         onAceptar: () => {
-          if (u.enPantalla > 0) borrarFilasDeEstePedido();
+          if (puedeBorrarAcá) borrarFilasDeEstePedido();
           quitarDelCatalogo();
         },
+      });
+      return;
+    }
+
+    // Solo en el pedido en pantalla, pero cerrado: no hay nada que elegir, sus
+    // filas no se tocan.
+    if (cerrado) {
+      setDialogo({
+        titulo: `"${perfume.nombre}" está en ${filas(u.enPantalla)} de este pedido`,
+        texto:
+          "El pedido está cerrado, así que esas filas no se borran: se quedan con el nombre, " +
+          "sin foto y marcadas en rojo. Si querés borrarlas, reabrí el pedido primero.",
+        etiquetaOk: "Quitar igual",
+        peligro: true,
+        onAceptar: quitarDelCatalogo,
       });
       return;
     }
@@ -1673,6 +1802,8 @@ export default function App() {
               <FileDown size={14} /> {armandoPDF ? "Armando…" : "PDF proveedor"}
             </button>
             <button
+              disabled={cerrado}
+              title={cerrado ? "El pedido está cerrado: reabrilo para esto" : undefined}
               onClick={() => setShowImport(true)}
               className="flex items-center gap-1.5 text-[12px] text-[#CBC7BE] hover:text-white transition"
             >
@@ -1783,8 +1914,11 @@ export default function App() {
         />
       )}
 
+      {/* Todo lo que se edita del pedido vive adentro: cada celda pregunta por su
+          cuenta si está bloqueada, en vez de recibir un prop por cada una de las
+          21 columnas y que alguna se quede afuera. */}
       {vista === "pedido" && (
-        <>
+        <ContextoBloqueo.Provider value={cerrado}>
       {/* Qué pedido estás mirando */}
       <section style={{ background: "var(--vidrio)", borderBottom: "1px solid var(--linea)" }}>
         <div className="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-3 px-6 py-3">
@@ -1802,22 +1936,49 @@ export default function App() {
                 <option key={p.id} value={p.id}>
                   {p.nombre}
                   {p.filas ? ` · ${p.filas} perfumes` : ""}
+                  {(p.id === pedidoId ? cerrado : p.estado === "cerrado") ? " · cerrado" : ""}
                 </option>
               ))}
             </select>
+            {/* El sello dice en qué estado está lo que estás mirando. Gris y no
+                óxido: cerrado no es un error ni un peligro, es un estado. */}
+            <span
+              className="k-col rounded-full border px-2.5 py-1"
+              style={{
+                borderColor: cerrado ? "var(--humo)" : "var(--linea)",
+                color: cerrado ? "var(--tinta)" : "var(--humo)",
+                background: cerrado ? "var(--vidrio-hondo)" : "transparent",
+              }}
+            >
+              {cerrado ? "Cerrado" : "Abierto"}
+            </span>
           </div>
           <div className="flex items-center gap-1">
+            <button
+              onClick={cerrado ? reabrirPedido : cerrarPedido}
+              title={
+                cerrado
+                  ? "Volver a habilitar la edición de este pedido"
+                  : "Congelar este pedido: ya llegó todo y los números son definitivos"
+              }
+              className="k-col rounded-[3px] border px-2.5 py-1.5 transition"
+              style={{ borderColor: "var(--linea)", color: "var(--humo)" }}
+            >
+              {cerrado ? "Reabrir" : "Cerrar pedido"}
+            </button>
+            <span className="mx-1 h-4 w-px" style={{ background: "var(--linea)" }} />
             {[
-              ["Nuevo", () => nuevoPedido(false), "Crear un pedido vacío, con los mismos parámetros"],
-              ["Duplicar", () => nuevoPedido(true), "Copiar los perfumes y costos de este pedido, sin los precios"],
-              ["Renombrar", renombrarPedido, "Cambiar el nombre de este pedido"],
-              ["Borrar", eliminarPedido, "Mandar este pedido a datos/papelera/"],
-            ].map(([texto, accion, ayuda]) => (
+              ["Nuevo", () => nuevoPedido(false), "Crear un pedido vacío, con los mismos parámetros", false],
+              ["Duplicar", () => nuevoPedido(true), "Copiar los perfumes y costos de este pedido, sin los precios", false],
+              ["Renombrar", renombrarPedido, "Cambiar el nombre de este pedido", true],
+              ["Borrar", eliminarPedido, "Mandar este pedido a datos/papelera/", true],
+            ].map(([texto, accion, ayuda, escribe]) => (
               <button
                 key={texto}
                 onClick={accion}
-                title={ayuda}
-                className="k-col rounded-[3px] px-2.5 py-1.5 transition"
+                disabled={escribe && cerrado}
+                title={escribe && cerrado ? "El pedido está cerrado: reabrilo para esto" : ayuda}
+                className="k-col rounded-[3px] px-2.5 py-1.5 transition disabled:cursor-not-allowed disabled:opacity-40"
                 style={{ color: "var(--humo)" }}
               >
                 {texto}
@@ -1904,6 +2065,22 @@ export default function App() {
         </div>
       </section>
 
+      {cerrado && (
+        <section className="mx-auto max-w-[1400px] px-6 pt-6">
+          <div
+            className="flex items-center gap-2 rounded-[4px] border px-3 py-2 text-[12.5px]"
+            style={{ borderColor: "var(--linea)", background: "var(--vidrio-hondo)", color: "var(--humo)" }}
+          >
+            <Lock size={14} />
+            <span>
+              <b style={{ color: "var(--tinta)" }}>Pedido cerrado.</b> Los números quedaron como
+              estaban: se puede mirar, exportar y pasar los costos al catálogo. Para cambiar algo,
+              reabrilo arriba.
+            </span>
+          </div>
+        </section>
+      )}
+
       {/* Barra de acciones */}
       <section className="mx-auto max-w-[1400px] px-6 pt-6 pb-2 flex items-center justify-between">
         <h2 className="text-[13px] font-semibold text-[#373737]">
@@ -1920,9 +2097,11 @@ export default function App() {
             </div>
             <button
               onClick={clavarIncluidas}
-              disabled={alcanzadasPorMasivo.length === 0}
+              disabled={cerrado || alcanzadasPorMasivo.length === 0}
               title={
-                alcanzadasPorMasivo.length === 0
+                cerrado
+                  ? "El pedido está cerrado: reabrilo para esto"
+                  : alcanzadasPorMasivo.length === 0
                   ? "Todas las filas incluidas ya tienen un precio puesto a mano"
                   : `Calcula el precio de ${alcanzadasPorMasivo.length} fila(s) incluida(s) para ese margen. No toca las que ya tienen un precio puesto a mano.`
               }
@@ -1947,7 +2126,9 @@ export default function App() {
           </button>
           <button
             onClick={addP}
-            className="flex items-center gap-1.5 rounded-[3px] px-4 py-2 text-[13px] font-medium text-white transition"
+            disabled={cerrado}
+            title={cerrado ? "El pedido está cerrado: reabrilo para esto" : undefined}
+            className="flex items-center gap-1.5 rounded-[3px] px-4 py-2 text-[13px] font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-40"
             style={{ background: "var(--tinta)" }}
           >
             <Plus size={16} /> Agregar perfume
@@ -2089,10 +2270,20 @@ export default function App() {
                   {/* Acciones */}
                   <td className="px-2 py-1.5 border-b border-[#EFEDE7]">
                     <div className="flex items-center justify-center gap-1">
-                      <button onClick={() => dupP(f.id)} title="Duplicar" className="rounded-md p-1.5 text-[#9A958A] hover:bg-[#EEEBE3] hover:text-[#373737] transition">
+                      <button
+                        onClick={() => dupP(f.id)}
+                        disabled={cerrado}
+                        title={cerrado ? "El pedido está cerrado" : "Duplicar"}
+                        className="rounded-md p-1.5 text-[#9A958A] transition enabled:hover:bg-[#EEEBE3] enabled:hover:text-[#373737] disabled:cursor-not-allowed disabled:opacity-40"
+                      >
                         <Copy size={14} />
                       </button>
-                      <button onClick={() => delP(f.id)} title="Eliminar" className="rounded-md p-1.5 text-[#9A958A] hover:bg-[#F7E4E0] hover:text-[#C0392B] transition">
+                      <button
+                        onClick={() => delP(f.id)}
+                        disabled={cerrado}
+                        title={cerrado ? "El pedido está cerrado" : "Eliminar"}
+                        className="rounded-md p-1.5 text-[#9A958A] transition enabled:hover:bg-[#F7E4E0] enabled:hover:text-[#C0392B] disabled:cursor-not-allowed disabled:opacity-40"
+                      >
                         <Trash2 size={14} />
                       </button>
                     </div>
@@ -2112,6 +2303,7 @@ export default function App() {
                 <td colSpan={21} className="border-t border-[#E4E1DA] bg-[#FBFAF7] px-3 py-2">
                   <button
                     onClick={addP}
+                    disabled={cerrado}
                     className="flex items-center gap-1.5 text-[13px] font-medium text-[#6B665D] hover:text-[#373737] transition"
                   >
                     <Plus size={15} /> Agregar perfume
@@ -2127,7 +2319,7 @@ export default function App() {
           mirá la columna <b>Gan. Bruta</b> para saber qué te queda en la mano y el <b>Margen</b> para decidir el precio.
         </p>
       </section>
-        </>
+        </ContextoBloqueo.Provider>
       )}
     </div>
   );
@@ -2359,6 +2551,7 @@ function ScrollEspejo({ objetivo }) {
 }
 
 function SelectorMoneda({ valor, onChange }) {
+  const bloqueado = useBloqueo();
   const opciones = [
     ["USD", "Dólares"],
     ["ARS", "Pesos"],
@@ -2380,11 +2573,14 @@ function SelectorMoneda({ valor, onChange }) {
               key={id}
               type="button"
               aria-pressed={activo}
+              disabled={bloqueado}
+              title={bloqueado ? "El pedido está cerrado" : undefined}
               onClick={() => onChange(id)}
-              className="k-col rounded-[2px] px-3 py-[5px] transition"
+              className="k-col rounded-[2px] px-3 py-[5px] transition disabled:cursor-not-allowed"
               style={{
                 background: activo ? "var(--tinta)" : "transparent",
                 color: activo ? "#FFFFFF" : "var(--humo)",
+                opacity: bloqueado && !activo ? 0.45 : 1,
               }}
             >
               {texto}
