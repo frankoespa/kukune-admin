@@ -226,6 +226,27 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - Cada perfume tiene `costo` y `precioPublico` (venta directa), **puestos a mano**.
   No se sugieren desde el último pedido: el costo de un pedido es lo que cobró
   ESE proveedor en ESA compra, y el del catálogo es la referencia actual.
+- **Precio y Margen de la venta directa son un par**, igual que en los pedidos:
+  escribís el precio y el margen sale solo, o clavás el margen (`margenObjetivo`,
+  fracción o `null`) y el precio se despeja. Con el margen clavado el precio pasa
+  a ser calculado y se muestra sin caja; la celda del margen lleva borde ámbar y
+  una `X` para soltarlo. Van pegadas en la tabla: son un par que se maneja junto.
+- El despeje es `precioPublicoDesdeMargen(costo, margen) = costo × (1 + margen)`.
+  Acá no hace falta el de los pedidos porque vender directo no tiene comisión ni
+  envío a cargo del negocio. Mismo criterio de redondeo: peso entero salvo que
+  eso desvíe el margen más de 0,05 pp.
+- **Un costo nuevo mueve el precio de los clavados.** Es lo que hace que "pasar
+  costos al catálogo" desde un pedido reprecie solo los perfumes clavados; los
+  que tienen precio a mano no se tocan nunca. Está pedido así a propósito.
+- `resolverPreciosDelCatalogo()` es el gemelo de `resolverPrecios()`: corre sobre
+  la lista y devuelve **el mismo array** si no cambió nada, para que abrir la
+  pantalla no dispare un guardado. Lo que se guarda, se exporta y va al PDF es
+  **`perfumesResueltos`**, no el estado crudo — si no, el precio calculado nunca
+  llega al archivo.
+- Soltar el margen escribe `margenObjetivo: null` **y** el precio resuelto, en el
+  mismo `setPerfumes` (`soltarMargenDelCatalogo`). Si solo se borrara el margen,
+  la fila volvería al precio viejo que quedó en el estado crudo: es la misma
+  trampa que ya se pagó en los pedidos.
 - **En Mercado Libre no hay "un" precio.** Se publica una vez por opción de pago
   —un pago, 6 cuotas…— y cada publicación tiene la suya, porque ML cobra una
   comisión extra por cuotas sobre el precio publicado. Por eso el perfume guarda

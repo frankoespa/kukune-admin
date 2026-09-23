@@ -109,6 +109,47 @@ export function precioParaIgualar({ costo, ganancia, comision = 0, envio = 0 }) 
   return Math.round((c + ganancia + (Number(envio) || 0)) / k);
 }
 
+/* El camino inverso de la venta directa: dado un margen, qué precio lo produce.
+
+   Acá no hace falta el despeje de los pedidos: vender directo no tiene comisión
+   ni envío a cargo del negocio, así que `margen = (precio − costo) / costo` se
+   da vuelta solo.
+
+   Mismo criterio de redondeo que `precioDesdeMargen`: un peso corre el margen en
+   `1/costo`, que en un perfume normal es 0,002 pp y no se nota, pero con un
+   costo muy chico se dispara y redondear mentiría — pedís 30% y ves 32%. */
+export function precioPublicoDesdeMargen(costo, margen) {
+  const c = Number(costo) || 0;
+  // `margen == null` va aparte: `Number(null)` es 0, y devolver el costo como
+  // precio sería poner el margen en cero sin que nadie lo haya pedido.
+  if (margen == null) return null;
+  const m = Number(margen);
+  if (!(c > 0) || !Number.isFinite(m)) return null;
+  const precio = c * (1 + m);
+  const desvioMaximoPP = 0.5 * (1 / c) * 100;
+  const redondeado = desvioMaximoPP <= 0.05 ? Math.round(precio) : Math.round(precio * 100) / 100;
+  return Math.max(0, redondeado);
+}
+
+/* La lista del catálogo con el precio de venta ya despejado en los perfumes que
+   tienen un margen clavado. Es el gemelo de `resolverPrecios()` para los pedidos,
+   y existe por la misma razón: lo que se guarda, se exporta y va al PDF tiene que
+   ser la lista resuelta, no el estado crudo.
+
+   Devuelve **el mismo array** si no cambió ningún precio, así los `useMemo` de
+   arriba no se invalidan y abrir la pantalla no dispara un guardado. */
+export function resolverPreciosDelCatalogo(perfumes) {
+  let hubo = false;
+  const resueltos = (perfumes ?? []).map((p) => {
+    if (p.margenObjetivo == null) return p;
+    const precio = precioPublicoDesdeMargen(p.costo, p.margenObjetivo);
+    if (precio === null || precio === p.precioPublico) return p;
+    hubo = true;
+    return { ...p, precioPublico: precio };
+  });
+  return hubo ? resueltos : perfumes;
+}
+
 /* Qué planes de pago se publican: un pago siempre, más los que tengan comisión
    cargada. Un plan en 0% no es una opción de publicación, así que no ocupa
    columna; cargarle la comisión a 3 cuotas hace aparecer su bloque solo. */

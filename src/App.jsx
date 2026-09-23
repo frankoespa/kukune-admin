@@ -38,7 +38,7 @@ import {
   urlFoto,
 } from "./almacenamiento";
 import Catalogo, { buscarPerfumes, ConVistaPrevia } from "./Catalogo";
-import { resolverPrecios } from "./precios";
+import { resolverPrecios, resolverPreciosDelCatalogo } from "./precios";
 import { NumberCell } from "./NumberCell";
 import { ContextoBloqueo, useBloqueo } from "./bloqueo";
 
@@ -936,7 +936,18 @@ export default function App() {
   const [perfumes, setPerfumes] = useState([]);
   const [ajustes, setAjustes] = useState(AJUSTES_POR_DEFECTO);
   const [armandoPrecios, setArmandoPrecios] = useState(false);
-  const perfumePorId = useMemo(() => new Map(perfumes.map((p) => [p.id, p])), [perfumes]);
+  /* El catálogo resuelto: los perfumes con un margen clavado ya traen su precio
+     de venta despejado. Es el gemelo de `productosResueltos` y está por la misma
+     razón — lo que se guarda, se exporta y va al PDF tiene que ser esto y no el
+     estado crudo, o el precio calculado nunca llega al archivo.
+     `resolverPreciosDelCatalogo` devuelve el mismo array si no cambió nada, así
+     que abrir la pantalla no dispara ningún guardado. */
+  const perfumesResueltos = useMemo(() => resolverPreciosDelCatalogo(perfumes), [perfumes]);
+
+  const perfumePorId = useMemo(
+    () => new Map(perfumesResueltos.map((p) => [p.id, p])),
+    [perfumesResueltos]
+  );
 
   // Foto del estado tal como se cargó, para saber si el usuario cambió algo.
   const jsonInicial = useRef(null);
@@ -1071,7 +1082,7 @@ export default function App() {
   const guardaCatalogo = useRef(null);
   useEffect(() => {
     if (catalogoInicial.current === null) return; // todavía no cargó
-    const json = JSON.stringify({ perfumes, ajustes });
+    const json = JSON.stringify({ perfumes: perfumesResueltos, ajustes });
     if (json === catalogoInicial.current) return; // nada cambió
     // La marca se actualiza ACÁ, no cuando el PUT responde. Si se esperara a la
     // respuesta, un cambio hecho mientras la escritura anterior está en vuelo se
@@ -1082,13 +1093,13 @@ export default function App() {
     catalogoInicial.current = json;
     clearTimeout(guardaCatalogo.current);
     guardaCatalogo.current = setTimeout(() => {
-      escribirPerfumes(perfumes, ajustes).catch((e) => {
+      escribirPerfumes(perfumesResueltos, ajustes).catch((e) => {
         // Se suelta la marca para que el próximo cambio reintente.
         catalogoInicial.current = "";
         setErrorGuardado(`No se pudo guardar el catálogo (${e.message}).`);
       });
     }, 800);
-  }, [perfumes, ajustes]);
+  }, [perfumesResueltos, ajustes]);
 
   const [showHelp, setShowHelp] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -1263,7 +1274,7 @@ export default function App() {
     setArmandoPrecios(true);
     try {
       const fecha = new Date();
-      const conPrecio = perfumes
+      const conPrecio = perfumesResueltos
         .filter((p) => (p.precioPublico || 0) > 0)
         .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
       const items = await Promise.all(
@@ -1486,6 +1497,19 @@ export default function App() {
     setPerfumes((ps) => [...ps, perfume]);
     return perfume;
   };
+
+  /* Soltar el margen de un perfume deja el precio donde había quedado.
+
+     El precio calculado vive en la lista resuelta, no en el estado: si solo se
+     borrara `margenObjetivo`, la fila volvería al precio viejo que tiene el
+     estado crudo. Por eso los dos cambios van en el mismo `setPerfumes`. Es la
+     misma trampa que en los pedidos (`soltarMargen`), y ya se pagó una vez. */
+  const soltarMargenDelCatalogo = (id, precioResuelto) =>
+    setPerfumes((ps) =>
+      ps.map((p) =>
+        p.id === id ? { ...p, margenObjetivo: null, precioPublico: precioResuelto } : p
+      )
+    );
 
   const cambiarPerfume = (id, campos) =>
     setPerfumes((ps) => ps.map((p) => (p.id === id ? { ...p, ...campos } : p)));
@@ -1901,13 +1925,14 @@ export default function App() {
 
       {vista === "catalogo" && (
         <Catalogo
-          perfumes={perfumes}
+          perfumes={perfumesResueltos}
           usos={usosPorPerfume}
           ajustes={ajustes}
           onAjustes={(campos) => setAjustes((a) => ({ ...a, ...campos }))}
           onExportarPrecios={exportarPrecios}
           exportando={armandoPrecios}
           onCambiar={cambiarPerfume}
+          onSoltarMargen={soltarMargenDelCatalogo}
           onCrear={crearPerfume}
           onBorrar={borrarPerfume}
           onFoto={ponerFoto}
@@ -2213,7 +2238,7 @@ export default function App() {
                   >
                     <BuscadorPerfume
                       fila={f}
-                      perfumes={perfumes}
+                      perfumes={perfumesResueltos}
                       huerfana={!!f.perfumeId && !perfumePorId.has(f.perfumeId)}
                       onElegir={(perfume) => asignarPerfume(f.id, perfume)}
                       onCrear={crearPerfume}

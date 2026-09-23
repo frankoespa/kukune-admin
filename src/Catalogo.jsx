@@ -22,7 +22,9 @@ import { pctSinMiles as pctCorto } from "./numeros";
 const columnasDeCatalogo = (planes) =>
   [
     "52px minmax(180px,1fr) 100px",
-    "104px 96px 100px 76px",
+    // Precio y Margen pegados: son un par que se maneja junto, igual que en la
+    // tabla del pedido. Con envío y Ganancia salen de ellos.
+    "104px 84px 96px 100px",
     planes.map(() => "124px 104px").join(" "),
     "72px 32px",
   ].join(" ");
@@ -143,6 +145,7 @@ export default function Catalogo({
   usos,
   ajustes,
   onCambiar,
+  onSoltarMargen,
   onCrear,
   onBorrar,
   onFoto,
@@ -426,6 +429,7 @@ export default function Catalogo({
                   planes={planes}
                   columnas={columnas}
                   onCambiar={onCambiar}
+                  onSoltarMargen={onSoltarMargen}
                   onBorrar={onBorrar}
                   onFoto={onFoto}
                 />
@@ -484,9 +488,9 @@ function EncabezadoCatalogo({ planes, columnas }) {
         {col("Perfume", "transparent", "text-left")}
         {col("Costo", "transparent")}
         {col("Precio", "var(--zona-directa)")}
+        {col("Margen", "var(--zona-directa)")}
         {col("Con envio", "var(--zona-directa)")}
         {col("Ganancia", "var(--zona-directa)")}
-        {col("Margen", "var(--zona-directa)")}
         {planes.map((plan) => (
           <Fragment key={plan}>
             {col("Precio", "var(--zona-ml)")}
@@ -509,7 +513,7 @@ function EncabezadoCatalogo({ planes, columnas }) {
 
    El envío de Rosario NO entra en ninguna cuenta: aparece como "con envío", el
    precio que se le cotiza al cliente cuando hay que llevárselo. */
-function Precios({ perfume, ajustes, planes, onCambiar }) {
+function Precios({ perfume, ajustes, planes, onCambiar, onSoltarMargen }) {
   const r = analisisDePrecio({
     costo: perfume.costo,
     precioPublico: perfume.precioPublico,
@@ -544,6 +548,8 @@ function Precios({ perfume, ajustes, planes, onCambiar }) {
     m === null ? "var(--humo-claro)" : m >= 0 ? "var(--verde)" : "var(--oxido)";
 
   const envio = Number(ajustes.envioLocal) || 0;
+  const clavado = perfume.margenObjetivo != null;
+  const sinCosto = !(Number(perfume.costo) > 0);
 
   /* Cada plan guarda su precio. Al escribir el mapa nuevo se deja de escribir el
      `precioML` viejo: su valor ya vive en `preciosML["1"]` y tener los dos sería
@@ -558,12 +564,59 @@ function Precios({ perfume, ajustes, planes, onCambiar }) {
     <>
       {campo(perfume.costo, (v) => onCambiar(perfume.id, { costo: v }), "transparent")}
 
-      {/* ---- Venta directa ---- */}
-      {campo(
-        perfume.precioPublico,
-        (v) => onCambiar(perfume.id, { precioPublico: v }),
-        "var(--zona-directa)"
-      )}
+      {/* ---- Venta directa: precio y margen son un par ----
+           Clavado el margen, el precio pasa a ser calculado y se muestra sin
+           caja; suelto, el precio se edita y el margen muestra el que sale de
+           él. Escribir en el margen lo clava. Es el mismo trato que en la tabla
+           del pedido. */}
+      <div className="px-1.5" style={{ background: "var(--zona-directa)" }}>
+        {clavado ? (
+          <div className="px-0.5 text-right">
+            <span className="k-num text-[13px] font-semibold" style={{ color: "var(--tinta)" }}>
+              {pesos(perfume.precioPublico)}
+            </span>
+          </div>
+        ) : (
+          <NumberCell
+            value={perfume.precioPublico ?? 0}
+            onChange={(v) => onCambiar(perfume.id, { precioPublico: v })}
+          />
+        )}
+      </div>
+      <div className="relative px-1.5" style={{ background: "var(--zona-directa)" }}>
+        {sinCosto ? (
+          <div
+            className="px-0.5 text-right"
+            title="Cargá el costo para poder fijar un margen"
+          >
+            <span className="k-num text-[13px]" style={{ color: "var(--humo-claro)" }}>
+              —
+            </span>
+          </div>
+        ) : (
+          <NumberCell
+            value={+((clavado ? perfume.margenObjetivo : r.directo.margen ?? 0) * 100).toFixed(1)}
+            onChange={(v) => onCambiar(perfume.id, { margenObjetivo: v / 100 })}
+            suffix="%"
+            className={clavado ? "font-semibold" : ""}
+            style={
+              clavado ? { borderLeft: "3px solid var(--ambar)", background: "#FFFDF7" } : undefined
+            }
+          />
+        )}
+        {clavado && (
+          <button
+            type="button"
+            onClick={() => onSoltarMargen(perfume.id, perfume.precioPublico)}
+            title="Soltar el margen y volver a poner el precio a mano"
+            aria-label={`Soltar el margen de ${perfume.nombre}`}
+            className="absolute -right-0.5 -top-1.5 rounded-full bg-white p-0.5 transition"
+            style={{ color: "var(--humo)", boxShadow: "0 0 0 1px var(--linea)" }}
+          >
+            <X size={10} />
+          </button>
+        )}
+      </div>
       {cifra(r.directo.precioConEnvio === null ? "—" : pesos(r.directo.precioConEnvio), {
         fondo: "var(--zona-directa)",
         color: r.directo.precioConEnvio === null ? "var(--humo-claro)" : "var(--tinta)",
@@ -584,13 +637,6 @@ function Precios({ perfume, ajustes, planes, onCambiar }) {
             : `Vendiendo directo a ${pesos(perfume.precioPublico)} te quedan ${pesos(
                 r.directo.ganancia
               )} por unidad, sobre un costo de ${pesos(perfume.costo)}. El envío no entra: se cobra aparte.`,
-      })}
-      {cifra(r.directo.margen === null ? "—" : pctCorto(r.directo.margen), {
-        fondo: "var(--zona-directa)",
-        color: colorMargen(r.directo.margen),
-        fuerte: true,
-        titulo:
-          "Ganancia sobre el costo, la misma definición que la columna Margen de los pedidos",
       })}
 
       {/* ---- Una publicación de Mercado Libre por plan ---- */}
@@ -647,7 +693,17 @@ const pesos = (n) =>
 
 
 
-function FilaPerfume({ perfume, usos, ajustes, planes, columnas, onCambiar, onBorrar, onFoto }) {
+function FilaPerfume({
+  perfume,
+  usos,
+  ajustes,
+  planes,
+  columnas,
+  onCambiar,
+  onSoltarMargen,
+  onBorrar,
+  onFoto,
+}) {
   const inputRef = useRef(null);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState(false);
@@ -723,7 +779,13 @@ function FilaPerfume({ perfume, usos, ajustes, planes, columnas, onCambiar, onBo
         />
       </div>
 
-      <Precios perfume={perfume} ajustes={ajustes} planes={planes} onCambiar={onCambiar} />
+      <Precios
+        perfume={perfume}
+        ajustes={ajustes}
+        planes={planes}
+        onCambiar={onCambiar}
+        onSoltarMargen={onSoltarMargen}
+      />
 
       {/* Cuenta TODOS los pedidos, no solo el que está en pantalla: es el aviso
           de qué se lleva puesto un borrado. El detalle dice en cuáles. */}
