@@ -29,9 +29,9 @@ const columnasDeCatalogo = (planes) =>
     "52px minmax(180px,1fr) 100px",
     // Precio y Margen pegados: son un par que se maneja junto, igual que en la
     // tabla del pedido. Con envío y Ganancia salen de ellos.
-    "104px 84px 96px 100px",
+    "104px 88px 96px 100px",
     // Por plan: precio · margen · ganancia, el mismo trío que la venta directa.
-    planes.map(() => "112px 76px 100px").join(" "),
+    planes.map(() => "112px 88px 100px").join(" "),
     "72px 32px",
   ].join(" ");
 
@@ -352,7 +352,7 @@ export default function Catalogo({
               <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
                 Comision
               </span>
-              <div className="w-[76px]">
+              <div className="w-[88px]">
                 <NumberCell
                   value={+((ajustes.comisionML || 0) * 100).toFixed(2)}
                   onChange={(v) => onAjustes({ comisionML: v / 100 })}
@@ -381,7 +381,7 @@ export default function Catalogo({
                     <span className="k-col mb-1 block text-center" style={{ color: "var(--humo-claro)" }}>
                       {n}x
                     </span>
-                    <div className="w-[70px]">
+                    <div className="w-[78px]">
                       <NumberCell
                         value={+((ajustes.cuotasML?.[n] || 0) * 100).toFixed(2)}
                         onChange={(v) =>
@@ -424,7 +424,7 @@ export default function Catalogo({
         </div>
       ) : (
         <div className="overflow-x-auto pb-2">
-          <div style={{ minWidth: 820 + planes.length * 288 }}>
+          <div style={{ minWidth: 824 + planes.length * 300 }}>
             <EncabezadoCatalogo planes={planes} columnas={columnas} />
             <ul className="grid gap-1.5">
               {visibles.map((p) => (

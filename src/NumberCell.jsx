@@ -39,9 +39,7 @@ export function NumberCell({ value, onChange, align = "right", suffix, className
           setS(e.target.value);
           onChange(aNumero(e.target.value) ?? 0);
         }}
-        className={`k-num w-full rounded-[3px] border py-1.5 pl-2 ${
-          suffix ? "pr-8" : "pr-2"
-        } text-[12.5px] transition focus:outline-none ${
+        className={`k-num w-full rounded-[3px] border py-1.5 pl-2 pr-2 text-[12.5px] transition focus:outline-none ${
           align === "right" ? "text-right" : "text-left"
         } ${className}`}
         style={{
@@ -49,12 +47,16 @@ export function NumberCell({ value, onChange, align = "right", suffix, className
           borderColor: "var(--linea)",
           color: bloqueado ? "var(--humo)" : "var(--tinta)",
           cursor: bloqueado ? "not-allowed" : undefined,
+          // El hueco del sufijo sale de su largo, no de un número fijo: con 32px
+          // para todos, un "%" —que mide 6— se comía media celda y los márgenes
+          // de tres cifras se cortaban. "ARS" sigue teniendo su lugar.
+          ...(suffix ? { paddingRight: 14 + suffix.length * 6 } : null),
           ...style,
         }}
       />
       {suffix && (
         <span
-          className="k-col pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[9px]"
+          className="k-col pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[9px]"
           style={{ color: "var(--humo-claro)" }}
         >
           {suffix}
