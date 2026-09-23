@@ -2,9 +2,26 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Plus, Trash2, ImagePlus, Search, X, FileDown } from "lucide-react";
 import { urlFoto } from "./almacenamiento";
-import { analisisDePrecio } from "./precios";
+import { analisisDePrecio, gananciaPorCuotas } from "./precios";
 import { NumberCell } from "./NumberCell";
 import { pctSinMiles as pctCorto } from "./numeros";
+
+/* Una sola grilla para el encabezado y para las filas. Si se escribieran por
+   separado se desalinean al primer cambio de ancho, que es exactamente el error
+   que ya se pagó en el diálogo de costos del pedido.
+   Columnas: foto · nombre · costo ‖ precio · con envío · ganancia · margen ‖
+             precio ML · ganancia · margen ‖ usos · borrar
+   Sin `gap` horizontal a propósito: el aire lo pone cada celda con su padding,
+   así el color de cada canal es una franja continua y no se corta entre
+   columnas. */
+const COLUMNAS_CATALOGO =
+  "grid grid-cols-[52px_minmax(180px,1fr)_100px_104px_96px_100px_76px_120px_100px_76px_72px_32px] items-center";
+
+const PLANES_DE_CUOTAS = [3, 6, 9, 12];
+
+/* Lo que ve una fila de un perfume que no está en ningún pedido. Constante y no
+   un literal nuevo por render: si no, cada fila recibe un objeto distinto. */
+const SIN_USOS = { total: 0, enPantalla: 0, enOtros: 0, pedidos: [] };
 
 /* ---------- Vista previa de la foto al pasar el mouse ----------
    Va en un portal al body y con `position: fixed` a propósito: la tabla del
@@ -125,6 +142,11 @@ export default function Catalogo({
   const [soloSinFoto, setSoloSinFoto] = useState(false);
   const [porMargen, setPorMargen] = useState(false);
   const [nuevo, setNuevo] = useState("");
+  /* En cuántas cuotas estoy mirando ML. Es estado de pantalla y no se guarda:
+     es una lente para mirar, no un dato del perfume. */
+  const [plan, setPlan] = useState(1);
+
+  const comisionCuotas = plan === 1 ? 0 : Number(ajustes.cuotasML?.[plan]) || 0;
 
   const sinFoto = perfumes.filter((p) => !p.foto).length;
   const conPrecio = perfumes.filter((p) => (p.precioPublico || 0) > 0).length;
@@ -175,7 +197,7 @@ export default function Catalogo({
   };
 
   return (
-    <section className="mx-auto max-w-[1100px] px-6 py-8">
+    <section className="mx-auto max-w-[1360px] px-6 py-8">
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h2 className="k-rotulo mb-1">Catálogo de perfumes</h2>
@@ -256,40 +278,132 @@ export default function Catalogo({
           Por margen
         </button>
 
-        <div className="ml-auto flex items-end gap-3">
+        <button
+          onClick={onExportarPrecios}
+          disabled={conPrecio === 0 || exportando}
+          title={
+            conPrecio === 0
+              ? "Ningun perfume tiene precio de venta todavia"
+              : `Lista de precios de ${conPrecio} perfume(s) con el precio de venta directa`
+          }
+          className="k-col ml-auto flex items-center gap-1.5 whitespace-nowrap rounded-[3px] border px-3 py-[7px] transition disabled:cursor-not-allowed disabled:opacity-40"
+          style={{ borderColor: "var(--ambar)", color: "var(--ambar)" }}
+        >
+          <FileDown size={14} /> {exportando ? "Armando..." : "PDF de precios"}
+        </button>
+      </div>
+
+      {/* Los ajustes se agrupan por canal y cada caja lleva el color de su
+          franja en la tabla: así se ve qué configura qué sin leer el rótulo. */}
+      <div className="mb-5 flex flex-wrap items-stretch gap-3">
+        <div
+          className="rounded-[4px] border px-3 py-2.5"
+          style={{ background: "var(--zona-directa)", borderColor: "var(--zona-directa-honda)" }}
+        >
+          <span className="k-col mb-2 block" style={{ color: "var(--tinta)" }}>
+            Venta directa
+          </span>
           <label className="block">
             <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
-              Comision ML
+              Envio en Rosario
             </span>
-            <div className="w-[76px]">
+            <div className="w-[104px]">
               <NumberCell
-                value={+((ajustes.comisionML || 0) * 100).toFixed(2)}
-                onChange={(v) => onAjustes({ comisionML: v / 100 })}
-                suffix="%"
+                value={ajustes.envioLocal || 0}
+                onChange={(v) => onAjustes({ envioLocal: v })}
               />
             </div>
           </label>
-          <label className="block">
-            <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
-              Envio ML
-            </span>
-            <div className="w-[96px]">
-              <NumberCell value={ajustes.envioML || 0} onChange={(v) => onAjustes({ envioML: v })} />
+          <p className="mt-1.5 max-w-[150px] text-[11px]" style={{ color: "var(--humo)" }}>
+            Se le suma al precio cuando hay entrega. No toca la ganancia.
+          </p>
+        </div>
+
+        <div
+          className="flex-1 rounded-[4px] border px-3 py-2.5"
+          style={{ background: "var(--zona-ml)", borderColor: "var(--zona-ml-honda)" }}
+        >
+          <span className="k-col mb-2 block" style={{ color: "var(--tinta)" }}>
+            Mercado Libre
+          </span>
+          <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
+            <label className="block">
+              <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
+                Comision
+              </span>
+              <div className="w-[76px]">
+                <NumberCell
+                  value={+((ajustes.comisionML || 0) * 100).toFixed(2)}
+                  onChange={(v) => onAjustes({ comisionML: v / 100 })}
+                  suffix="%"
+                />
+              </div>
+            </label>
+            <label className="block">
+              <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
+                Envio ML
+              </span>
+              <div className="w-[96px]">
+                <NumberCell value={ajustes.envioML || 0} onChange={(v) => onAjustes({ envioML: v })} />
+              </div>
+            </label>
+
+            {/* Comision EXTRA de cada plan: ML la cobra ademas de la comision
+                normal, sobre el mismo precio publicado. */}
+            <div>
+              <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
+                Comision extra por cuotas
+              </span>
+              <div className="flex items-end gap-2">
+                {PLANES_DE_CUOTAS.map((n) => (
+                  <label key={n} className="block">
+                    <span className="k-col mb-1 block text-center" style={{ color: "var(--humo-claro)" }}>
+                      {n}x
+                    </span>
+                    <div className="w-[70px]">
+                      <NumberCell
+                        value={+((ajustes.cuotasML?.[n] || 0) * 100).toFixed(2)}
+                        onChange={(v) =>
+                          onAjustes({ cuotasML: { ...(ajustes.cuotasML || {}), [n]: v / 100 } })
+                        }
+                        suffix="%"
+                      />
+                    </div>
+                  </label>
+                ))}
+              </div>
             </div>
-          </label>
-          <button
-            onClick={onExportarPrecios}
-            disabled={conPrecio === 0 || exportando}
-            title={
-              conPrecio === 0
-                ? "Ningun perfume tiene precio de venta todavia"
-                : `Lista de precios de ${conPrecio} perfume(s) con el precio de venta directa`
-            }
-            className="k-col flex items-center gap-1.5 whitespace-nowrap rounded-[3px] border px-3 py-[7px] transition disabled:cursor-not-allowed disabled:opacity-40"
-            style={{ borderColor: "var(--ambar)", color: "var(--ambar)" }}
-          >
-            <FileDown size={14} /> {exportando ? "Armando..." : "PDF de precios"}
-          </button>
+
+            <div>
+              <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
+                Mirar la tabla en
+              </span>
+              <div
+                className="flex overflow-hidden rounded-[3px] border"
+                style={{ borderColor: "var(--zona-ml-honda)", background: "var(--papel)" }}
+              >
+                {[1, ...PLANES_DE_CUOTAS].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => setPlan(n)}
+                    aria-pressed={plan === n}
+                    title={
+                      n === 1
+                        ? "Un pago: solo la comision normal"
+                        : `${n} cuotas: comision normal + ${pctCorto(ajustes.cuotasML?.[n] || 0)} extra`
+                    }
+                    className="k-num px-2.5 py-[7px] text-[12px] transition"
+                    style={{
+                      background: plan === n ? "var(--tinta)" : "transparent",
+                      color: plan === n ? "#fff" : "var(--humo)",
+                    }}
+                  >
+                    {n === 1 ? "1 pago" : `${n}x`}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -313,45 +427,106 @@ export default function Catalogo({
           )}
         </div>
       ) : (
-        <ul className="grid gap-2">
-          {visibles.map((p) => (
-            <FilaPerfume
-              key={p.id}
-              perfume={p}
-              usos={usos[p.id] || 0}
-              ajustes={ajustes}
-              onCambiar={onCambiar}
-              onBorrar={onBorrar}
-              onFoto={onFoto}
-            />
-          ))}
-        </ul>
+        <div className="overflow-x-auto pb-2">
+          <div className="min-w-[1100px]">
+            <EncabezadoCatalogo plan={plan} />
+            <ul className="grid gap-1.5">
+              {visibles.map((p) => (
+                <FilaPerfume
+                  key={p.id}
+                  perfume={p}
+                  usos={usos[p.id] ?? SIN_USOS}
+                  ajustes={ajustes}
+                  comisionCuotas={comisionCuotas}
+                  onCambiar={onCambiar}
+                  onBorrar={onBorrar}
+                  onFoto={onFoto}
+                />
+              ))}
+            </ul>
+          </div>
+        </div>
       )}
     </section>
   );
 }
 
-/* Los dos precios y lo que sale de ellos.
+/* El encabezado de la tabla, en dos niveles como la del pedido: arriba los
+   canales, abajo las columnas. Usa `COLUMNAS_CATALOGO`, la misma grilla que las
+   filas, y lleva el mismo `border` (transparente) para que el borde de la fila
+   no le corra las columnas un píxel.
+   Va `sticky` contra la ventana: esta pantalla scrollea con la página, no tiene
+   contenedor propio como la tabla del pedido. */
+function EncabezadoCatalogo({ plan }) {
+  const grupo = (texto, fondo) => (
+    <span
+      className="k-col px-2 py-1.5"
+      style={{ background: fondo, color: "var(--tinta)" }}
+    >
+      {texto}
+    </span>
+  );
+  const col = (texto, fondo, alineado = "text-right") => (
+    <span
+      className={`k-col px-2 py-1.5 ${alineado}`}
+      style={{ background: fondo, color: "var(--humo)" }}
+    >
+      {texto}
+    </span>
+  );
 
-   El margen es sobre el costo, la misma definición que usa la columna Margen de
-   los pedidos, así que los números son comparables entre pantallas.
+  return (
+    <div className="sticky top-0 z-[5] pb-1.5 pt-1" style={{ background: "var(--vidrio)" }}>
+      <div className={`${COLUMNAS_CATALOGO} border border-transparent`}>
+        <span className="col-span-3 k-col px-2 py-1.5" style={{ color: "var(--humo)" }}>
+          Perfume
+        </span>
+        <span className="col-span-4">{grupo("Venta directa", "var(--zona-directa-honda)")}</span>
+        <span className="col-span-3">
+          {grupo(plan === 1 ? "Mercado Libre · 1 pago" : `Mercado Libre · ${plan} cuotas`, "var(--zona-ml-honda)")}
+        </span>
+        <span className="col-span-2" />
+      </div>
+      <div className={`${COLUMNAS_CATALOGO} border border-transparent`}>
+        <span />
+        {col("Perfume", "transparent", "text-left")}
+        {col("Costo", "transparent")}
+        {col("Precio", "var(--zona-directa)")}
+        {col("Con envio", "var(--zona-directa)")}
+        {col("Ganancia", "var(--zona-directa)")}
+        {col("Margen", "var(--zona-directa)")}
+        {col("Precio ML", "var(--zona-ml)")}
+        {col("Ganancia", "var(--zona-ml)")}
+        {col("Margen", "var(--zona-ml)")}
+        {col("Usos", "transparent")}
+        <span />
+      </div>
+    </div>
+  );
+}
 
-   "En ML" es a cuánto habría que publicarlo para ganar LO MISMO que vendiendo
-   directo, porque la plataforma se lleva comisión y envío. El porcentaje chico
-   de abajo es lo que quedaría si publicaras el precio directo tal cual: es el
-   número que avisa cuando un precio que parece bueno no sirve en ese canal. */
-function Precios({ perfume, ajustes, onCambiar }) {
+/* Las celdas de plata de una fila: el costo, y después los dos canales.
+
+   Directo y Mercado Libre se leen como dos territorios porque tienen fondo
+   propio (`--zona-directa` / `--zona-ml`). El ámbar no se usa para eso: sigue
+   siendo solo la ganancia, en los dos canales.
+
+   El envío de Rosario NO entra en ninguna cuenta: aparece como "con envío", que
+   es el precio que se le cotiza al cliente cuando hay que llevárselo. La
+   ganancia y el margen se miden contra el costo, igual que siempre. */
+function Precios({ perfume, ajustes, comisionCuotas, onCambiar }) {
   const r = analisisDePrecio({
     costo: perfume.costo,
     precioPublico: perfume.precioPublico,
+    precioML: perfume.precioML,
     comisionML: ajustes.comisionML,
     envioML: ajustes.envioML,
+    envioLocal: ajustes.envioLocal,
+    comisionCuotas,
   });
 
-  // NumberCell y no un <input> a mano: trae el string local mientras se escribe
-  // y lee "38.155" como 38155, que es como se tipea un precio en Argentina.
-  const campo = (clave) => (
-    <div className="w-[96px]">
+  const campo = (clave, fondo) => (
+    <div className="px-1.5" style={{ background: fondo }}>
       <NumberCell
         value={perfume[clave] ?? 0}
         onChange={(v) => onCambiar(perfume.id, { [clave]: v })}
@@ -359,70 +534,117 @@ function Precios({ perfume, ajustes, onCambiar }) {
     </div>
   );
 
-  const tono = r.margen === null ? "var(--humo-claro)" : r.margen >= 0 ? "var(--verde)" : "var(--oxido)";
+  const cifra = (contenido, { fondo, color, titulo, fuerte }) => (
+    <div className="px-2 text-right" style={{ background: fondo }} title={titulo}>
+      <span
+        className={`k-num text-[13px] ${fuerte ? "font-semibold" : ""}`}
+        style={{ color: color ?? "var(--humo)" }}
+      >
+        {contenido}
+      </span>
+    </div>
+  );
+
+  const colorGanancia = (g) =>
+    g === null ? "var(--humo-claro)" : g >= 0 ? "var(--ambar)" : "var(--oxido)";
+  const colorMargen = (m) =>
+    m === null ? "var(--humo-claro)" : m >= 0 ? "var(--verde)" : "var(--oxido)";
+
+  const envio = Number(ajustes.envioLocal) || 0;
+
+  // El detalle de los cinco planes va al tooltip de la ganancia de ML: es la
+  // comparación que se hace de vez en cuando, no todo el tiempo.
+  const porPlan = gananciaPorCuotas({
+    costo: perfume.costo,
+    precioML: perfume.precioML,
+    comisionML: ajustes.comisionML,
+    envioML: ajustes.envioML,
+    cuotas: ajustes.cuotasML,
+  })
+    .map(
+      (x) =>
+        `${x.plan === 1 ? "1 pago" : x.plan + " cuotas"}: ${
+          x.ganancia === null ? "—" : pesos(x.ganancia)
+        }`
+    )
+    .join(" · ");
+
+  const puedeIgualar = r.ml.sugerido !== null && r.ml.sugerido !== (perfume.precioML ?? 0);
 
   return (
     <>
-      {campo("costo")}
-      {campo("precioPublico")}
+      {campo("costo", "transparent")}
 
-      {/* La ganancia en pesos va en ámbar porque es lo que queda en el bolsillo,
-          que es lo único que lleva ese color en toda la app. Al lado del margen
-          y no lejos: son la misma cuenta mirada de dos maneras — cuántos pesos
-          y qué proporción del costo. */}
-      <div
-        className="w-[92px] text-right"
-        title={
-          r.ganancia === null
+      {/* ---- Venta directa ---- */}
+      {campo("precioPublico", "var(--zona-directa)")}
+      {cifra(r.directo.precioConEnvio === null ? "—" : pesos(r.directo.precioConEnvio), {
+        fondo: "var(--zona-directa)",
+        color: r.directo.precioConEnvio === null ? "var(--humo-claro)" : "var(--tinta)",
+        titulo:
+          r.directo.precioConEnvio === null
+            ? envio > 0
+              ? "Poné el precio de venta para ver cuánto cotizar con envío"
+              : "Cargá el envío de Rosario arriba para ver este precio"
+            : `${pesos(perfume.precioPublico)} + ${pesos(envio)} de envío. Es lo que le cotizás al cliente con entrega; tu ganancia no cambia.`,
+      })}
+      {cifra(r.directo.ganancia === null ? "—" : pesos(r.directo.ganancia), {
+        fondo: "var(--zona-directa)",
+        color: colorGanancia(r.directo.ganancia),
+        fuerte: true,
+        titulo:
+          r.directo.ganancia === null
             ? "Poné costo y precio de venta para ver cuánto te queda"
-            : `Vendiendo directo a ${pesos(perfume.precioPublico)} te quedan ${pesos(r.ganancia)} por unidad, sobre un costo de ${pesos(perfume.costo)}. No incluye la comisión ni el envío de Mercado Libre.`
-        }
-      >
-        <div
-          className="k-num text-[13px] font-semibold"
-          style={{ color: r.ganancia === null ? "var(--humo-claro)" : r.ganancia >= 0 ? "var(--ambar)" : "var(--oxido)" }}
-        >
-          {r.ganancia === null ? "—" : pesos(r.ganancia)}
-        </div>
-        <div className="k-col" style={{ color: "var(--humo-claro)" }}>
-          ganancia
-        </div>
-      </div>
+            : `Vendiendo directo a ${pesos(perfume.precioPublico)} te quedan ${pesos(
+                r.directo.ganancia
+              )} por unidad, sobre un costo de ${pesos(perfume.costo)}. El envío no entra: se cobra aparte.`,
+      })}
+      {cifra(r.directo.margen === null ? "—" : pctCorto(r.directo.margen), {
+        fondo: "var(--zona-directa)",
+        color: colorMargen(r.directo.margen),
+        fuerte: true,
+        titulo:
+          "Ganancia sobre el costo, la misma definición que la columna Margen de los pedidos",
+      })}
 
-      <div className="w-[74px] text-right">
-        <div className="k-num text-[13px] font-semibold" style={{ color: tono }}>
-          {r.margen === null ? "—" : pctCorto(r.margen)}
+      {/* ---- Mercado Libre ---- */}
+      <div className="flex items-center gap-1 px-1.5" style={{ background: "var(--zona-ml)" }}>
+        <div className="min-w-0 flex-1">
+          <NumberCell
+            value={perfume.precioML ?? 0}
+            onChange={(v) => onCambiar(perfume.id, { precioML: v })}
+          />
         </div>
-        <div className="k-col" style={{ color: "var(--humo-claro)" }}>
-          margen
-        </div>
+        {/* Atajo, no obligación: completa el precio que deja la misma ganancia
+            que vendiendo directo. Aparece al pasar el mouse por la fila. */}
+        {puedeIgualar && (
+          <button
+            onClick={() => onCambiar(perfume.id, { precioML: r.ml.sugerido })}
+            title={`Poner ${pesos(
+              r.ml.sugerido
+            )}: a ese precio, con esta comisión, te queda lo mismo que vendiendo directo`}
+            aria-label={`Igualar el precio de ML de ${perfume.nombre} a la ganancia directa`}
+            className="k-num shrink-0 px-1 text-[13px] opacity-0 transition group-hover:opacity-100 focus:opacity-100"
+            style={{ color: "var(--humo)" }}
+          >
+            =
+          </button>
+        )}
       </div>
-
-      {/* Un solo número visible y un rótulo que dice qué es. Antes acá abajo
-          había un segundo porcentaje ("directo dejaría −20%") que contestaba
-          otra pregunta y se leía como si se contradijera con el precio de
-          arriba. Ese dato pasó al tooltip: disponible, pero sin competir. */}
-      <div
-        className="w-[104px] text-right"
-        title={
-          r.precioML === null
-            ? "Poné costo y precio de venta para ver a cuánto publicarlo en ML"
-            : `Publicando a ${pesos(r.precioML)} en Mercado Libre ganás lo mismo que vendiendo directo a ${pesos(perfume.precioPublico)}. ` +
-              (r.margenEnML === null
-                ? ""
-                : `Si en cambio publicaras los ${pesos(perfume.precioPublico)} en ML, te quedaría ${pctCorto(r.margenEnML)}.`)
-        }
-      >
-        {/* Antes iba en ámbar, pero el precio de publicación no es ganancia:
-            con la columna de ganancia al lado, dos ámbares seguidos borraban
-            el significado del color. */}
-        <div className="k-num text-[13px]" style={{ color: "var(--tinta)" }}>
-          {r.precioML === null ? "—" : pesos(r.precioML)}
-        </div>
-        <div className="k-col" style={{ color: "var(--humo-claro)" }}>
-          publicar en ML
-        </div>
-      </div>
+      {cifra(r.ml.ganancia === null ? "—" : pesos(r.ml.ganancia), {
+        fondo: "var(--zona-ml)",
+        color: colorGanancia(r.ml.ganancia),
+        fuerte: true,
+        titulo:
+          r.ml.ganancia === null
+            ? "Poné costo y precio de ML para ver cuánto te queda en ese canal"
+            : `Después de la comisión y el envío de ML. Según el plan — ${porPlan}`,
+      })}
+      {cifra(r.ml.margen === null ? "—" : pctCorto(r.ml.margen), {
+        fondo: "var(--zona-ml)",
+        color: colorMargen(r.ml.margen),
+        fuerte: true,
+        titulo: "Lo que queda en ML, sobre el costo",
+      })}
     </>
   );
 }
@@ -436,7 +658,7 @@ const pesos = (n) =>
 
 
 
-function FilaPerfume({ perfume, usos, ajustes, onCambiar, onBorrar, onFoto }) {
+function FilaPerfume({ perfume, usos, ajustes, comisionCuotas, onCambiar, onBorrar, onFoto }) {
   const inputRef = useRef(null);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState(false);
@@ -458,70 +680,90 @@ function FilaPerfume({ perfume, usos, ajustes, onCambiar, onBorrar, onFoto }) {
 
   return (
     <li
-      className="flex items-center gap-4 rounded-[4px] border px-3 py-2"
+      className={`${COLUMNAS_CATALOGO} group overflow-hidden rounded-[4px] border py-1.5`}
       style={{ borderColor: "var(--linea)", background: "var(--papel)" }}
     >
       <input ref={inputRef} type="file" accept="image/*" onChange={elegir} className="hidden" />
-      <ConVistaPrevia archivo={perfume.foto} nombre={perfume.nombre}>
-      <button
-        type="button"
-        onClick={() => inputRef.current?.click()}
-        title={
-          error
-            ? "No se pudo leer esa imagen. Probá con otra."
-            : perfume.foto
-            ? "Cambiar la foto"
-            : "Cargar una foto"
-        }
-        className="h-[52px] w-[52px] shrink-0 overflow-hidden rounded-[3px] border transition"
-        style={{
-          borderColor: error ? "var(--oxido)" : "var(--linea)",
-          borderStyle: perfume.foto ? "solid" : "dashed",
-          background: perfume.foto ? "var(--papel)" : "#F4F6F2",
-        }}
-      >
-        {cargando ? (
-          <span className="text-[10px]" style={{ color: "var(--humo-claro)" }}>
-            ···
-          </span>
-        ) : perfume.foto ? (
-          <img
-            src={urlFoto(perfume.foto)}
-            alt={`Foto de ${perfume.nombre}`}
-            className="h-full w-full object-cover"
-          />
-        ) : (
-          <ImagePlus size={17} className="mx-auto" style={{ color: "var(--humo-claro)" }} />
-        )}
-      </button>
-      </ConVistaPrevia>
+      <div className="px-1.5">
+        <ConVistaPrevia archivo={perfume.foto} nombre={perfume.nombre}>
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            title={
+              error
+                ? "No se pudo leer esa imagen. Probá con otra."
+                : perfume.foto
+                ? "Cambiar la foto"
+                : "Cargar una foto"
+            }
+            className="h-[46px] w-[46px] shrink-0 overflow-hidden rounded-[3px] border transition"
+            style={{
+              borderColor: error ? "var(--oxido)" : "var(--linea)",
+              borderStyle: perfume.foto ? "solid" : "dashed",
+              background: perfume.foto ? "var(--papel)" : "#F4F6F2",
+            }}
+          >
+            {cargando ? (
+              <span className="text-[10px]" style={{ color: "var(--humo-claro)" }}>
+                ···
+              </span>
+            ) : perfume.foto ? (
+              <img
+                src={urlFoto(perfume.foto)}
+                alt={`Foto de ${perfume.nombre}`}
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <ImagePlus size={17} className="mx-auto" style={{ color: "var(--humo-claro)" }} />
+            )}
+          </button>
+        </ConVistaPrevia>
+      </div>
 
-      <input
-        value={perfume.nombre}
-        onChange={(e) => onCambiar(perfume.id, { nombre: e.target.value })}
-        placeholder="Marca + nombre + ml"
-        className="min-w-[180px] flex-1 rounded-[3px] border px-2 py-1.5 text-[13px]"
-        style={{ background: "var(--papel)", borderColor: "var(--linea)", color: "var(--tinta)" }}
+      <div className="px-2">
+        <input
+          value={perfume.nombre}
+          onChange={(e) => onCambiar(perfume.id, { nombre: e.target.value })}
+          placeholder="Marca + nombre + ml"
+          className="w-full rounded-[3px] border px-2 py-1.5 text-[13px]"
+          style={{ background: "var(--papel)", borderColor: "var(--linea)", color: "var(--tinta)" }}
+        />
+      </div>
+
+      <Precios
+        perfume={perfume}
+        ajustes={ajustes}
+        comisionCuotas={comisionCuotas}
+        onCambiar={onCambiar}
       />
 
-      <Precios perfume={perfume} ajustes={ajustes} onCambiar={onCambiar} />
-
-      <span className="k-num w-[70px] text-right text-[11px]" style={{ color: "var(--humo-claro)" }}>
-        {usos === 0 ? "sin usar" : `en ${usos}`}
+      {/* Cuenta TODOS los pedidos, no solo el que está en pantalla: es el aviso
+          de qué se lleva puesto un borrado. El detalle dice en cuáles. */}
+      <span
+        className="k-num px-2 text-right text-[11px]"
+        style={{ color: usos.total === 0 ? "var(--humo-claro)" : "var(--humo)" }}
+        title={
+          usos.total === 0
+            ? "No está en ninguna fila de ningún pedido"
+            : usos.pedidos.map((x) => `${x.nombre}: ${x.filas} fila${x.filas === 1 ? "" : "s"}`).join(" · ")
+        }
+      >
+        {usos.total === 0 ? "sin usar" : `en ${usos.total}`}
       </span>
 
       <button
         onClick={() => onBorrar(perfume)}
         title={
-          usos > 0
-            ? `Está usado en ${usos} fila(s) de pedidos`
+          usos.total > 0
+            ? `Está usado en ${usos.total} fila(s) de pedidos: te va a avisar antes de borrar`
             : "Quitar del catálogo"
         }
         className="rounded-[3px] p-1.5 transition"
-        style={{ color: usos > 0 ? "var(--humo-claro)" : "var(--humo)" }}
+        style={{ color: usos.total > 0 ? "var(--humo-claro)" : "var(--humo)" }}
       >
         <Trash2 size={15} />
       </button>
     </li>
   );
 }
+

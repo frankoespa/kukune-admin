@@ -75,6 +75,19 @@ export function urlDePedido(id) {
   return `${URL_PEDIDOS}/${id}`;
 }
 
+/* En qué pedidos está usado cada perfume, según los archivos.
+   Lo pide el catálogo para avisar antes de borrar. Solo lectura. */
+export async function leerUsos() {
+  try {
+    const r = await fetch("/api/usos");
+    if (!r.ok) return { estado: "sin-servidor", usos: {} };
+    const d = await r.json();
+    return { estado: "ok", usos: d.usos ?? {} };
+  } catch (e) {
+    return { estado: "sin-servidor", usos: {} };
+  }
+}
+
 /* ---------- Catálogo de perfumes ----------
    El nombre y la foto de cada perfume viven una sola vez acá; las filas de los
    pedidos apuntan por id. Las fotos son archivos servidos desde /datos/fotos/,
@@ -85,9 +98,19 @@ const URL_FOTOS = "/api/fotos";
 
 export const urlFoto = (archivo) => (archivo ? `/datos/fotos/${archivo}` : null);
 
-/* Ajustes del catálogo: lo que Mercado Libre se lleva. Van acá y no en cada
-   pedido porque el precio de lista no depende de a quién le compraste. */
-export const AJUSTES_POR_DEFECTO = { comisionML: 0.1532, envioML: 7470 };
+/* Ajustes del catálogo: lo que cada canal se lleva. Van acá y no en cada pedido
+   porque el precio de lista no depende de a quién le compraste.
+
+   Son valores de arranque para un archivo que todavía no tiene la clave: lo
+   guardado siempre manda (ver el merge en `leerPerfumes`). `cuotasML` es la
+   comisión EXTRA de cada plan, en fracción, y `envioLocal` el envío en Rosario
+   que se le suma al precio cuando hay entrega. */
+export const AJUSTES_POR_DEFECTO = {
+  comisionML: 0.1532,
+  envioML: 7470,
+  envioLocal: 0,
+  cuotasML: { 3: 0, 6: 0, 9: 0, 12: 0 },
+};
 
 export async function leerPerfumes() {
   try {
@@ -97,7 +120,13 @@ export async function leerPerfumes() {
     return {
       estado: "ok",
       perfumes: Array.isArray(datos.perfumes) ? datos.perfumes : [],
-      ajustes: { ...AJUSTES_POR_DEFECTO, ...(datos.ajustes || {}) },
+      // El merge es shallow, así que `cuotasML` se mezcla aparte: si no, un
+      // archivo con un solo plan cargado se lleva puestos los otros tres.
+      ajustes: {
+        ...AJUSTES_POR_DEFECTO,
+        ...(datos.ajustes || {}),
+        cuotasML: { ...AJUSTES_POR_DEFECTO.cuotasML, ...(datos.ajustes?.cuotasML || {}) },
+      },
     };
   } catch (e) {
     return { estado: "sin-servidor", perfumes: [], ajustes: AJUSTES_POR_DEFECTO };

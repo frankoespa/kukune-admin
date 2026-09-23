@@ -127,10 +127,25 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - La foto **solo se carga en la pantalla del catálogo** (`src/Catalogo.jsx`). En
   el pedido la celda Foto es de solo lectura. Un perfume creado desde el pedido
   nace sin foto: el catálogo tiene un contador "N sin foto" que los filtra.
-- **Borrar del catálogo un perfume en uso no decide por el usuario**: el diálogo
-  ofrece quitarlo dejando las filas (quedan huérfanas, marcadas en óxido con su
-  nombre cacheado y sin foto) o quitarlo borrando esas filas del pedido con sus
-  costos. `Dialogo` soporta una `segunda` acción para eso.
+- **La columna Usos cuenta TODOS los pedidos, no solo el que está en pantalla.**
+  Sale de `GET /api/usos` (solo lectura), que arma `contarUsos(pedidos)` —pura y
+  exportada desde `vite-plugin-datos.js`, testeable desde Node—. El `title` de la
+  celda dice en cuáles y con cuántas filas.
+- Ese conteo **mezcla dos fuentes a propósito**: de los archivos salen los demás
+  pedidos y el de pantalla se cuenta en vivo sobre `productos`. Si se usara el
+  archivo para los dos, lo recién tipeado no contaría hasta pasados los 800 ms
+  del guardado. `usosPorPerfume` devuelve `{total, enPantalla, enOtros, pedidos}`.
+- **Borrar del catálogo un perfume en uso no decide por el usuario**, y tiene tres
+  casos:
+  - **En ningún pedido**: quitar y listo.
+  - **Solo en el pedido en pantalla**: quitar dejando las filas (quedan huérfanas,
+    marcadas en óxido con su nombre cacheado y sin foto) o quitar borrándolas con
+    sus costos. `Dialogo` soporta una `segunda` acción para eso.
+  - **En otros pedidos**: el diálogo los nombra con sus filas y avisa que **ésas
+    quedan huérfanas**. Desde el catálogo solo se borran filas del pedido en
+    pantalla: editar el archivo de un pedido que el usuario no está mirando es
+    justo lo que no se hace. Antes este caso mostraba "no está usado en ninguna
+    fila de este pedido" y borraba sin avisar.
 - Una fila huérfana (`perfumeId` que ya no existe) se marca en óxido en Producto
   y en Foto. Antes se veía igual que cualquier otra y parecía que borrar del
   catálogo no había hecho nada.
@@ -173,27 +188,50 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - Cada perfume tiene `costo` y `precioPublico` (venta directa), **puestos a mano**.
   No se sugieren desde el último pedido: el costo de un pedido es lo que cobró
   ESE proveedor en ESA compra, y el del catálogo es la referencia actual.
-- `analisisDePrecio()` en `src/precios.js` devuelve tres cosas: el margen sobre
-  el costo (misma definición que la columna Margen de los pedidos, así que los
-  números son comparables), **a cuánto publicar en ML para ganar lo mismo** que
-  vendiendo directo, y cuánto quedaría si se publicara el precio directo tal cual
-  en ML.
-- La fila muestra **ganancia en pesos** (`precioPublico − costo`, por unidad) al
-  lado del **margen**: son la misma cuenta mirada de dos maneras, cuántos pesos y
-  qué proporción del costo, y una sola de las dos siempre deja la otra pregunta
-  abierta. La ganancia va en **ámbar** —es plata que queda, el único uso legítimo
-  de ese color— y en óxido si el precio no cubre el costo.
-- Por eso el precio "publicar en ML" **dejó de ser ámbar** y es tinta: es un
-  precio, no ganancia. Con las dos celdas juntas, dos ámbares seguidos borraban
-  el significado del color.
+- **Dos canales, y cada uno con su precio.** `precioPublico` es la venta directa
+  y `precioML` el precio realmente publicado en Mercado Libre. Antes ML era solo
+  un *sugerido para ganar lo mismo*, así que su ganancia era igual a la directa
+  por definición y no servía para comparar nada.
+- `analisisDePrecio()` en `src/precios.js` devuelve `{ directo, ml }`. Se apoya
+  en `resultadoDeCanal({costo, precio, comision, envio})`, que es lo que va a
+  hacer barato sumar **Tienda Nube**: otro canal con su comisión y su envío, no
+  otra fórmula.
+- **El envío local (Rosario) no entra en ninguna cuenta.** Es la columna *con
+  envío* = `precioPublico + envioLocal`, el precio que se le cotiza al cliente
+  que pide entrega. La ganancia y el margen se siguen midiendo contra el costo,
+  así que **el margen del catálogo sigue siendo el mismo que la columna Margen de
+  los pedidos** y los dos números se comparan. Si esto se cambia alguna vez, hay
+  que corregir esa afirmación acá.
+- **Cuotas de ML**: `ajustes.cuotasML` guarda la comisión EXTRA de cada plan
+  (`{3, 6, 9, 12}`, en fracción). ML la cobra **además** de la comisión normal y
+  sobre el mismo precio publicado, así que se suman: `k = 1 − comisión − extra`.
+  El plan que se está mirando es estado de pantalla (`plan`), no se guarda: es
+  una lente, no un dato del perfume. El título del grupo dice cuál está puesto.
+- `gananciaPorCuotas()` arma el detalle de los cinco planes que va al `title` de
+  la ganancia de ML: la comparación entre planes se hace de vez en cuando, no
+  todo el tiempo, así que no ocupa columnas.
+- El botón **`=`** de la fila carga el precio de ML que deja exactamente la misma
+  ganancia que vender directo (`ml.sugerido`). Aparece al pasar el mouse, como el
+  atajo de "pasar costo al catálogo" en la tabla del pedido.
+- La fila muestra **ganancia en pesos** al lado del **margen**, en los dos
+  canales: son la misma cuenta mirada de dos maneras, cuántos pesos y qué
+  proporción del costo. La ganancia va en **ámbar** —es plata que queda, el único
+  uso legítimo de ese color— y en óxido si el precio no cubre el costo.
+- **Las zonas de color son territorio, no acento**: `--zona-directa` (verde muy
+  suave) y `--zona-ml` (azul grisáceo) pintan las columnas de cada canal y
+  también la caja de ajustes que las configura, para que se vea qué configura
+  qué. La versión `-honda` es para las bandas del encabezado. El ámbar no se usa
+  para esto: por eso el precio "publicar en ML" dejó de ser ámbar.
+- **La tabla tiene encabezado de dos niveles** (canal arriba, columnas abajo),
+  `sticky top-0` contra la ventana —esta pantalla scrollea con la página, no
+  tiene contenedor propio como la del pedido—. Encabezado y filas comparten
+  `COLUMNAS_CATALOGO`, una sola constante de grilla, y los dos llevan `border`
+  (transparente en el encabezado) para que el borde de la fila no corra las
+  columnas un píxel. **La grilla va sin `gap` horizontal**: el aire lo pone cada
+  celda con su padding, así el color del canal es una franja continua.
 - **Nada de esto va al PDF de precios**: al PDF se le pasan solo `nombre`,
-  `precioPublico` y `foto`, y `pdf.js` no menciona costo, margen ni ganancia. Es
-  para el cliente.
-- De esos tres, en pantalla van **dos**: el margen y el precio de ML. El tercero
-  vive en el tooltip. Estaban los dos últimos apilados en la misma celda y se
-  leían como una contradicción ("el precio para ganar lo mismo" arriba, "perdés
-  17%" abajo), porque el rótulo no decía a qué precio se refería cada uno. Cada
-  número visible tiene que contestar una sola pregunta y decir cuál es.
+  `precioPublico` y `foto` —el precio sin envío—, y `pdf.js` no menciona costo,
+  margen ni ganancia. Es para el cliente.
 - La comisión y el envío de ML del catálogo viven en `perfumes.json` bajo
   `ajustes`, no en cada pedido: el precio de lista no depende de a quién le
   compraste. `AJUSTES_POR_DEFECTO` está en `almacenamiento.js`.
@@ -398,6 +436,12 @@ veces por probar encima.
   Ni "lo dejo como estaba". La verificación se hace en una **copia del proyecto**
   (repo + `datos/`) en el scratchpad, con su propio `npm run dev` en otro puerto.
   Ahí se puede romper todo.
+- Cómo se arma esa copia (probado): copiar `index.html`, los `*.config.js`,
+  `vite-plugin-datos.js` y `datos/`, **copiar `src/` de verdad** y sincronizarlo
+  con `robocopy /MIR` después de cada edición, y enganchar `node_modules` con un
+  *junction* (`mklink /J`). `src/` no puede ser junction: Vite resuelve el enlace
+  a la ruta real, la ve fuera del root y sirve el JSX sin transformar ("Unexpected
+  token '<'").
 - Sobre los datos reales, **solo lectura**: `GET` a la API, leer los JSON, mirar
   el DOM. Nada de clics que guarden.
 - **Restaurar un archivo con la app abierta no alcanza**, y por eso ni siquiera

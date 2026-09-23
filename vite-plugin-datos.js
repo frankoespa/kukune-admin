@@ -37,6 +37,33 @@ const TIPOS = {
 
 const ID_VALIDO = /^[a-f0-9-]{36}$/i;
 
+/* En cuántas filas de cada pedido está usado cada perfume.
+
+   Pura y exportada para poder probarla desde Node con pedidos de mentira: es la
+   cuenta que decide si al borrar del catálogo se avisa o no, y equivocarla
+   significa dejar filas huérfanas sin decir nada.
+
+   Devuelve `perfumeId -> [{ pedidoId, nombre, filas }]`. Un perfume en dos filas
+   del mismo pedido es UN renglón con `filas: 2`, no dos renglones. */
+export function contarUsos(pedidos) {
+  const usos = {};
+  for (const pedido of pedidos ?? []) {
+    const porPerfume = new Map();
+    for (const fila of pedido?.productos ?? []) {
+      if (!fila?.perfumeId) continue; // fila sin perfume del catálogo
+      porPerfume.set(fila.perfumeId, (porPerfume.get(fila.perfumeId) ?? 0) + 1);
+    }
+    for (const [perfumeId, filas] of porPerfume) {
+      (usos[perfumeId] ??= []).push({
+        pedidoId: pedido.id,
+        nombre: pedido.nombre || "Sin nombre",
+        filas,
+      });
+    }
+  }
+  return usos;
+}
+
 export default function pluginDatos() {
   const montar = (server) => {
     const raiz = path.resolve(server.config.root, DIR);
@@ -173,25 +200,37 @@ export default function pluginDatos() {
       await migrarPedidos();
     };
 
-    const listar = async () => {
+    /* Los pedidos de verdad: ni respaldos ni temporales. Está acá y no repetido
+       en cada recorrido porque si las dos copias se separan, una termina
+       contando los `.bak` como pedidos. */
+    const archivosDePedidos = async () => {
       await mkdir(dirPedidos, { recursive: true });
-      const archivos = (await readdir(dirPedidos)).filter(
+      return (await readdir(dirPedidos)).filter(
         (a) => a.endsWith(".json") && !a.endsWith(".bak.json") && !a.endsWith(".tmp.json")
       );
-      const pedidos = [];
-      for (const a of archivos) {
+    };
+
+    /* Cada pedido parseado. Un archivo ilegible se saltea: no debe voltear ni la
+       lista del selector ni el conteo de usos. */
+    const todosLosPedidos = async () => {
+      const leidos = [];
+      for (const a of await archivosDePedidos()) {
         try {
-          const d = JSON.parse(await readFile(path.join(dirPedidos, a), "utf8"));
-          pedidos.push({
-            id: d.id,
-            nombre: d.nombre || "Sin nombre",
-            actualizado: d.actualizado || null,
-            filas: Array.isArray(d.productos) ? d.productos.length : 0,
-          });
+          leidos.push(JSON.parse(await readFile(path.join(dirPedidos, a), "utf8")));
         } catch (e) {
-          /* un archivo ilegible no debe voltear la lista entera */
+          /* ilegible: se ignora */
         }
       }
+      return leidos;
+    };
+
+    const listar = async () => {
+      const pedidos = (await todosLosPedidos()).map((d) => ({
+        id: d.id,
+        nombre: d.nombre || "Sin nombre",
+        actualizado: d.actualizado || null,
+        filas: Array.isArray(d.productos) ? d.productos.length : 0,
+      }));
       return pedidos.sort((a, b) => String(b.actualizado).localeCompare(String(a.actualizado)));
     };
 
@@ -269,6 +308,18 @@ export default function pluginDatos() {
     });
 
     /* --- Catálogo --- */
+    /* --- Usos: en qué pedidos está cada perfume ---
+       Solo lectura. El catálogo lo pide al entrar y lo combina con las filas en
+       vivo del pedido que está en pantalla. */
+    server.middlewares.use("/api/usos", async (req, res) => {
+      try {
+        if (req.method !== "GET") return responder(res, { error: "Método no permitido" }, 405);
+        responder(res, { usos: contarUsos(await todosLosPedidos()) });
+      } catch (e) {
+        responder(res, { error: String(e?.message ?? e) }, 500);
+      }
+    });
+
     server.middlewares.use("/api/perfumes", async (req, res) => {
       try {
         await migrar();

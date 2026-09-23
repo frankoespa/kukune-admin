@@ -24,6 +24,13 @@
   --verde: #1f6b4f;
   --oxido: #a63a2a;
 
+  /* Fondos de canal en el catálogo: no son acentos, son territorio. Lo
+     suficientemente tenues como para que las cifras sigan mandando. */
+  --zona-directa: #eaefe6;
+  --zona-directa-honda: #dde5d8;
+  --zona-ml: #e9edf2;
+  --zona-ml-honda: #d9e1ea;
+
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
   --sans: "Montserrat", ui-sans-serif, system-ui, sans-serif;
 }

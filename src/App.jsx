@@ -24,6 +24,7 @@ import {
 import {
   listarPedidos,
   leerPedido,
+  leerUsos,
   escribirPedido,
   crearPedido,
   borrarPedido,
@@ -992,6 +993,20 @@ export default function App() {
     };
   }, []);
 
+  /* Los usos se releen cada vez que entrás al catálogo: entre visita y visita
+     pudiste haber tocado otro pedido. No hace falta más seguido — el pedido en
+     pantalla ya se cuenta en vivo. */
+  useEffect(() => {
+    if (vista !== "catalogo") return;
+    let vigente = true;
+    leerUsos().then((r) => {
+      if (vigente) setUsosGuardados(r.usos);
+    });
+    return () => {
+      vigente = false;
+    };
+  }, [vista]);
+
   const guardaCatalogo = useRef(null);
   useEffect(() => {
     if (catalogoInicial.current === null) return; // todavía no cargó
@@ -1023,6 +1038,11 @@ export default function App() {
   const [margenMasivo, setMargenMasivo] = useState(30);
   const [pasadosAlCatalogo, setPasadosAlCatalogo] = useState("");
   const [pasadoEnFila, setPasadoEnFila] = useState("");
+  /* En qué pedidos está cada perfume, según los archivos. Se trae al entrar al
+     catálogo y no más seguido: el pedido en pantalla se cuenta en vivo (ver
+     `usosPorPerfume`) y al cambiar de pedido `guardarPendiente()` ya dejó el
+     archivo al día. */
+  const [usosGuardados, setUsosGuardados] = useState({});
 
   // Guardar en localStorage ante cualquier cambio.
   // Abrir la app NO escribe nada: mientras el estado siga siendo idéntico al que
@@ -1315,13 +1335,42 @@ export default function App() {
   const delP = (id) => setProductos((ps) => ps.filter((p) => p.id !== id));
 
   /* --- Catálogo --- */
-  // Cuántas filas de pedidos usan cada perfume: se muestra en el catálogo y
-  // evita borrar sin saber qué se lleva puesto.
+  /* En cuántas filas está usado cada perfume, contando TODOS los pedidos.
+
+     Dos fuentes, y la mezcla no es cosmética: de los archivos salen los demás
+     pedidos, y el que está en pantalla se cuenta en vivo sobre `productos`. Si
+     se usara el archivo también para ése, lo que acabás de tipear no contaría
+     hasta que pasen los 800 ms del guardado.
+
+     Devuelve por perfume `{ total, enPantalla, enOtros, pedidos: [{nombre, filas}] }`:
+     el diálogo de borrado necesita saber no solo cuántas son, sino dónde, porque
+     desde acá solo se pueden borrar las del pedido en pantalla. */
   const usosPorPerfume = useMemo(() => {
-    const cuenta = {};
-    for (const p of productos) if (p.perfumeId) cuenta[p.perfumeId] = (cuenta[p.perfumeId] || 0) + 1;
-    return cuenta;
-  }, [productos]);
+    const salida = {};
+    const anotar = (perfumeId) =>
+      (salida[perfumeId] ??= { total: 0, enPantalla: 0, enOtros: 0, pedidos: [] });
+
+    for (const [perfumeId, lista] of Object.entries(usosGuardados)) {
+      for (const uso of lista) {
+        if (uso.pedidoId === pedidoId) continue; // ése se cuenta en vivo
+        const u = anotar(perfumeId);
+        u.total += uso.filas;
+        u.enOtros += uso.filas;
+        u.pedidos.push({ nombre: uso.nombre, filas: uso.filas });
+      }
+    }
+
+    const enVivo = {};
+    for (const p of productos) if (p.perfumeId) enVivo[p.perfumeId] = (enVivo[p.perfumeId] || 0) + 1;
+    for (const [perfumeId, filas] of Object.entries(enVivo)) {
+      const u = anotar(perfumeId);
+      u.total += filas;
+      u.enPantalla = filas;
+      u.pedidos.unshift({ nombre: nombrePedido || "Este pedido", filas, enPantalla: true });
+    }
+
+    return salida;
+  }, [usosGuardados, productos, pedidoId, nombrePedido]);
 
   const crearPerfume = (nombre) => {
     const perfume = { id: crypto.randomUUID(), nombre: nombre.trim(), foto: null };
@@ -1333,13 +1382,16 @@ export default function App() {
     setPerfumes((ps) => ps.map((p) => (p.id === id ? { ...p, ...campos } : p)));
 
   const borrarPerfume = (perfume) => {
-    const usos = usosPorPerfume[perfume.id] || 0;
+    const u = usosPorPerfume[perfume.id] ?? { total: 0, enPantalla: 0, enOtros: 0, pedidos: [] };
     const quitarDelCatalogo = () => setPerfumes((ps) => ps.filter((p) => p.id !== perfume.id));
+    const borrarFilasDeEstePedido = () =>
+      setProductos((ps) => ps.filter((p) => p.perfumeId !== perfume.id));
+    const filas = (n) => `${n} fila${n === 1 ? "" : "s"}`;
 
-    if (usos === 0) {
+    if (u.total === 0) {
       setDialogo({
         titulo: `¿Quitar "${perfume.nombre}" del catálogo?`,
-        texto: "No está usado en ninguna fila de este pedido.",
+        texto: "No está usado en ninguna fila de ningún pedido.",
         etiquetaOk: "Quitar",
         peligro: true,
         onAceptar: quitarDelCatalogo,
@@ -1347,23 +1399,60 @@ export default function App() {
       return;
     }
 
-    // Con filas en uso hay dos salidas razonables y ninguna es obviamente la
-    // correcta: borrar filas del pedido se lleva puestos costos y cantidades,
-    // y dejarlas huérfanas tampoco es gratis. Lo elige el usuario.
+    const enOtros = u.pedidos.filter((x) => !x.enPantalla);
+    const listaDeOtros = enOtros.map((x) => `${x.nombre} (${filas(x.filas)})`).join(", ");
+
+    // Está en otros pedidos: son los que NO se pueden tocar desde acá. Editar el
+    // archivo de un pedido que el usuario no está mirando es justo lo que no se
+    // hace, así que el diálogo lo dice en vez de decidirlo solo.
+    if (u.enOtros > 0) {
+      setDialogo({
+        titulo: `"${perfume.nombre}" está en ${filas(u.total)} de pedido`,
+        texto: (
+          <>
+            <span className="block">
+              Otros pedidos lo usan y no los puedo tocar desde acá: <b>{listaDeOtros}</b>. Esas
+              filas van a quedar huérfanas —con el nombre, sin foto y marcadas en rojo— hasta que
+              les elijas otro perfume.
+            </span>
+            {u.enPantalla > 0 && (
+              <span className="mt-2 block">
+                En este pedido hay {filas(u.enPantalla)}. Ésas sí puedo borrarlas, con sus
+                cantidades y costos.
+              </span>
+            )}
+          </>
+        ),
+        etiquetaOk: u.enPantalla > 0 ? `Quitar y borrar ${filas(u.enPantalla)} de acá` : "Quitar igual",
+        peligro: true,
+        ...(u.enPantalla > 0
+          ? { segunda: { etiqueta: "Quitar y dejar todo", onAceptar: quitarDelCatalogo } }
+          : {}),
+        onAceptar: () => {
+          if (u.enPantalla > 0) borrarFilasDeEstePedido();
+          quitarDelCatalogo();
+        },
+      });
+      return;
+    }
+
+    // Solo en el pedido en pantalla: dos salidas razonables y ninguna es
+    // obviamente la correcta —borrar filas se lleva puestos costos y cantidades,
+    // y dejarlas huérfanas tampoco es gratis—. Lo elige el usuario.
     setDialogo({
-      titulo: `"${perfume.nombre}" está en ${usos} fila${usos === 1 ? "" : "s"} de este pedido`,
+      titulo: `"${perfume.nombre}" está en ${filas(u.enPantalla)} de este pedido`,
       texto:
         "Si lo quitás solo del catálogo, esas filas se quedan con el nombre pero sin foto, " +
         "marcadas en rojo hasta que les elijas otro perfume. También podés borrarlas del pedido, " +
         "con sus cantidades y costos.",
-      etiquetaOk: `Quitar y borrar ${usos === 1 ? "la fila" : `las ${usos} filas`}`,
+      etiquetaOk: `Quitar y borrar ${u.enPantalla === 1 ? "la fila" : `las ${u.enPantalla} filas`}`,
       peligro: true,
       segunda: {
         etiqueta: "Quitar y dejar las filas",
         onAceptar: quitarDelCatalogo,
       },
       onAceptar: () => {
-        setProductos((ps) => ps.filter((p) => p.perfumeId !== perfume.id));
+        borrarFilasDeEstePedido();
         quitarDelCatalogo();
       },
     });

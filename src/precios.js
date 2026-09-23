@@ -76,32 +76,102 @@ export function resolverPrecios(globals, productos) {
 /* ============================================================
    Precios del catálogo (no de un pedido).
 
-   En el catálogo cada perfume tiene un costo y un precio de venta directa.
-   De ahí salen tres cosas:
+   Un perfume se vende por dos canales y en cada uno la plata sale distinta:
 
-   · el margen sobre el costo, que es cuánto le agregás encima;
-   · a cuánto habría que publicarlo en Mercado Libre para ganar LO MISMO,
-     porque ML se lleva su comisión y el envío;
-   · y cuánto ganarías si publicaras el precio directo tal cual en ML,
-     que es el número que te dice si ese precio te sirve en ese canal.
+   · **Directo**: el cliente paga el precio y listo. Si hay que llevárselo, el
+     envío se le suma AL PRECIO que se le cotiza — no es un costo del negocio,
+     así que no toca ni la ganancia ni el margen.
+   · **Mercado Libre**: ML se queda una comisión sobre el precio publicado, más
+     el envío, más —si se publica en cuotas— otra comisión encima. Por eso el
+     precio de ML es un dato propio y no el precio directo disfrazado.
+
+   Todo esto es aritmética pura: se prueba desde Node sin abrir el navegador.
    ============================================================ */
-export function analisisDePrecio({ costo, precioPublico, comisionML, envioML }) {
+
+/* Qué queda de un precio después de que el canal se lleve lo suyo.
+   Tener esto suelto es lo que va a hacer barato sumar Tienda Nube: es otro
+   canal con su comisión y su envío, no otra fórmula. */
+export function resultadoDeCanal({ costo, precio, comision = 0, envio = 0 }) {
+  const c = Number(costo) || 0;
+  const p = Number(precio) || 0;
+  const k = 1 - (Number(comision) || 0);
+  if (!(c > 0) || !(p > 0) || !(k > 0)) return { ganancia: null, margen: null };
+  const ganancia = p * k - (Number(envio) || 0) - c;
+  return { ganancia, margen: ganancia / c };
+}
+
+/* El precio a publicar en un canal para que quede la MISMA ganancia que se
+   hace vendiendo directo. Despeje de `precio·k − envío − costo = ganancia`. */
+export function precioParaIgualar({ costo, ganancia, comision = 0, envio = 0 }) {
+  const c = Number(costo) || 0;
+  const k = 1 - (Number(comision) || 0);
+  if (!(c > 0) || ganancia == null || !(k > 0)) return null;
+  return Math.round((c + ganancia + (Number(envio) || 0)) / k);
+}
+
+/* Los dos canales de un perfume del catálogo.
+
+   `comisionCuotas` es la comisión EXTRA del plan de cuotas elegido en pantalla
+   (0 si se publica en un pago): se suma a la de ML porque ML las cobra a las
+   dos sobre el precio publicado.
+
+   `envioLocal` sale por un lado aparte a propósito: `precioConEnvio` es lo que
+   se le cotiza al cliente con entrega, y no entra en ninguna cuenta. */
+export function analisisDePrecio({
+  costo,
+  precioPublico,
+  precioML,
+  comisionML,
+  envioML,
+  envioLocal = 0,
+  comisionCuotas = 0,
+}) {
   const c = Number(costo) || 0;
   const p = Number(precioPublico) || 0;
-  const k = 1 - (Number(comisionML) || 0);
-  const envio = Number(envioML) || 0;
+  const pML = Number(precioML) || 0;
+  const envioDirecto = Number(envioLocal) || 0;
+  const comisionTotalML = (Number(comisionML) || 0) + (Number(comisionCuotas) || 0);
 
-  if (!(c > 0)) return { margen: null, ganancia: null, precioML: null, margenEnML: null };
+  // Vender directo no tiene comisión ni envío a cargo del negocio: es el mismo
+  // canal de siempre, con la misma cuenta que ya estaba.
+  const directo = resultadoDeCanal({ costo: c, precio: p });
+  const ml = resultadoDeCanal({
+    costo: c,
+    precio: pML,
+    comision: comisionTotalML,
+    envio: envioML,
+  });
 
-  const ganancia = p > 0 ? p - c : null;
-  const margen = p > 0 ? ganancia / c : null;
+  return {
+    directo: {
+      ...directo,
+      // Una suma, no una cuenta. Vale solo si hay precio y hay envío cargado.
+      precioConEnvio: p > 0 && envioDirecto > 0 ? p + envioDirecto : null,
+    },
+    ml: {
+      ...ml,
+      sugerido: precioParaIgualar({
+        costo: c,
+        ganancia: directo.ganancia,
+        comision: comisionTotalML,
+        envio: envioML,
+      }),
+    },
+  };
+}
 
-  // Para ganar lo mismo en ML: precio = (costo + ganancia + envío) / (1 − comisión)
-  const precioML = p > 0 && k > 0 ? Math.round((p + envio) / k) : null;
-
-  // Y si publicara el precio directo tal cual en ML, ¿cuánto quedaría?
-  const netaEnML = p > 0 ? p * k - envio - c : null;
-  const margenEnML = netaEnML === null ? null : netaEnML / c;
-
-  return { margen, ganancia, precioML, margenEnML };
+/* Lo que quedaría en cada plan de cuotas, para el detalle al pasar el mouse.
+   `cuotas` es el mapa de comisiones extra ({3: 0.07, 6: 0.12, ...}); el plan de
+   un pago siempre está y es el que no paga extra. */
+export function gananciaPorCuotas({ costo, precioML, comisionML, envioML, cuotas = {} }) {
+  const planes = [1, ...Object.keys(cuotas).map(Number).sort((a, b) => a - b)];
+  return planes.map((plan) => ({
+    plan,
+    ...resultadoDeCanal({
+      costo,
+      precio: precioML,
+      comision: (Number(comisionML) || 0) + (plan === 1 ? 0 : Number(cuotas[plan]) || 0),
+      envio: envioML,
+    }),
+  }));
 }
