@@ -109,37 +109,70 @@ export function precioParaIgualar({ costo, ganancia, comision = 0, envio = 0 }) 
   return Math.round((c + ganancia + (Number(envio) || 0)) / k);
 }
 
-/* Los dos canales de un perfume del catálogo.
+/* Qué planes de pago se publican: un pago siempre, más los que tengan comisión
+   cargada. Un plan en 0% no es una opción de publicación, así que no ocupa
+   columna; cargarle la comisión a 3 cuotas hace aparecer su bloque solo. */
+export function planesPublicables(cuotas = {}) {
+  const conComision = Object.entries(cuotas)
+    .filter(([, comision]) => (Number(comision) || 0) > 0)
+    .map(([plan]) => Number(plan))
+    .filter((plan) => plan > 1)
+    .sort((a, b) => a - b);
+  return [1, ...conComision];
+}
 
-   `comisionCuotas` es la comisión EXTRA del plan de cuotas elegido en pantalla
-   (0 si se publica en un pago): se suma a la de ML porque ML las cobra a las
-   dos sobre el precio publicado.
+/* El precio guardado de un plan. Los perfumes de antes tenían un único
+   `precioML`: se lee como el precio de un pago. La conversión es en memoria —
+   el archivo recién cambia de forma cuando el usuario toca algo del catálogo. */
+export function preciosDePlanes(perfume) {
+  if (perfume?.preciosML) return perfume.preciosML;
+  return perfume?.precioML > 0 ? { 1: perfume.precioML } : {};
+}
 
-   `envioLocal` sale por un lado aparte a propósito: `precioConEnvio` es lo que
-   se le cotiza al cliente con entrega, y no entra en ninguna cuenta. */
+/* Los canales de un perfume del catálogo.
+
+   En Mercado Libre no hay "un" precio: hay una publicación por opción de pago y
+   cada una con la suya, porque ML cobra una comisión extra por cuotas sobre el
+   precio publicado. Por eso `ml` es una lista, una entrada por plan, y no un
+   resultado solo.
+
+   `envioLocal` sale por un lado aparte a propósito: `precioConEnvio` es lo que se
+   le cotiza al cliente con entrega, y no entra en ninguna cuenta. */
 export function analisisDePrecio({
   costo,
   precioPublico,
-  precioML,
+  perfume,
   comisionML,
   envioML,
   envioLocal = 0,
-  comisionCuotas = 0,
+  cuotasML = {},
+  planes,
 }) {
   const c = Number(costo) || 0;
   const p = Number(precioPublico) || 0;
-  const pML = Number(precioML) || 0;
   const envioDirecto = Number(envioLocal) || 0;
-  const comisionTotalML = (Number(comisionML) || 0) + (Number(comisionCuotas) || 0);
 
-  // Vender directo no tiene comisión ni envío a cargo del negocio: es el mismo
-  // canal de siempre, con la misma cuenta que ya estaba.
+  // Vender directo no tiene comisión ni envío a cargo del negocio: es la misma
+  // cuenta de siempre.
   const directo = resultadoDeCanal({ costo: c, precio: p });
-  const ml = resultadoDeCanal({
-    costo: c,
-    precio: pML,
-    comision: comisionTotalML,
-    envio: envioML,
+
+  const precios = preciosDePlanes(perfume);
+  const ml = (planes ?? planesPublicables(cuotasML)).map((plan) => {
+    const comision = (Number(comisionML) || 0) + (plan === 1 ? 0 : Number(cuotasML[plan]) || 0);
+    const precio = Number(precios[plan]) || 0;
+    return {
+      plan,
+      precio,
+      comision,
+      ...resultadoDeCanal({ costo: c, precio, comision, envio: envioML }),
+      // A cuánto publicar EN ESTE PLAN para ganar lo mismo que vendiendo directo.
+      sugerido: precioParaIgualar({
+        costo: c,
+        ganancia: directo.ganancia,
+        comision,
+        envio: envioML,
+      }),
+    };
   });
 
   return {
@@ -148,30 +181,6 @@ export function analisisDePrecio({
       // Una suma, no una cuenta. Vale solo si hay precio y hay envío cargado.
       precioConEnvio: p > 0 && envioDirecto > 0 ? p + envioDirecto : null,
     },
-    ml: {
-      ...ml,
-      sugerido: precioParaIgualar({
-        costo: c,
-        ganancia: directo.ganancia,
-        comision: comisionTotalML,
-        envio: envioML,
-      }),
-    },
+    ml,
   };
-}
-
-/* Lo que quedaría en cada plan de cuotas, para el detalle al pasar el mouse.
-   `cuotas` es el mapa de comisiones extra ({3: 0.07, 6: 0.12, ...}); el plan de
-   un pago siempre está y es el que no paga extra. */
-export function gananciaPorCuotas({ costo, precioML, comisionML, envioML, cuotas = {} }) {
-  const planes = [1, ...Object.keys(cuotas).map(Number).sort((a, b) => a - b)];
-  return planes.map((plan) => ({
-    plan,
-    ...resultadoDeCanal({
-      costo,
-      precio: precioML,
-      comision: (Number(comisionML) || 0) + (plan === 1 ? 0 : Number(cuotas[plan]) || 0),
-      envio: envioML,
-    }),
-  }));
 }

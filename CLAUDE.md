@@ -226,14 +226,27 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - Cada perfume tiene `costo` y `precioPublico` (venta directa), **puestos a mano**.
   No se sugieren desde el último pedido: el costo de un pedido es lo que cobró
   ESE proveedor en ESA compra, y el del catálogo es la referencia actual.
-- **Dos canales, y cada uno con su precio.** `precioPublico` es la venta directa
-  y `precioML` el precio realmente publicado en Mercado Libre. Antes ML era solo
-  un *sugerido para ganar lo mismo*, así que su ganancia era igual a la directa
-  por definición y no servía para comparar nada.
-- `analisisDePrecio()` en `src/precios.js` devuelve `{ directo, ml }`. Se apoya
-  en `resultadoDeCanal({costo, precio, comision, envio})`, que es lo que va a
-  hacer barato sumar **Tienda Nube**: otro canal con su comisión y su envío, no
-  otra fórmula.
+- **En Mercado Libre no hay "un" precio.** Se publica una vez por opción de pago
+  —un pago, 6 cuotas…— y cada publicación tiene la suya, porque ML cobra una
+  comisión extra por cuotas sobre el precio publicado. Por eso el perfume guarda
+  **`preciosML`**, un mapa `plan → precio` (`{"1": 103000, "6": 118953}`), y la
+  pantalla muestra una pareja de columnas (precio + ganancia) por plan.
+- Antes había un solo `precioML` y las cuotas eran una **lente** (un selector que
+  recalculaba la ganancia de ese único precio). Estaba mal modelado: para ver a
+  cuánto publicar en 6 cuotas había que pisar el precio de un pago, y al volver
+  ya no estaba. Si aparece la tentación de "una vista para mirar", acordarse de
+  que cada plan es una publicación, no un punto de vista.
+- **Migración de `precioML` a `preciosML`: en memoria, al leer**
+  (`preciosDePlanes()` en `precios.js`). El archivo no se reescribe por abrir la
+  pantalla; recién en la primera edición del catálogo se escribe el mapa y se
+  deja de escribir `precioML` —el valor ya vive en `preciosML["1"]` y tener los
+  dos sería tener dos verdades—. Esa primera escritura deja la versión previa en
+  `perfumes.bak.json`, que **rota en la siguiente**: la red real es OneDrive.
+- `analisisDePrecio()` en `src/precios.js` devuelve `{ directo, ml }` con **`ml`
+  como una lista, una entrada por plan** (`{plan, precio, comision, ganancia,
+  margen, sugerido}`). Se apoya en `resultadoDeCanal({costo, precio, comision,
+  envio})` y `precioParaIgualar()`, que es lo que va a hacer barato sumar
+  **Tienda Nube**: otro canal con su comisión y su envío, no otra fórmula.
 - **El envío local (Rosario) no entra en ninguna cuenta.** Es la columna *con
   envío* = `precioPublico + envioLocal`, el precio que se le cotiza al cliente
   que pide entrega. La ganancia y el margen se siguen midiendo contra el costo,
@@ -243,14 +256,15 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - **Cuotas de ML**: `ajustes.cuotasML` guarda la comisión EXTRA de cada plan
   (`{3, 6, 9, 12}`, en fracción). ML la cobra **además** de la comisión normal y
   sobre el mismo precio publicado, así que se suman: `k = 1 − comisión − extra`.
-  El plan que se está mirando es estado de pantalla (`plan`), no se guarda: es
-  una lente, no un dato del perfume. El título del grupo dice cuál está puesto.
-- `gananciaPorCuotas()` arma el detalle de los cinco planes que va al `title` de
-  la ganancia de ML: la comparación entre planes se hace de vez en cuando, no
-  todo el tiempo, así que no ocupa columnas.
-- El botón **`=`** de la fila carga el precio de ML que deja exactamente la misma
-  ganancia que vender directo (`ml.sugerido`). Aparece al pasar el mouse, como el
-  atajo de "pasar costo al catálogo" en la tabla del pedido.
+- **Qué planes se muestran lo decide esa tabla**: `planesPublicables()` devuelve
+  un pago siempre, más los que tengan comisión mayor a cero. Un plan en 0% no es
+  una opción de publicación, así que no ocupa columna; cargarle la comisión a 3
+  cuotas hace aparecer su bloque solo. No hay un ajuste aparte que mantener.
+- El botón **`=`** de cada plan carga el precio que **en ese plan** deja
+  exactamente la misma ganancia que vender directo (`sugerido`), sin tocar los
+  otros. Aparece al pasar el mouse, como el atajo de "pasar costo al catálogo"
+  en la tabla del pedido. El margen de cada plan y su precio para igualar viven
+  en el `title` de la ganancia: en columnas no entran.
 - La fila muestra **ganancia en pesos** al lado del **margen**, en los dos
   canales: son la misma cuenta mirada de dos maneras, cuántos pesos y qué
   proporción del costo. La ganancia va en **ámbar** —es plata que queda, el único
@@ -260,13 +274,18 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   también la caja de ajustes que las configura, para que se vea qué configura
   qué. La versión `-honda` es para las bandas del encabezado. El ámbar no se usa
   para esto: por eso el precio "publicar en ML" dejó de ser ámbar.
-- **La tabla tiene encabezado de dos niveles** (canal arriba, columnas abajo),
-  `sticky top-0` contra la ventana —esta pantalla scrollea con la página, no
-  tiene contenedor propio como la del pedido—. Encabezado y filas comparten
-  `COLUMNAS_CATALOGO`, una sola constante de grilla, y los dos llevan `border`
-  (transparente en el encabezado) para que el borde de la fila no corra las
-  columnas un píxel. **La grilla va sin `gap` horizontal**: el aire lo pone cada
-  celda con su padding, así el color del canal es una franja continua.
+- **La tabla tiene encabezado de dos niveles** (canal arriba —con una banda por
+  plan— y columnas abajo), `sticky top-0` contra la ventana: esta pantalla
+  scrollea con la página, no tiene contenedor propio como la del pedido.
+  Encabezado y filas reciben **las mismas `columnas`**, que salen de
+  `columnasDeCatalogo(planes)`, y los dos llevan `border` (transparente en el
+  encabezado) para que el borde de la fila no corra las columnas un píxel.
+- Esas columnas van como **`gridTemplateColumns` en línea, no como clase de
+  Tailwind**: la cantidad depende de cuántos planes se publiquen, y Tailwind
+  genera sus clases leyendo el código, así que un `grid-cols-[...]` armado en
+  tiempo de ejecución no existiría en el CSS. **La grilla va sin `gap`
+  horizontal**: el aire lo pone cada celda con su padding, así el color del canal
+  es una franja continua.
 - **Nada de esto va al PDF de precios**: al PDF se le pasan solo `nombre`,
   `precioPublico` y `foto` —el precio sin envío—, y `pdf.js` no menciona costo,
   margen ni ganancia. Es para el cliente.
