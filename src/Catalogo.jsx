@@ -2,7 +2,12 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Plus, Trash2, ImagePlus, Search, X, FileDown } from "lucide-react";
 import { urlFoto } from "./almacenamiento";
-import { analisisDePrecio, planesPublicables, preciosDePlanes } from "./precios";
+import {
+  analisisDePrecio,
+  margenesDePlanes,
+  planesPublicables,
+  preciosDePlanes,
+} from "./precios";
 import { NumberCell } from "./NumberCell";
 import { pctSinMiles as pctCorto } from "./numeros";
 
@@ -25,7 +30,8 @@ const columnasDeCatalogo = (planes) =>
     // Precio y Margen pegados: son un par que se maneja junto, igual que en la
     // tabla del pedido. Con envío y Ganancia salen de ellos.
     "104px 84px 96px 100px",
-    planes.map(() => "124px 104px").join(" "),
+    // Por plan: precio · margen · ganancia, el mismo trío que la venta directa.
+    planes.map(() => "112px 76px 100px").join(" "),
     "72px 32px",
   ].join(" ");
 
@@ -146,6 +152,7 @@ export default function Catalogo({
   ajustes,
   onCambiar,
   onSoltarMargen,
+  onSoltarMargenML,
   onCrear,
   onBorrar,
   onFoto,
@@ -211,7 +218,7 @@ export default function Catalogo({
   };
 
   return (
-    <section className="mx-auto max-w-[1360px] px-6 py-8">
+    <section className="mx-auto max-w-[1480px] px-6 py-8">
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h2 className="k-rotulo mb-1">Catálogo de perfumes</h2>
@@ -417,7 +424,7 @@ export default function Catalogo({
         </div>
       ) : (
         <div className="overflow-x-auto pb-2">
-          <div style={{ minWidth: 860 + planes.length * 228 }}>
+          <div style={{ minWidth: 820 + planes.length * 288 }}>
             <EncabezadoCatalogo planes={planes} columnas={columnas} />
             <ul className="grid gap-1.5">
               {visibles.map((p) => (
@@ -430,6 +437,7 @@ export default function Catalogo({
                   columnas={columnas}
                   onCambiar={onCambiar}
                   onSoltarMargen={onSoltarMargen}
+                  onSoltarMargenML={onSoltarMargenML}
                   onBorrar={onBorrar}
                   onFoto={onFoto}
                 />
@@ -476,7 +484,7 @@ function EncabezadoCatalogo({ planes, columnas }) {
           <span
             key={plan}
             className="k-col px-2 py-1.5"
-            style={{ background: "var(--zona-ml-honda)", color: "var(--tinta)", gridColumn: "span 2" }}
+            style={{ background: "var(--zona-ml-honda)", color: "var(--tinta)", gridColumn: "span 3" }}
           >
             Mercado Libre · {nombreDePlan(plan)}
           </span>
@@ -494,6 +502,7 @@ function EncabezadoCatalogo({ planes, columnas }) {
         {planes.map((plan) => (
           <Fragment key={plan}>
             {col("Precio", "var(--zona-ml)")}
+            {col("Margen", "var(--zona-ml)")}
             {col("Ganancia", "var(--zona-ml)")}
           </Fragment>
         ))}
@@ -513,7 +522,7 @@ function EncabezadoCatalogo({ planes, columnas }) {
 
    El envío de Rosario NO entra en ninguna cuenta: aparece como "con envío", el
    precio que se le cotiza al cliente cuando hay que llevárselo. */
-function Precios({ perfume, ajustes, planes, onCambiar, onSoltarMargen }) {
+function Precios({ perfume, ajustes, planes, onCambiar, onSoltarMargen, onSoltarMargenML }) {
   const r = analisisDePrecio({
     costo: perfume.costo,
     precioPublico: perfume.precioPublico,
@@ -554,6 +563,13 @@ function Precios({ perfume, ajustes, planes, onCambiar, onSoltarMargen }) {
   /* Cada plan guarda su precio. Al escribir el mapa nuevo se deja de escribir el
      `precioML` viejo: su valor ya vive en `preciosML["1"]` y tener los dos sería
      tener dos verdades. */
+  /* Clavar el margen de un plan: el precio de ESE plan pasa a salir de acá.
+     Los demás planes y la venta directa no se enteran. */
+  const ponerMargen = (plan, margen) =>
+    onCambiar(perfume.id, {
+      margenesML: { ...margenesDePlanes(perfume), [plan]: margen },
+    });
+
   const ponerPrecio = (plan, valor) =>
     onCambiar(perfume.id, {
       preciosML: { ...preciosDePlanes(perfume), [plan]: valor },
@@ -639,28 +655,74 @@ function Precios({ perfume, ajustes, planes, onCambiar, onSoltarMargen }) {
               )} por unidad, sobre un costo de ${pesos(perfume.costo)}. El envío no entra: se cobra aparte.`,
       })}
 
-      {/* ---- Una publicación de Mercado Libre por plan ---- */}
+      {/* ---- Una publicación de Mercado Libre por plan ----
+           Mismo trato que la venta directa: precio y margen son un par, y con el
+           margen clavado el precio pasa a ser calculado. Cada plan se clava por
+           separado — podés tener 1 pago a mano y 6 cuotas clavado. */}
       {r.ml.map((x) => (
         <Fragment key={x.plan}>
           <div className="flex items-center gap-1 px-1.5" style={{ background: "var(--zona-ml)" }}>
-            <div className="min-w-0 flex-1">
-              <NumberCell value={x.precio || 0} onChange={(v) => ponerPrecio(x.plan, v)} />
-            </div>
-            {/* Atajo, no obligación: completa el precio que en ESTE plan deja la
-                misma ganancia que vendiendo directo. */}
-            {x.sugerido !== null && x.sugerido !== x.precio && (
+            {x.margenObjetivo != null ? (
+              <div className="flex-1 px-0.5 text-right">
+                <span className="k-num text-[13px] font-semibold" style={{ color: "var(--tinta)" }}>
+                  {x.precio > 0 ? pesos(x.precio) : "—"}
+                </span>
+              </div>
+            ) : (
+              <>
+                <div className="min-w-0 flex-1">
+                  <NumberCell value={x.precio || 0} onChange={(v) => ponerPrecio(x.plan, v)} />
+                </div>
+                {/* Atajo, no obligación: completa el precio que en ESTE plan deja
+                    la misma ganancia que vendiendo directo. */}
+                {x.sugerido !== null && x.sugerido !== x.precio && (
+                  <button
+                    onClick={() => ponerPrecio(x.plan, x.sugerido)}
+                    title={`Poner ${pesos(x.sugerido)}: publicando a ese precio en ${nombreDePlan(
+                      x.plan
+                    )} te queda lo mismo que vendiendo directo`}
+                    aria-label={`Igualar el precio de ${nombreDePlan(x.plan)} de ${
+                      perfume.nombre
+                    } a la ganancia directa`}
+                    className="k-num shrink-0 px-1 text-[13px] opacity-0 transition group-hover:opacity-100 focus:opacity-100"
+                    style={{ color: "var(--humo)" }}
+                  >
+                    =
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+          <div className="relative px-1.5" style={{ background: "var(--zona-ml)" }}>
+            {sinCosto ? (
+              <div className="px-0.5 text-right" title="Cargá el costo para poder fijar un margen">
+                <span className="k-num text-[13px]" style={{ color: "var(--humo-claro)" }}>
+                  —
+                </span>
+              </div>
+            ) : (
+              <NumberCell
+                value={+((x.margenObjetivo ?? x.margen ?? 0) * 100).toFixed(1)}
+                onChange={(v) => ponerMargen(x.plan, v / 100)}
+                suffix="%"
+                className={x.margenObjetivo != null ? "font-semibold" : ""}
+                style={
+                  x.margenObjetivo != null
+                    ? { borderLeft: "3px solid var(--ambar)", background: "#FFFDF7" }
+                    : undefined
+                }
+              />
+            )}
+            {x.margenObjetivo != null && (
               <button
-                onClick={() => ponerPrecio(x.plan, x.sugerido)}
-                title={`Poner ${pesos(x.sugerido)}: publicando a ese precio en ${nombreDePlan(
-                  x.plan
-                )} te queda lo mismo que vendiendo directo`}
-                aria-label={`Igualar el precio de ${nombreDePlan(x.plan)} de ${
-                  perfume.nombre
-                } a la ganancia directa`}
-                className="k-num shrink-0 px-1 text-[13px] opacity-0 transition group-hover:opacity-100 focus:opacity-100"
-                style={{ color: "var(--humo)" }}
+                type="button"
+                onClick={() => onSoltarMargenML(perfume.id, x.plan, x.precio)}
+                title="Soltar el margen y volver a poner el precio a mano"
+                aria-label={`Soltar el margen de ${nombreDePlan(x.plan)} de ${perfume.nombre}`}
+                className="absolute -right-0.5 -top-1.5 rounded-full bg-white p-0.5 transition"
+                style={{ color: "var(--humo)", boxShadow: "0 0 0 1px var(--linea)" }}
               >
-                =
+                <X size={10} />
               </button>
             )}
           </div>
@@ -673,7 +735,7 @@ function Precios({ perfume, ajustes, planes, onCambiar, onSoltarMargen }) {
                 ? `Poné costo y precio para ver qué te deja en ${nombreDePlan(x.plan)}`
                 : `En ${nombreDePlan(x.plan)}, después de la comisión (${pctCorto(
                     x.comision
-                  )}) y el envío de ML: ${pesos(x.ganancia)}, margen ${pctCorto(x.margen)}.` +
+                  )}) y el envío de ML: ${pesos(x.ganancia)}.` +
                   (x.sugerido === null
                     ? ""
                     : ` Para igualar la venta directa habría que publicar ${pesos(x.sugerido)}.`),
@@ -701,6 +763,7 @@ function FilaPerfume({
   columnas,
   onCambiar,
   onSoltarMargen,
+  onSoltarMargenML,
   onBorrar,
   onFoto,
 }) {
@@ -785,6 +848,7 @@ function FilaPerfume({
         planes={planes}
         onCambiar={onCambiar}
         onSoltarMargen={onSoltarMargen}
+        onSoltarMargenML={onSoltarMargenML}
       />
 
       {/* Cuenta TODOS los pedidos, no solo el que está en pantalla: es el aviso

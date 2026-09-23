@@ -942,7 +942,10 @@ export default function App() {
      estado crudo, o el precio calculado nunca llega al archivo.
      `resolverPreciosDelCatalogo` devuelve el mismo array si no cambió nada, así
      que abrir la pantalla no dispara ningún guardado. */
-  const perfumesResueltos = useMemo(() => resolverPreciosDelCatalogo(perfumes), [perfumes]);
+  const perfumesResueltos = useMemo(
+    () => resolverPreciosDelCatalogo(perfumes, ajustes),
+    [perfumes, ajustes]
+  );
 
   const perfumePorId = useMemo(
     () => new Map(perfumesResueltos.map((p) => [p.id, p])),
@@ -1504,6 +1507,23 @@ export default function App() {
      borrara `margenObjetivo`, la fila volvería al precio viejo que tiene el
      estado crudo. Por eso los dos cambios van en el mismo `setPerfumes`. Es la
      misma trampa que en los pedidos (`soltarMargen`), y ya se pagó una vez. */
+  /* Soltar el margen de un plan de ML: mismo cuidado que en la venta directa —
+     el precio calculado vive en la lista resuelta, así que hay que escribirlo en
+     el estado en el mismo `setPerfumes` o el plan vuelve al precio viejo. */
+  const soltarMargenMLDelCatalogo = (id, plan, precioResuelto) =>
+    setPerfumes((ps) =>
+      ps.map((p) => {
+        if (p.id !== id) return p;
+        const margenes = { ...(p.margenesML ?? {}) };
+        delete margenes[plan];
+        return {
+          ...p,
+          margenesML: margenes,
+          preciosML: { ...(p.preciosML ?? {}), [plan]: precioResuelto },
+        };
+      })
+    );
+
   const soltarMargenDelCatalogo = (id, precioResuelto) =>
     setPerfumes((ps) =>
       ps.map((p) =>
@@ -1933,6 +1953,7 @@ export default function App() {
           exportando={armandoPrecios}
           onCambiar={cambiarPerfume}
           onSoltarMargen={soltarMargenDelCatalogo}
+          onSoltarMargenML={soltarMargenMLDelCatalogo}
           onCrear={crearPerfume}
           onBorrar={borrarPerfume}
           onFoto={ponerFoto}

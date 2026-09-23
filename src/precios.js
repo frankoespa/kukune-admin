@@ -106,7 +106,12 @@ export function precioParaIgualar({ costo, ganancia, comision = 0, envio = 0 }) 
   const c = Number(costo) || 0;
   const k = 1 - (Number(comision) || 0);
   if (!(c > 0) || ganancia == null || !(k > 0)) return null;
-  return Math.round((c + ganancia + (Number(envio) || 0)) / k);
+  const precio = (c + ganancia + (Number(envio) || 0)) / k;
+  // Mismo criterio que los otros despejes: un peso corre el margen en `k/costo`,
+  // que en un perfume normal no se nota, pero con un costo chico se dispara y
+  // redondear mentiría — pedís 45% y ves 47%.
+  const desvioMaximoPP = 0.5 * (k / c) * 100;
+  return desvioMaximoPP <= 0.05 ? Math.round(precio) : Math.round(precio * 100) / 100;
 }
 
 /* El camino inverso de la venta directa: dado un margen, qué precio lo produce.
@@ -131,6 +136,16 @@ export function precioPublicoDesdeMargen(costo, margen) {
   return Math.max(0, redondeado);
 }
 
+/* Qué precio hay que publicar en un canal para que quede ESE margen sobre el
+   costo, después de la comisión y el envío. Es `precioParaIgualar` con la
+   ganancia objetivo escrita como fracción del costo — la misma cuenta que
+   alimenta el botón "=", con otro objetivo. */
+export function precioDesdeMargenEnCanal({ costo, margen, comision = 0, envio = 0 }) {
+  const c = Number(costo) || 0;
+  if (!(c > 0) || margen == null || !Number.isFinite(Number(margen))) return null;
+  return precioParaIgualar({ costo: c, ganancia: c * Number(margen), comision, envio });
+}
+
 /* La lista del catálogo con el precio de venta ya despejado en los perfumes que
    tienen un margen clavado. Es el gemelo de `resolverPrecios()` para los pedidos,
    y existe por la misma razón: lo que se guarda, se exporta y va al PDF tiene que
@@ -138,15 +153,47 @@ export function precioPublicoDesdeMargen(costo, margen) {
 
    Devuelve **el mismo array** si no cambió ningún precio, así los `useMemo` de
    arriba no se invalidan y abrir la pantalla no dispara un guardado. */
-export function resolverPreciosDelCatalogo(perfumes) {
+export function resolverPreciosDelCatalogo(perfumes, ajustes = {}) {
+  const comisionML = Number(ajustes.comisionML) || 0;
+  const envioML = Number(ajustes.envioML) || 0;
+  const cuotasML = ajustes.cuotasML ?? {};
   let hubo = false;
+
   const resueltos = (perfumes ?? []).map((p) => {
-    if (p.margenObjetivo == null) return p;
-    const precio = precioPublicoDesdeMargen(p.costo, p.margenObjetivo);
-    if (precio === null || precio === p.precioPublico) return p;
-    hubo = true;
-    return { ...p, precioPublico: precio };
+    let salida = p;
+
+    // Venta directa
+    if (p.margenObjetivo != null) {
+      const precio = precioPublicoDesdeMargen(p.costo, p.margenObjetivo);
+      if (precio !== null && precio !== p.precioPublico) salida = { ...salida, precioPublico: precio };
+    }
+
+    // Un precio por plan clavado: cada publicación de ML se despeja sola.
+    const margenes = margenesDePlanes(p);
+    const planes = Object.keys(margenes);
+    if (planes.length) {
+      const precios = preciosDePlanes(p);
+      let nuevos = null;
+      for (const clave of planes) {
+        const plan = Number(clave);
+        if (margenes[clave] == null) continue;
+        const comision = comisionML + (plan === 1 ? 0 : Number(cuotasML[plan]) || 0);
+        const precio = precioDesdeMargenEnCanal({
+          costo: p.costo,
+          margen: margenes[clave],
+          comision,
+          envio: envioML,
+        });
+        if (precio === null || precio === (Number(precios[clave]) || 0)) continue;
+        nuevos = { ...(nuevos ?? precios), [clave]: precio };
+      }
+      if (nuevos) salida = { ...salida, preciosML: nuevos };
+    }
+
+    if (salida !== p) hubo = true;
+    return salida;
   });
+
   return hubo ? resueltos : perfumes;
 }
 
@@ -160,6 +207,12 @@ export function planesPublicables(cuotas = {}) {
     .filter((plan) => plan > 1)
     .sort((a, b) => a - b);
   return [1, ...conComision];
+}
+
+/* Los márgenes clavados por plan. Campo nuevo y sin historia: lo que no esté
+   acá es un plan con el precio puesto a mano. */
+export function margenesDePlanes(perfume) {
+  return perfume?.margenesML ?? {};
 }
 
 /* El precio guardado de un plan. Los perfumes de antes tenían un único
@@ -198,6 +251,7 @@ export function analisisDePrecio({
   const directo = resultadoDeCanal({ costo: c, precio: p });
 
   const precios = preciosDePlanes(perfume);
+  const margenes = margenesDePlanes(perfume);
   const ml = (planes ?? planesPublicables(cuotasML)).map((plan) => {
     const comision = (Number(comisionML) || 0) + (plan === 1 ? 0 : Number(cuotasML[plan]) || 0);
     const precio = Number(precios[plan]) || 0;
@@ -205,6 +259,8 @@ export function analisisDePrecio({
       plan,
       precio,
       comision,
+      // Clavado = el precio de este plan lo manda el margen, no la mano.
+      margenObjetivo: margenes[plan] ?? null,
       ...resultadoDeCanal({ costo: c, precio, comision, envio: envioML }),
       // A cuánto publicar EN ESTE PLAN para ganar lo mismo que vendiendo directo.
       sugerido: precioParaIgualar({

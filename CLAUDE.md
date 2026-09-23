@@ -281,6 +281,16 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   un pago siempre, más los que tengan comisión mayor a cero. Un plan en 0% no es
   una opción de publicación, así que no ocupa columna; cargarle la comisión a 3
   cuotas hace aparecer su bloque solo. No hay un ajuste aparte que mantener.
+- **Cada plan también clava margen**, igual que la venta directa: `margenesML`
+  es el mapa gemelo de `preciosML` (`{"6": 0.45}`, solo los planes clavados). Con
+  el margen clavado, el precio de ESE plan se despeja con
+  `precioDesdeMargenEnCanal()` —que es `precioParaIgualar()` con la ganancia
+  objetivo escrita como fracción del costo, no una fórmula nueva—, el precio se
+  muestra sin caja y el `=` de ese plan desaparece: el precio ya lo manda el
+  margen. Cada plan se clava por separado.
+- Por eso **`resolverPreciosDelCatalogo(perfumes, ajustes)` necesita los
+  ajustes**: sin la comisión, el envío y las cuotas no puede despejar el precio
+  de un plan. Sigue devolviendo el mismo array si no cambió nada.
 - El botón **`=`** de cada plan carga el precio que **en ese plan** deja
   exactamente la misma ganancia que vender directo (`sugerido`), sin tocar los
   otros. Aparece al pasar el mouse, como el atajo de "pasar costo al catálogo"
