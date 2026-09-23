@@ -226,6 +226,21 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - Cada perfume tiene `costo` y `precioPublico` (venta directa), **puestos a mano**.
   No se sugieren desde el último pedido: el costo de un pedido es lo que cobró
   ESE proveedor en ESA compra, y el del catálogo es la referencia actual.
+- **El `costo` está detrás de un doble clic** (`CostoProtegido` en
+  `Catalogo.jsx`). De ese número cuelga todo: márgenes y ganancias de los dos
+  canales y, desde que se clavan márgenes, los precios calculados — pisarlo de un
+  tecleo reprecia publicaciones en silencio. Trabado se ve como número suelto; se
+  abre con doble clic o con Enter/Espacio si se llegó con Tab, y se traba sola al
+  salir del campo o con Enter.
+- El gesto se anuncia, que es lo único que lo salva de parecer una celda rota:
+  candado al pasar el mouse, borde que aparece, `title` y `aria-label` que dicen
+  qué hacer. Si algún día se protege otro campo, copiar esa parte, no solo el
+  doble clic.
+- **Escape deshace** lo tipeado y vuelve al costo que había al abrir. Hace falta
+  porque `NumberCell` escribe en cada tecla: sin eso, el error ya está guardado
+  antes de que lo veas.
+- El candado es de pantalla: **"pasar costos al catálogo" escribe igual**, porque
+  es una acción explícita y con su propio diálogo. Verificado.
 - **Precio y Margen de la venta directa son un par**, igual que en los pedidos:
   escribís el precio y el margen sale solo, o clavás el margen (`margenObjetivo`,
   fracción o `null`) y el precio se despeja. Con el margen clavado el precio pasa
