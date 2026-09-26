@@ -1524,6 +1524,13 @@ export default function App() {
       })
     );
 
+  /* Soltar el margen de Tiendanube: mismo cuidado — `margenTN` y el precio
+     resuelto van juntos, o el perfume vuelve al precio viejo del estado crudo. */
+  const soltarMargenTNDelCatalogo = (id, precioResuelto) =>
+    setPerfumes((ps) =>
+      ps.map((p) => (p.id === id ? { ...p, margenTN: null, precioTN: precioResuelto } : p))
+    );
+
   const soltarMargenDelCatalogo = (id, precioResuelto) =>
     setPerfumes((ps) =>
       ps.map((p) =>
@@ -1954,6 +1961,7 @@ export default function App() {
           onCambiar={cambiarPerfume}
           onSoltarMargen={soltarMargenDelCatalogo}
           onSoltarMargenML={soltarMargenMLDelCatalogo}
+          onSoltarMargenTN={soltarMargenTNDelCatalogo}
           onCrear={crearPerfume}
           onBorrar={borrarPerfume}
           onFoto={ponerFoto}

@@ -105,11 +105,31 @@ export const urlFoto = (archivo) => (archivo ? `/datos/fotos/${archivo}` : null)
    guardado siempre manda (ver el merge en `leerPerfumes`). `cuotasML` es la
    comisión EXTRA de cada plan, en fracción, y `envioLocal` el envío en Rosario
    que se le suma al precio cuando hay entrega. */
+/* Formas de pago de Tiendanube de arranque. Comisión SIN IVA y descuento, en
+   fracción; `minimo` en pesos (0 = siempre aplica). Ids fijos: son ejemplos, y
+   "Volver a los ejemplos" tiene que dar siempre lo mismo. */
+export const FORMAS_TN_POR_DEFECTO = [
+  { id: "tn-transferencia", nombre: "Transferencia · Pago Nube", comision: 0.015, descuento: 0.25, minimo: 0 },
+  { id: "tn-mp-35", nombre: "Mercado Pago 35 días (1,52% + CPT 2%)", comision: 0.0352, descuento: 0, minimo: 0 },
+  { id: "tn-tarjeta-1", nombre: "Tarjeta 1 pago · Pago Nube 14 días", comision: 0.0469, descuento: 0, minimo: 0 },
+  { id: "tn-6-cuotas", nombre: "6 cuotas sin interés · Pago Nube (4,69% + 21%)", comision: 0.2569, descuento: 0, minimo: 70000 },
+];
+
 export const AJUSTES_POR_DEFECTO = {
   comisionML: 0.1532,
   envioML: 7470,
   envioLocal: 0,
   cuotasML: { 3: 0, 6: 0, 9: 0, 12: 0 },
+  // Redondeo de los precios calculados (margen clavado y `=`). 1 = "Sin
+  // redondear", el comportamiento de siempre: así abrir la app no reprecia nada.
+  redondeoDirecto: 1,
+  redondeoML: 1,
+  tiendaNube: {
+    envioGratis: 0,
+    comision: 0, // la de Tiendanube, que se suma a la de cada forma de pago
+    redondeo: 1000,
+    formas: FORMAS_TN_POR_DEFECTO,
+  },
 };
 
 export async function leerPerfumes() {
@@ -126,6 +146,9 @@ export async function leerPerfumes() {
         ...AJUSTES_POR_DEFECTO,
         ...(datos.ajustes || {}),
         cuotasML: { ...AJUSTES_POR_DEFECTO.cuotasML, ...(datos.ajustes?.cuotasML || {}) },
+        // Las formas de pago guardadas reemplazan enteras a las de ejemplo: una
+        // lista no se mezcla, y borrar una tiene que quedar borrada.
+        tiendaNube: { ...AJUSTES_POR_DEFECTO.tiendaNube, ...(datos.ajustes?.tiendaNube || {}) },
       },
     };
   } catch (e) {

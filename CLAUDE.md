@@ -248,8 +248,22 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   una `X` para soltarlo. Van pegadas en la tabla: son un par que se maneja junto.
 - El despeje es `precioPublicoDesdeMargen(costo, margen) = costo × (1 + margen)`.
   Acá no hace falta el de los pedidos porque vender directo no tiene comisión ni
-  envío a cargo del negocio. Mismo criterio de redondeo: peso entero salvo que
-  eso desvíe el margen más de 0,05 pp.
+  envío a cargo del negocio. El redondeo es el de `redondearPrecio()` (ver abajo).
+- **Redondeo de los precios calculados — uno solo para los tres canales.**
+  `redondearPrecio(precio, {redondeo, k, costo})` en `precios.js`, y un
+  `SelectorRedondeo` ("Redondear arriba a") en la caja de cada canal:
+  `ajustes.redondeoDirecto`, `ajustes.redondeoML` (vale para todos los planes) y
+  `ajustes.tiendaNube.redondeo`.
+  - "Sin redondear" (`1`, el default de directo y ML): peso más cercano, o
+    centavos si un peso corre el margen más de 0,05 pp. Es el comportamiento de
+    antes, así que abrir la app no reprecia nada ni escribe.
+  - $100 / $500 / $1.000: **hacia arriba**, para que el margen quede igual o un
+    poco arriba del pedido, nunca debajo.
+  - Solo toca lo que sale de una cuenta: margen clavado y el `=`. **Los precios
+    puestos a mano no se redondean nunca.**
+  - Con el margen clavado la celda sigue mostrando el margen **pedido**; el
+    `title` (`margenReal()` en `Catalogo.jsx`) dice cuánto queda con el precio ya
+    redondeado ("Pediste 40,0% · queda 40,7%").
 - **Un costo nuevo mueve el precio de los clavados.** Es lo que hace que "pasar
   costos al catálogo" desde un pedido reprecie solo los perfumes clavados; los
   que tienen precio a mano no se tocan nunca. Está pedido así a propósito.
@@ -281,8 +295,9 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - `analisisDePrecio()` en `src/precios.js` devuelve `{ directo, ml }` con **`ml`
   como una lista, una entrada por plan** (`{plan, precio, comision, ganancia,
   margen, sugerido}`). Se apoya en `resultadoDeCanal({costo, precio, comision,
-  envio})` y `precioParaIgualar()`, que es lo que va a hacer barato sumar
-  **Tienda Nube**: otro canal con su comisión y su envío, no otra fórmula.
+  envio})` y `precioParaIgualar()`. Tiendanube **no** entró por ahí: tiene
+  varias formas de pago con IVA, descuento y mínimo, y lleva sus propias
+  funciones (ver "Tiendanube en el catálogo").
 - **El envío local (Rosario) no entra en ninguna cuenta.** Es la columna *con
   envío* = `precioPublico + envioLocal`, el precio que se le cotiza al cliente
   que pide entrega. La ganancia y el margen se siguen midiendo contra el costo,
@@ -400,6 +415,43 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   el menor aire fue 8,2mm (ese caso extremo; los nombres reales quedan holgados).
 - `dibujarFotoEn(doc, foto, x, y, w, h)` sirve a los dos PDF; `dibujarFoto`
   quedó como el atajo con las medidas de la cuadrícula del proveedor.
+
+## Tiendanube en el catálogo
+- Tercer canal, después de ML: **un solo precio** (`precioTN`) que tiene que dejar
+  la ganancia pedida **pague como pague el cliente**. Viene de una calculadora
+  HTML que Franco ya usaba; los casos de prueba de ella son la referencia:
+  costo 65.000 + 30% → $123.000 (transferencia paga $92.250); con envío gratis
+  10.000 → $138.000; costo 30.000 → 6 cuotas "No aplica". Probados desde Node.
+- Mismo par precio + margen que directo y cada plan de ML: `margenTN` (fracción
+  o `null`) clavado despeja el precio en `resolverPreciosDelCatalogo()`; a mano,
+  el margen mostrado es el de la forma de pago que **menos deja**. Soltar escribe
+  `margenTN: null` **y** el `precioTN` resuelto juntos (`soltarMargenTNDelCatalogo`).
+  El `=` pone el precio que deja, con la forma más cara, la ganancia directa.
+- Ajustes en `ajustes.tiendaNube`: `envioGratis` (uno para todo el catálogo; lo
+  paga el negocio, **sí entra en la cuenta**, al revés del envío de Rosario),
+  `comision` (la de Tiendanube, se suma a la de cada forma), `redondeo` y
+  `formas: [{id, nombre, comision, descuento, minimo}]`.
+- La comisión de cada forma se carga **sin IVA**, como la muestra el medio de
+  pago; `comisionRealTN()` le aplica el 21%. Comisión + financiación o CPT se
+  suman a mano en el mismo número.
+- Redondea con `redondearPrecio()`, igual que directo y ML (ver "Precios del
+  catálogo"), usando el `k` de la forma de pago que manda. Su default es $1.000.
+  Antes "Sin redondear" subía al peso siguiente y el `=` podía mostrar 40,4%
+  contra 40,3% de la venta directa (59 centavos que cruzaban el decimal); Franco
+  pidió que "sin redondear" signifique lo mismo en toda la app.
+- Monto mínimo (6 cuotas desde $70.000): aplica si `precio × (1 − descuento) ≥
+  mínimo`. El despeje arranca sin las formas con mínimo y va sumando las que lo
+  cumplen hasta que no cambie (tope 10 vueltas, como el HTML).
+- Clic en el precio (o el icono de lista, con precio a mano) abre
+  `DetalleTiendaNube` (`src/TiendaNube.jsx`, portal al body): precio + "Copiar
+  número" y la tabla por forma de pago. El precio grande va en **tinta**, no en
+  ámbar como en el HTML original: el ámbar es solo la ganancia.
+- Las formas por defecto (`FORMAS_TN_POR_DEFECTO`, ids fijos) viven en
+  `almacenamiento.js`. Al leer, las guardadas **reemplazan enteras** a las de
+  ejemplo (una lista no se mezcla). Abrir la app no escribe: la clave recién
+  aparece en `perfumes.json` con la primera edición del catálogo.
+- Zona de color `--zona-tn` / `--zona-tn-honda`. No va al PDF de precios ni al
+  orden "Por margen" (que siguen mirando la venta directa).
 
 ## Fórmulas (idénticas al Excel)
 - Factor de Gasto = Costos Extras (ARS) ÷ Inversión Total (USD) → ARS por USD de costo
