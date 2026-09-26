@@ -4,6 +4,7 @@ import { Plus, X, ChevronDown } from "lucide-react";
 import { NumberCell } from "./NumberCell";
 import { FORMAS_TN_POR_DEFECTO } from "./almacenamiento";
 import { analisisTiendaNube, comisionRealTN, IVA } from "./precios";
+import { pctSinMiles } from "./numeros";
 
 /* ============================================================
    Tiendanube en el catálogo: la caja de ajustes (con las formas de pago) y el
@@ -281,6 +282,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar }) {
             {r.ganancia !== null && (
               <p className="mt-1 text-[12.5px] font-semibold" style={{ color: r.ganancia >= 0 ? "var(--ambar)" : "var(--oxido)" }}>
                 Vas a ganar al menos <span className="k-num">{pesos(r.ganancia)}</span> por venta
+                {r.margen !== null && <span className="k-num"> ({pctSinMiles(r.margen, 1)})</span>}
               </p>
             )}
             {define && (
@@ -302,7 +304,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar }) {
           </button>
         </div>
 
-        <table className="w-full min-w-[720px] border-collapse">
+        <table className="w-full min-w-[800px] border-collapse">
           <thead>
             <tr className="border-b" style={{ borderColor: "var(--linea)", color: "var(--humo)" }}>
               <th className={`${th} text-left`}>Si paga con</th>
@@ -312,6 +314,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar }) {
               <th className={th}>Total comisión</th>
               <th className={th}>Te llega</th>
               <th className={th}>{envio > 0 ? "Ganás (ya sin envío)" : "Ganás"}</th>
+              <th className={th}>Margen</th>
             </tr>
           </thead>
           <tbody>
@@ -333,7 +336,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar }) {
                 return (
                   <tr key={f.forma.id} className="border-b" style={{ borderColor: "var(--linea)" }}>
                     {nombre}
-                    <td colSpan={6} className="px-2.5 py-2 text-[12px]" style={{ color: "var(--oxido)" }}>
+                    <td colSpan={7} className="px-2.5 py-2 text-[12px]" style={{ color: "var(--oxido)" }}>
                       Revisá los porcentajes: comisión más descuento no pueden llegar al 100%.
                     </td>
                   </tr>
@@ -342,7 +345,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar }) {
                 return (
                   <tr key={f.forma.id} className="border-b" style={{ borderColor: "var(--linea)" }}>
                     {nombre}
-                    <td colSpan={6} className="px-2.5 py-2 text-[12px]" style={{ color: "var(--humo-claro)" }}>
+                    <td colSpan={7} className="px-2.5 py-2 text-[12px]" style={{ color: "var(--humo-claro)" }}>
                       No aplica: la compra es menor a {pesos(f.minimo)}
                     </td>
                   </tr>
@@ -391,6 +394,17 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar }) {
                     style={{ color: f.ganancia === null ? "var(--humo-claro)" : f.ganancia >= 0 ? "var(--ambar)" : "var(--oxido)" }}
                   >
                     {f.ganancia === null ? "—" : pesos(f.ganancia)}
+                  </td>
+                  {/* Ganancia sobre el costo: la misma base que la columna Margen del
+                      catálogo, así los números se comparan tal cual. */}
+                  <td
+                    className={td}
+                    style={{
+                      color:
+                        f.ganancia === null ? "var(--humo-claro)" : f.ganancia >= 0 ? "var(--verde)" : "var(--oxido)",
+                    }}
+                  >
+                    {f.ganancia === null || !(costo > 0) ? "—" : pctSinMiles(f.ganancia / costo, 1)}
                   </td>
                 </tr>
               );
