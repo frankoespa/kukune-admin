@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Plus, X, ChevronDown } from "lucide-react";
-import { NumberCell } from "./NumberCell";
-import { FORMAS_TN_POR_DEFECTO } from "./almacenamiento";
+import { CampoProtegido } from "./CampoProtegido";
 import { analisisTiendaNube, comisionRealTN, IVA } from "./precios";
 import { pctSinMiles } from "./numeros";
 
@@ -62,9 +61,15 @@ export function SelectorRedondeo({ valor, onCambiar }) {
 }
 
 /* La caja de ajustes del canal. Las formas de pago se despliegan aparte: son
-   una lista de cuatro renglones y cerrada no le roba altura a la tabla. */
-export function AjustesTiendaNube({ tn, onCambiar }) {
+   una lista de cuatro renglones y cerrada no le roba altura a la tabla.
+
+   Todo lo que se tipea va detrás de un doble clic (`CampoProtegido`): cada uno
+   de estos números mueve el precio de todos los perfumes con margen clavado.
+   Quitar una forma de pago pide confirmación, por la misma razón. */
+export function AjustesTiendaNube({ tn, onCambiar, onConfirmar }) {
   const [abierto, setAbierto] = useState(false);
+  // La forma recién agregada nace con el nombre abierto para escribir.
+  const [recienCreada, setRecienCreada] = useState(null);
   const formas = tn.formas ?? [];
   const cambiar = (campos) => onCambiar({ ...tn, ...campos });
   const cambiarForma = (id, campos) =>
@@ -79,22 +84,29 @@ export function AjustesTiendaNube({ tn, onCambiar }) {
         Tiendanube
       </span>
       <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
-        <label className="block">
+        <div className="block">
           {rotulo("Envio gratis")}
-          <div className="w-[96px]">
-            <NumberCell value={tn.envioGratis || 0} onChange={(v) => cambiar({ envioGratis: v })} />
-          </div>
-        </label>
-        <label className="block" title="Se suma a la comision de cada forma de pago, y lleva IVA">
-          {rotulo("Comision TN")}
-          <div className="w-[80px]">
-            <NumberCell
-              value={+((tn.comision || 0) * 100).toFixed(2)}
-              onChange={(v) => cambiar({ comision: v / 100 })}
-              suffix="%"
+          <div className="w-[104px]">
+            <CampoProtegido
+              valor={tn.envioGratis || 0}
+              onCambiar={(v) => cambiar({ envioGratis: v })}
+              mostrar={pesos}
+              etiqueta="el envio gratis"
             />
           </div>
-        </label>
+        </div>
+        <div className="block" title="Se suma a la comision de cada forma de pago, y lleva IVA">
+          {rotulo("Comision TN")}
+          <div className="w-[88px]">
+            <CampoProtegido
+              valor={+((tn.comision || 0) * 100).toFixed(2)}
+              onCambiar={(v) => cambiar({ comision: v / 100 })}
+              mostrar={(v) => porcentaje((v || 0) / 100)}
+              suffix="%"
+              etiqueta="la comision de Tiendanube"
+            />
+          </div>
+        </div>
         <SelectorRedondeo valor={tn.redondeo} onCambiar={(redondeo) => cambiar({ redondeo })} />
         <button
           type="button"
@@ -133,34 +145,34 @@ export function AjustesTiendaNube({ tn, onCambiar }) {
                 key={f.id}
                 forma={f}
                 tn={tn}
+                nueva={f.id === recienCreada}
                 onCambiar={(campos) => cambiarForma(f.id, campos)}
-                onQuitar={() => cambiar({ formas: formas.filter((x) => x.id !== f.id) })}
+                onQuitar={() =>
+                  onConfirmar({
+                    titulo: `¿Quitar "${f.nombre}" de las formas de pago?`,
+                    texto: "Los precios de Tiendanube con margen clavado se recalculan sin ella.",
+                    etiquetaOk: "Quitar",
+                    peligro: true,
+                    onAceptar: () => cambiar({ formas: formas.filter((x) => x.id !== f.id) }),
+                  })
+                }
               />
             ))}
           </div>
           <div className="mt-2.5 flex gap-2">
             <button
               type="button"
-              onClick={() =>
+              onClick={() => {
+                const id = crypto.randomUUID();
+                setRecienCreada(id);
                 cambiar({
-                  formas: [
-                    ...formas,
-                    { id: crypto.randomUUID(), nombre: "Nueva forma de pago", comision: 0, descuento: 0, minimo: 0 },
-                  ],
-                })
-              }
+                  formas: [...formas, { id, nombre: "Nueva forma de pago", comision: 0, descuento: 0, minimo: 0 }],
+                });
+              }}
               className="k-col flex items-center gap-1 rounded-[3px] border border-dashed px-2.5 py-[6px] transition"
               style={{ borderColor: "var(--humo-claro)", color: "var(--tinta)" }}
             >
               <Plus size={13} /> Agregar forma de pago
-            </button>
-            <button
-              type="button"
-              onClick={() => cambiar({ formas: FORMAS_TN_POR_DEFECTO.map((f) => ({ ...f })) })}
-              className="k-col rounded-[3px] border px-2.5 py-[6px] transition"
-              style={{ borderColor: "var(--linea)", color: "var(--humo)" }}
-            >
-              Volver a los ejemplos
             </button>
           </div>
         </div>
@@ -169,29 +181,40 @@ export function AjustesTiendaNube({ tn, onCambiar }) {
   );
 }
 
-function FilaForma({ forma, tn, onCambiar, onQuitar }) {
+function FilaForma({ forma, tn, nueva, onCambiar, onQuitar }) {
+  const pct = (v) => porcentaje((v || 0) / 100);
   return (
     <>
-      <input
-        value={forma.nombre}
-        onChange={(e) => onCambiar({ nombre: e.target.value })}
-        aria-label="Nombre de la forma de pago"
-        className="w-full rounded-[3px] border px-2 py-1.5 text-[12.5px]"
-        style={{ background: "var(--papel)", borderColor: "var(--linea)", color: "var(--tinta)" }}
+      <CampoProtegido
+        texto
+        valor={forma.nombre}
+        onCambiar={(v) => onCambiar({ nombre: v })}
+        mostrar={(v) => v || "Sin nombre"}
+        etiqueta="el nombre de la forma de pago"
+        abiertoAlInicio={nueva}
       />
       <div title={`Con IVA: ${porcentaje(comisionRealTN(forma, tn))}`}>
-        <NumberCell
-          value={+((forma.comision || 0) * 100).toFixed(2)}
-          onChange={(v) => onCambiar({ comision: v / 100 })}
+        <CampoProtegido
+          valor={+((forma.comision || 0) * 100).toFixed(2)}
+          onCambiar={(v) => onCambiar({ comision: v / 100 })}
+          mostrar={pct}
           suffix="%"
+          etiqueta={`la comision de ${forma.nombre}`}
         />
       </div>
-      <NumberCell
-        value={+((forma.descuento || 0) * 100).toFixed(2)}
-        onChange={(v) => onCambiar({ descuento: v / 100 })}
+      <CampoProtegido
+        valor={+((forma.descuento || 0) * 100).toFixed(2)}
+        onCambiar={(v) => onCambiar({ descuento: v / 100 })}
+        mostrar={pct}
         suffix="%"
+        etiqueta={`el descuento de ${forma.nombre}`}
       />
-      <NumberCell value={forma.minimo || 0} onChange={(v) => onCambiar({ minimo: v })} />
+      <CampoProtegido
+        valor={forma.minimo || 0}
+        onCambiar={(v) => onCambiar({ minimo: v })}
+        mostrar={pesos}
+        etiqueta={`el minimo de ${forma.nombre}`}
+      />
       <button
         type="button"
         onClick={onQuitar}

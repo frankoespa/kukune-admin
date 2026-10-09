@@ -1956,6 +1956,7 @@ export default function App() {
           usos={usosPorPerfume}
           ajustes={ajustes}
           onAjustes={(campos) => setAjustes((a) => ({ ...a, ...campos }))}
+          onConfirmar={setDialogo}
           onExportarPrecios={exportarPrecios}
           exportando={armandoPrecios}
           onCambiar={cambiarPerfume}

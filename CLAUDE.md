@@ -226,16 +226,18 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - Cada perfume tiene `costo` y `precioPublico` (venta directa), **puestos a mano**.
   No se sugieren desde el último pedido: el costo de un pedido es lo que cobró
   ESE proveedor en ESA compra, y el del catálogo es la referencia actual.
-- **El `costo` está detrás de un doble clic** (`CostoProtegido` en
-  `Catalogo.jsx`). De ese número cuelga todo: márgenes y ganancias de los dos
+- **El `costo` está detrás de un doble clic** (`CampoProtegido`, en
+  `src/CampoProtegido.jsx`, compartido: también traba los ajustes de Tiendanube).
+  De ese número cuelga todo: márgenes y ganancias de los dos
   canales y, desde que se clavan márgenes, los precios calculados — pisarlo de un
   tecleo reprecia publicaciones en silencio. Trabado se ve como número suelto; se
   abre con doble clic o con Enter/Espacio si se llegó con Tab, y se traba sola al
   salir del campo o con Enter.
 - El gesto se anuncia, que es lo único que lo salva de parecer una celda rota:
   candado al pasar el mouse, borde que aparece, `title` y `aria-label` que dicen
-  qué hacer. Si algún día se protege otro campo, copiar esa parte, no solo el
-  doble clic.
+  qué hacer. Para proteger otro campo, usar `CampoProtegido` (trae todo eso:
+  `mostrar` dice cómo se ve trabado, `texto` lo vuelve campo de texto y
+  `abiertoAlInicio` es para lo recién creado), no copiar solo el doble clic.
 - **Escape deshace** lo tipeado y vuelve al costo que había al abrir. Hace falta
   porque `NumberCell` escribe en cada tecla: sin eso, el error ya está guardado
   antes de que lo veas.
@@ -447,9 +449,18 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   número" y la tabla por forma de pago. El precio grande va en **tinta**, no en
   ámbar como en el HTML original: el ámbar es solo la ganancia.
 - Las formas por defecto (`FORMAS_TN_POR_DEFECTO`, ids fijos) viven en
-  `almacenamiento.js`. Al leer, las guardadas **reemplazan enteras** a las de
-  ejemplo (una lista no se mezcla). Abrir la app no escribe: la clave recién
-  aparece en `perfumes.json` con la primera edición del catálogo.
+  `almacenamiento.js`, solo como arranque de un archivo sin la clave. Al leer,
+  las guardadas **reemplazan enteras** a las de ejemplo (una lista no se
+  mezcla). Abrir la app no escribe: la clave recién aparece en `perfumes.json`
+  con la primera edición del catálogo.
+- **Los ajustes de Tiendanube van con candado** (`CampoProtegido`): envío
+  gratis, comisión TN, y nombre, comisión, descuento y mínimo de cada forma de
+  pago. Cada uno reprecia todos los perfumes clavados. El selector de redondeo y
+  el botón que despliega las formas quedan sin candado. Una forma recién
+  agregada nace con el nombre abierto para escribir.
+- **Quitar una forma de pago pide confirmación** con el `Dialogo` de `App.jsx`
+  (llega como `onConfirmar` por `Catalogo`). Ya no existe "Volver a los
+  ejemplos": pisaba de un clic las formas que Franco había cargado.
 - Zona de color `--zona-tn` / `--zona-tn-honda`. No va al PDF de precios ni al
   orden "Por margen" (que siguen mirando la venta directa).
 

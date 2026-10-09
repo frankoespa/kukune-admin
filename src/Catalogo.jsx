@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Plus, Trash2, ImagePlus, Search, X, FileDown, Lock, ListTree } from "lucide-react";
+import { Plus, Trash2, ImagePlus, Search, X, FileDown, ListTree } from "lucide-react";
 import { urlFoto } from "./almacenamiento";
 import {
   analisisDePrecio,
@@ -12,6 +12,7 @@ import {
 } from "./precios";
 import { AjustesTiendaNube, DetalleTiendaNube, SelectorRedondeo } from "./TiendaNube";
 import { NumberCell } from "./NumberCell";
+import { CampoProtegido } from "./CampoProtegido";
 import { pctSinMiles as pctCorto } from "./numeros";
 
 /* Una sola fuente para las columnas del encabezado y de las filas. Si se
@@ -164,6 +165,7 @@ export default function Catalogo({
   onBorrar,
   onFoto,
   onAjustes,
+  onConfirmar,
   onExportarPrecios,
   exportando,
 }) {
@@ -419,7 +421,11 @@ export default function Catalogo({
           </div>
         </div>
 
-        <AjustesTiendaNube tn={ajustes.tiendaNube} onCambiar={(tn) => onAjustes({ tiendaNube: tn })} />
+        <AjustesTiendaNube
+          tn={ajustes.tiendaNube}
+          onCambiar={(tn) => onAjustes({ tiendaNube: tn })}
+          onConfirmar={onConfirmar}
+        />
       </div>
 
       {visibles.length === 0 ? (
@@ -537,86 +543,6 @@ function EncabezadoCatalogo({ planes, columnas }) {
   );
 }
 
-/* El costo, detrás de un doble clic.
-
-   De este número cuelga todo lo demás: el margen y la ganancia de la venta
-   directa y de cada plan de ML, y —desde que se pueden clavar márgenes— los
-   precios calculados. Pisarlo de un tecleo no rompe una celda: repreciar
-   publicaciones en silencio.
-
-   Trabado se ve como número suelto, igual que lo calculado. El problema del
-   doble clic es que no se ve, así que la celda se anuncia: candado al pasar el
-   mouse, `title` que lo explica, y es un `<button>` de verdad —se llega con Tab
-   y se abre con Enter—, no un div con un handler.
-
-   Escape deshace: `NumberCell` escribe en cada tecla, así que sin esto un error
-   ya quedó guardado antes de darte cuenta. */
-function CostoProtegido({ valor, onCambiar }) {
-  const [editando, setEditando] = useState(false);
-  const caja = useRef(null);
-  const valorAlAbrir = useRef(null);
-
-  const abrir = () => {
-    valorAlAbrir.current = valor ?? 0;
-    setEditando(true);
-  };
-
-  // Al abrir, el foco va al campo con el número seleccionado: escribir reemplaza
-  // el costo sin tener que borrarlo a mano.
-  useEffect(() => {
-    if (!editando) return;
-    const input = caja.current?.querySelector("input");
-    input?.focus();
-    input?.select();
-  }, [editando]);
-
-  if (!editando) {
-    return (
-      <div className="px-1.5">
-        <button
-          type="button"
-          onDoubleClick={abrir}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              abrir();
-            }
-          }}
-          title="Doble clic para editar el costo"
-          aria-label={`Costo ${pesos(valor)} — doble clic para editarlo`}
-          className="group/costo flex w-full items-center justify-end gap-1 rounded-[3px] border border-transparent px-1.5 py-1.5 transition hover:border-[var(--linea)] hover:bg-[var(--vidrio)]"
-        >
-          <Lock
-            size={11}
-            className="opacity-0 transition group-hover/costo:opacity-100"
-            style={{ color: "var(--humo-claro)" }}
-          />
-          <span className="k-num text-[13px]" style={{ color: "var(--tinta)" }}>
-            {valor > 0 ? pesos(valor) : "—"}
-          </span>
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      ref={caja}
-      className="px-1.5"
-      onBlur={() => setEditando(false)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") setEditando(false);
-        if (e.key === "Escape") {
-          onCambiar(valorAlAbrir.current); // deshace lo tipeado
-          setEditando(false);
-        }
-      }}
-    >
-      <NumberCell value={valor ?? 0} onChange={onCambiar} />
-    </div>
-  );
-}
-
 /* Las celdas de plata de una fila: el costo, la venta directa, y después una
    pareja de columnas por cada publicación de Mercado Libre.
 
@@ -702,10 +628,16 @@ function Precios({
 
   return (
     <>
-      <CostoProtegido
-        valor={perfume.costo}
-        onCambiar={(v) => onCambiar(perfume.id, { costo: v })}
-      />
+      {/* De este número cuelga todo lo demás —márgenes, ganancias y los precios
+           clavados—: va detrás de un doble clic (`CampoProtegido`). */}
+      <div className="px-1.5">
+        <CampoProtegido
+          valor={perfume.costo}
+          onCambiar={(v) => onCambiar(perfume.id, { costo: v })}
+          mostrar={(v) => (v > 0 ? pesos(v) : "—")}
+          etiqueta="el costo"
+        />
+      </div>
 
       {/* ---- Venta directa: precio y margen son un par ----
            Clavado el margen, el precio pasa a ser calculado y se muestra sin
