@@ -253,20 +253,42 @@ const aplicaTN = (forma, precio) => {
 /* Qué deja un precio con cada forma de pago.
    `define` es la forma que aplica y deja MENOS: la que manda en el precio.
    El margen es esa ganancia sobre el costo, así se compara de igual a igual con
-   el de la venta directa y el de cada plan de ML. */
-export function analisisTiendaNube({ costo, precio, ajustesTN = {} }) {
+   el de la venta directa y el de cada plan de ML.
+
+   `cupon` simula un cupón de Tiendanube (`{ porcentaje, monto, combinable }`,
+   fracción, pesos y si se combina con el descuento del medio de pago). Vale para
+   TODAS las formas de pago. Sigue el orden de la ayuda de Tiendanube ("reglas
+   para combinar descuentos"): el cupón va 3° y se aplica sobre el subtotal; el
+   descuento por medio de pago va 5°, "el último en la cadena":
+   · primero el cupón (% y $) sobre el precio;
+   · después, si es combinable, el descuento de la forma sobre lo que quedó. Así
+     los % se acumulan multiplicando (10% y después 25% = 32,5%);
+   · si NO es combinable, el medio de pago pierde su descuento: según esa misma
+     ayuda, el de medio de pago "solo aplica si los anteriores son combinables".
+   El mínimo de una forma se mide contra la compra ya con el cupón. Sin cupón el
+   resultado es el de siempre: el cupón no toca ningún precio. */
+export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon }) {
   const c = Number(costo) || 0;
   const p = Number(precio) || 0;
   const envio = Number(ajustesTN.envioGratis) || 0;
   const tn = Number(ajustesTN.comision) || 0;
+  const cuponPct = Math.min(1, Math.max(0, Number(cupon?.porcentaje) || 0));
+  const cuponMonto = Math.max(0, Number(cupon?.monto) || 0);
+  const conCupon = cuponPct > 0 || cuponMonto > 0;
+  const combinable = cupon?.combinable !== false;
+  // El cupón va primero, sobre el precio.
+  const conElCupon = Math.max(0, p * (1 - cuponPct) - cuponMonto);
 
   const formas = (ajustesTN.formas ?? []).map((forma) => {
     const descuento = Number(forma.descuento) || 0;
     const base = (Number(forma.comision) || 0) + tn;
     const real = base * (1 + IVA);
-    const paga = p * (1 - descuento);
+    // Después, el descuento del medio de pago —si se combina con el cupón—.
+    const aplicaDescuento = !conCupon || combinable;
+    const paga = conElCupon * (1 - (aplicaDescuento ? descuento : 0));
     const valida = descuento < 1 && real < 1;
-    const aplica = aplicaTN(forma, p);
+    const minimo = Number(forma.minimo) || 0;
+    const aplica = minimo <= 0 || paga >= minimo;
     const comision = paga * base;
     const iva = comision * IVA;
     const llega = paga - comision - iva;
@@ -274,6 +296,8 @@ export function analisisTiendaNube({ costo, precio, ajustesTN = {} }) {
       forma,
       valida,
       aplica,
+      // false cuando un cupón no combinable le saca su descuento a la forma.
+      conDescuento: aplicaDescuento && descuento > 0,
       minimo: Number(forma.minimo) || 0,
       paga,
       comision,

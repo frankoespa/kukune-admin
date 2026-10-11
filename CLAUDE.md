@@ -419,6 +419,14 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   quedó como el atajo con las medidas de la cuadrícula del proveedor.
 
 ## Tiendanube en el catálogo
+- **Fuente de verdad sobre cómo cobra y descuenta Tiendanube: su Centro de
+  Ayuda**, https://ayuda.tiendanube.com/. Antes de tocar comisiones, cupones,
+  promociones o medios de pago, mirar ahí si algo cambió, en vez de suponer.
+  Artículos ya usados:
+  - Reglas para combinar descuentos (orden de prioridad, "Combinar con"):
+    https://ayuda.tiendanube.com/es_AR/123465-cupones-y-promociones/cuales-son-las-reglas-para-combinar-descuentos-en-tiendanube
+  - Cómo funcionan las promociones y los descuentos:
+    https://ayuda.tiendanube.com/es_MX/como-funcionan-las-promociones-y-los-descuentos-en-tiendanube
 - Tercer canal, después de ML: **un solo precio** (`precioTN`) que tiene que dejar
   la ganancia pedida **pague como pague el cliente**. Viene de una calculadora
   HTML que Franco ya usaba; los casos de prueba de ella son la referencia:
@@ -458,6 +466,22 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   pago. Cada uno reprecia todos los perfumes clavados. El selector de redondeo y
   el botón que despliega las formas quedan sin candado. Una forma recién
   agregada nace con el nombre abierto para escribir.
+- **Simular cupón** en el detalle (`DetalleTiendaNube`): % y $ que se pueden
+  usar juntos, más un tilde **"Se combina con el descuento del medio de pago"**
+  (activado por defecto, es como suele armar Franco sus cupones). Vale para
+  **todas** las formas de pago. Sigue el orden de la ayuda de Tiendanube
+  ("¿Cuáles son las reglas para combinar descuentos?"): el cupón va 3° y se
+  aplica sobre el subtotal; el descuento por medio de pago va 5°, último.
+  - Primero el cupón (% y $) sobre el precio; después, si combina, el
+    descuento de la forma sobre lo que quedó (10% y después 25% = 32,5%;
+    `($100.000 − $5.000) × 0,75 = $71.250`).
+  - Sin combinar, la forma **pierde su descuento**: esa ayuda dice que el de
+    medio de pago "solo aplica si los anteriores son combinables". La fila lo
+    dice ("sin su −25% (no combina)").
+  - El mínimo de una forma se mide contra la compra ya con el cupón.
+  - Es estado local del panel: se pierde al cerrarlo, no se guarda y no toca
+    precios. La cuenta es el parámetro `cupon` de `analisisTiendaNube()`; sin
+    cupón da exactamente lo de siempre.
 - **Quitar una forma de pago pide confirmación** con el `Dialogo` de `App.jsx`
   (llega como `onConfirmar` por `Catalogo`). Ya no existe "Volver a los
   ejemplos": pisaba de un clic las formas que Franco había cargado.
