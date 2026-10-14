@@ -38,6 +38,7 @@ import {
   urlFoto,
 } from "./almacenamiento";
 import Catalogo, { buscarPerfumes, ConVistaPrevia } from "./Catalogo";
+import MercadoLibre from "./MercadoLibre";
 import { resolverPrecios, resolverPreciosDelCatalogo } from "./precios";
 import { NumberCell } from "./NumberCell";
 import { ContextoBloqueo, useBloqueo } from "./bloqueo";
@@ -1820,6 +1821,7 @@ export default function App() {
               {[
                 ["pedido", "Mesa de precios"],
                 ["catalogo", "Catálogo"],
+                ["mercadolibre", "Mercado Libre"],
               ].map(([id, texto]) => (
                 <button
                   key={id}
@@ -1961,11 +1963,21 @@ export default function App() {
           exportando={armandoPrecios}
           onCambiar={cambiarPerfume}
           onSoltarMargen={soltarMargenDelCatalogo}
-          onSoltarMargenML={soltarMargenMLDelCatalogo}
           onSoltarMargenTN={soltarMargenTNDelCatalogo}
           onCrear={crearPerfume}
           onBorrar={borrarPerfume}
           onFoto={ponerFoto}
+        />
+      )}
+
+      {vista === "mercadolibre" && (
+        <MercadoLibre
+          perfumes={perfumesResueltos}
+          ajustes={ajustes}
+          onAjustes={(campos) => setAjustes((a) => ({ ...a, ...campos }))}
+          onCambiar={cambiarPerfume}
+          onSoltarMargenML={soltarMargenMLDelCatalogo}
+          onConfirmar={setDialogo}
         />
       )}
 

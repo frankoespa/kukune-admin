@@ -1,15 +1,8 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Plus, Trash2, ImagePlus, Search, X, FileDown, ListTree } from "lucide-react";
 import { urlFoto } from "./almacenamiento";
-import {
-  analisisDePrecio,
-  analisisTiendaNube,
-  margenesDePlanes,
-  planesPublicables,
-  precioTiendaNubeDesdeMargen,
-  preciosDePlanes,
-} from "./precios";
+import { analisisDePrecio, analisisTiendaNube, precioTiendaNubeDesdeMargen } from "./precios";
 import { AjustesTiendaNube, DetalleTiendaNube, SelectorRedondeo } from "./TiendaNube";
 import { NumberCell } from "./NumberCell";
 import { CampoProtegido } from "./CampoProtegido";
@@ -19,32 +12,27 @@ import { pctSinMiles as pctCorto } from "./numeros";
    escribieran por separado se desalinean al primer cambio de ancho, que es
    exactamente el error que ya se pagó en el diálogo de costos del pedido.
 
-   Va como `gridTemplateColumns` en línea y no como clase de Tailwind porque la
-   cantidad de columnas depende de cuántos planes de pago se publiquen: Tailwind
-   genera sus clases leyendo el código, así que una clase armada en tiempo de
-   ejecución (`grid-cols-[...]`) no existiría en el CSS.
+   Va como `gridTemplateColumns` en línea, igual que en la pestaña de Mercado
+   Libre, donde sí hace falta: ahí la cantidad de columnas depende de cuántos
+   planes se publiquen y una clase de Tailwind armada en tiempo de ejecución no
+   existiría en el CSS.
 
    Columnas: foto · nombre · costo ‖ precio · margen · con envío · ganancia ‖
-             (precio · margen · ganancia) por cada plan de ML ‖
              precio · margen · ganancia de Tiendanube ‖ usos · borrar
+   Mercado Libre tiene su propia pestaña (`MercadoLibre.jsx`): acá no entraba.
    Sin `gap` horizontal a propósito: el aire lo pone cada celda con su padding,
    así el color de cada canal es una franja continua. */
-const columnasDeCatalogo = (planes) =>
+const COLUMNAS_CATALOGO =
   [
     "52px minmax(180px,1fr) 100px",
     // Precio y Margen pegados: son un par que se maneja junto, igual que en la
     // tabla del pedido. Con envío y Ganancia salen de ellos.
     "104px 88px 96px 100px",
-    // Por plan: precio · margen · ganancia, el mismo trío que la venta directa.
-    planes.map(() => "112px 88px 100px").join(" "),
     // Tiendanube: un solo precio, que cubre la forma de pago más cara.
     "124px 88px 100px",
     "72px 32px",
   ].join(" ");
 
-const PLANES_DE_CUOTAS = [3, 6, 9, 12];
-
-const nombreDePlan = (plan) => (plan === 1 ? "1 pago" : `${plan} cuotas`);
 
 /* Lo que ve una fila de un perfume que no está en ningún pedido. Constante y no
    un literal nuevo por render: si no, cada fila recibe un objeto distinto. */
@@ -159,7 +147,6 @@ export default function Catalogo({
   ajustes,
   onCambiar,
   onSoltarMargen,
-  onSoltarMargenML,
   onSoltarMargenTN,
   onCrear,
   onBorrar,
@@ -173,10 +160,7 @@ export default function Catalogo({
   const [soloSinFoto, setSoloSinFoto] = useState(false);
   const [porMargen, setPorMargen] = useState(false);
   const [nuevo, setNuevo] = useState("");
-  /* Un pago siempre, más los planes con comisión cargada: cada uno es una
-     publicación distinta en ML y tiene su propio precio. */
-  const planes = useMemo(() => planesPublicables(ajustes.cuotasML), [ajustes.cuotasML]);
-  const columnas = columnasDeCatalogo(planes);
+  const columnas = COLUMNAS_CATALOGO;
 
   const sinFoto = perfumes.filter((p) => !p.foto).length;
   const conPrecio = perfumes.filter((p) => (p.precioPublico || 0) > 0).length;
@@ -355,72 +339,6 @@ export default function Catalogo({
           </p>
         </div>
 
-        <div
-          className="flex-1 rounded-[4px] border px-3 py-2.5"
-          style={{ background: "var(--zona-ml)", borderColor: "var(--zona-ml-honda)" }}
-        >
-          <span className="k-col mb-2 block" style={{ color: "var(--tinta)" }}>
-            Mercado Libre
-          </span>
-          <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
-            <label className="block">
-              <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
-                Comision
-              </span>
-              <div className="w-[88px]">
-                <NumberCell
-                  value={+((ajustes.comisionML || 0) * 100).toFixed(2)}
-                  onChange={(v) => onAjustes({ comisionML: v / 100 })}
-                  suffix="%"
-                />
-              </div>
-            </label>
-            <label className="block">
-              <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
-                Envio ML
-              </span>
-              <div className="w-[96px]">
-                <NumberCell value={ajustes.envioML || 0} onChange={(v) => onAjustes({ envioML: v })} />
-              </div>
-            </label>
-            <SelectorRedondeo
-              valor={ajustes.redondeoML}
-              onCambiar={(redondeoML) => onAjustes({ redondeoML })}
-            />
-
-            {/* Comision EXTRA de cada plan: ML la cobra ademas de la comision
-                normal, sobre el mismo precio publicado. */}
-            <div>
-              <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
-                Comision extra por cuotas
-              </span>
-              <div className="flex items-end gap-2">
-                {PLANES_DE_CUOTAS.map((n) => (
-                  <label key={n} className="block">
-                    <span className="k-col mb-1 block text-center" style={{ color: "var(--humo-claro)" }}>
-                      {n}x
-                    </span>
-                    <div className="w-[78px]">
-                      <NumberCell
-                        value={+((ajustes.cuotasML?.[n] || 0) * 100).toFixed(2)}
-                        onChange={(v) =>
-                          onAjustes({ cuotasML: { ...(ajustes.cuotasML || {}), [n]: v / 100 } })
-                        }
-                        suffix="%"
-                      />
-                    </div>
-                  </label>
-                ))}
-              </div>
-              <p className="mt-1.5 text-[11px]" style={{ color: "var(--humo)" }}>
-                El plan que tenga comision cargada aparece como columna: es una
-                publicacion aparte, con su propio precio.
-              </p>
-            </div>
-
-          </div>
-        </div>
-
         <AjustesTiendaNube
           tn={ajustes.tiendaNube}
           onCambiar={(tn) => onAjustes({ tiendaNube: tn })}
@@ -449,8 +367,8 @@ export default function Catalogo({
         </div>
       ) : (
         <div className="overflow-x-auto pb-2">
-          <div style={{ minWidth: 824 + planes.length * 300 + 312 }}>
-            <EncabezadoCatalogo planes={planes} columnas={columnas} />
+          <div style={{ minWidth: 824 + 312 }}>
+            <EncabezadoCatalogo columnas={columnas} />
             <ul className="grid gap-1.5">
               {visibles.map((p) => (
                 <FilaPerfume
@@ -458,11 +376,9 @@ export default function Catalogo({
                   perfume={p}
                   usos={usos[p.id] ?? SIN_USOS}
                   ajustes={ajustes}
-                  planes={planes}
                   columnas={columnas}
                   onCambiar={onCambiar}
                   onSoltarMargen={onSoltarMargen}
-                  onSoltarMargenML={onSoltarMargenML}
                   onSoltarMargenTN={onSoltarMargenTN}
                   onBorrar={onBorrar}
                   onFoto={onFoto}
@@ -477,12 +393,12 @@ export default function Catalogo({
 }
 
 /* El encabezado de la tabla, en dos niveles como la del pedido: arriba los
-   canales —y una banda por cada publicación de ML— y abajo las columnas. Recibe
+   canales y abajo las columnas. Recibe
    las mismas `columnas` que las filas y lleva el mismo `border` (transparente)
    para que el borde de la fila no le corra las columnas un píxel.
    Va `sticky` contra la ventana: esta pantalla scrollea con la página, no tiene
    contenedor propio como la tabla del pedido. */
-function EncabezadoCatalogo({ planes, columnas }) {
+function EncabezadoCatalogo({ columnas }) {
   const grupo = (texto, fondo, span) => (
     <span
       className="k-col px-2 py-1.5"
@@ -504,17 +420,6 @@ function EncabezadoCatalogo({ planes, columnas }) {
           Perfume
         </span>
         {grupo("Venta directa", "var(--zona-directa-honda)", 4)}
-        {/* Un grupo por plan: cada publicación de ML es una publicación distinta,
-            con su precio y su ganancia. */}
-        {planes.map((plan) => (
-          <span
-            key={plan}
-            className="k-col px-2 py-1.5"
-            style={{ background: "var(--zona-ml-honda)", color: "var(--tinta)", gridColumn: "span 3" }}
-          >
-            Mercado Libre · {nombreDePlan(plan)}
-          </span>
-        ))}
         {grupo("Tiendanube", "var(--zona-tn-honda)", 3)}
         <span className="col-span-2" />
       </div>
@@ -526,13 +431,6 @@ function EncabezadoCatalogo({ planes, columnas }) {
         {col("Margen", "var(--zona-directa)")}
         {col("Con envio", "var(--zona-directa)")}
         {col("Ganancia", "var(--zona-directa)")}
-        {planes.map((plan) => (
-          <Fragment key={plan}>
-            {col("Precio", "var(--zona-ml)")}
-            {col("Margen", "var(--zona-ml)")}
-            {col("Ganancia", "var(--zona-ml)")}
-          </Fragment>
-        ))}
         {col("Precio", "var(--zona-tn)")}
         {col("Margen", "var(--zona-tn)")}
         {col("Ganancia", "var(--zona-tn)")}
@@ -543,34 +441,22 @@ function EncabezadoCatalogo({ planes, columnas }) {
   );
 }
 
-/* Las celdas de plata de una fila: el costo, la venta directa, y después una
-   pareja de columnas por cada publicación de Mercado Libre.
+/* Las celdas de plata de una fila: el costo, la venta directa y Tiendanube.
 
-   Los dos canales se leen como territorios porque tienen fondo propio
-   (`--zona-directa` / `--zona-ml`). El ámbar no se usa para eso: sigue siendo
+   Los canales se leen como territorios porque tienen fondo propio
+   (`--zona-directa` / `--zona-tn`). El ámbar no se usa para eso: sigue siendo
    solo la ganancia.
 
    El envío de Rosario NO entra en ninguna cuenta: aparece como "con envío", el
    precio que se le cotiza al cliente cuando hay que llevárselo. */
-function Precios({
-  perfume,
-  ajustes,
-  planes,
-  onCambiar,
-  onSoltarMargen,
-  onSoltarMargenML,
-  onSoltarMargenTN,
-}) {
+function Precios({ perfume, ajustes, onCambiar, onSoltarMargen, onSoltarMargenTN }) {
+  // Sin planes: los de ML se miran en su pestaña.
   const r = analisisDePrecio({
     costo: perfume.costo,
     precioPublico: perfume.precioPublico,
     perfume,
-    comisionML: ajustes.comisionML,
-    envioML: ajustes.envioML,
     envioLocal: ajustes.envioLocal,
-    cuotasML: ajustes.cuotasML,
-    planes,
-    redondeoML: ajustes.redondeoML,
+    planes: [],
   });
 
   const cifra = (contenido, { fondo, color, titulo, fuerte }) => (
@@ -609,22 +495,6 @@ function Precios({
           margen: r.directo.ganancia / Number(perfume.costo),
           ajustesTN: ajustes.tiendaNube,
         })?.precio ?? null;
-
-  /* Cada plan guarda su precio. Al escribir el mapa nuevo se deja de escribir el
-     `precioML` viejo: su valor ya vive en `preciosML["1"]` y tener los dos sería
-     tener dos verdades. */
-  /* Clavar el margen de un plan: el precio de ESE plan pasa a salir de acá.
-     Los demás planes y la venta directa no se enteran. */
-  const ponerMargen = (plan, margen) =>
-    onCambiar(perfume.id, {
-      margenesML: { ...margenesDePlanes(perfume), [plan]: margen },
-    });
-
-  const ponerPrecio = (plan, valor) =>
-    onCambiar(perfume.id, {
-      preciosML: { ...preciosDePlanes(perfume), [plan]: valor },
-      precioML: undefined,
-    });
 
   return (
     <>
@@ -717,98 +587,6 @@ function Precios({
                 r.directo.ganancia
               )} por unidad, sobre un costo de ${pesos(perfume.costo)}. El envío no entra: se cobra aparte.`,
       })}
-
-      {/* ---- Una publicación de Mercado Libre por plan ----
-           Mismo trato que la venta directa: precio y margen son un par, y con el
-           margen clavado el precio pasa a ser calculado. Cada plan se clava por
-           separado — podés tener 1 pago a mano y 6 cuotas clavado. */}
-      {r.ml.map((x) => (
-        <Fragment key={x.plan}>
-          <div className="flex items-center gap-1 px-1.5" style={{ background: "var(--zona-ml)" }}>
-            {x.margenObjetivo != null ? (
-              <div className="flex-1 px-0.5 text-right">
-                <span className="k-num text-[13px] font-semibold" style={{ color: "var(--tinta)" }}>
-                  {x.precio > 0 ? pesos(x.precio) : "—"}
-                </span>
-              </div>
-            ) : (
-              <>
-                <div className="min-w-0 flex-1">
-                  <NumberCell value={x.precio || 0} onChange={(v) => ponerPrecio(x.plan, v)} />
-                </div>
-                {/* Atajo, no obligación: completa el precio que en ESTE plan deja
-                    la misma ganancia que vendiendo directo. */}
-                {x.sugerido !== null && x.sugerido !== x.precio && (
-                  <button
-                    onClick={() => ponerPrecio(x.plan, x.sugerido)}
-                    title={`Poner ${pesos(x.sugerido)}: publicando a ese precio en ${nombreDePlan(
-                      x.plan
-                    )} te queda lo mismo que vendiendo directo`}
-                    aria-label={`Igualar el precio de ${nombreDePlan(x.plan)} de ${
-                      perfume.nombre
-                    } a la ganancia directa`}
-                    className="k-num shrink-0 px-1 text-[13px] opacity-0 transition group-hover:opacity-100 focus:opacity-100"
-                    style={{ color: "var(--humo)" }}
-                  >
-                    =
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-          <div
-            className="relative px-1.5"
-            style={{ background: "var(--zona-ml)" }}
-            title={x.margenObjetivo != null ? margenReal(x.margenObjetivo, x.margen) : undefined}
-          >
-            {sinCosto ? (
-              <div className="px-0.5 text-right" title="Cargá el costo para poder fijar un margen">
-                <span className="k-num text-[13px]" style={{ color: "var(--humo-claro)" }}>
-                  —
-                </span>
-              </div>
-            ) : (
-              <NumberCell
-                value={+((x.margenObjetivo ?? x.margen ?? 0) * 100).toFixed(1)}
-                onChange={(v) => ponerMargen(x.plan, v / 100)}
-                suffix="%"
-                className={x.margenObjetivo != null ? "font-semibold" : ""}
-                style={
-                  x.margenObjetivo != null
-                    ? { borderLeft: "3px solid var(--ambar)", background: "#FFFDF7" }
-                    : undefined
-                }
-              />
-            )}
-            {x.margenObjetivo != null && (
-              <button
-                type="button"
-                onClick={() => onSoltarMargenML(perfume.id, x.plan, x.precio)}
-                title="Soltar el margen y volver a poner el precio a mano"
-                aria-label={`Soltar el margen de ${nombreDePlan(x.plan)} de ${perfume.nombre}`}
-                className="absolute -right-0.5 -top-1.5 rounded-full bg-white p-0.5 transition"
-                style={{ color: "var(--humo)", boxShadow: "0 0 0 1px var(--linea)" }}
-              >
-                <X size={10} />
-              </button>
-            )}
-          </div>
-          {cifra(x.ganancia === null ? "—" : pesos(x.ganancia), {
-            fondo: "var(--zona-ml)",
-            color: colorGanancia(x.ganancia),
-            fuerte: true,
-            titulo:
-              x.ganancia === null
-                ? `Poné costo y precio para ver qué te deja en ${nombreDePlan(x.plan)}`
-                : `En ${nombreDePlan(x.plan)}, después de la comisión (${pctCorto(
-                    x.comision
-                  )}) y el envío de ML: ${pesos(x.ganancia)}.` +
-                  (x.sugerido === null
-                    ? ""
-                    : ` Para igualar la venta directa habría que publicar ${pesos(x.sugerido)}.`),
-          })}
-        </Fragment>
-      ))}
 
       {/* ---- Tiendanube: un solo precio para todas las formas de pago ----
            El mismo par precio + margen. El margen que se muestra es el de la
@@ -919,12 +697,12 @@ function Precios({
 
 /* Con el margen clavado la celda muestra el margen PEDIDO, pero el precio pasa
    por el redondeo y deja un poco más. El `title` dice cuánto queda de verdad. */
-const margenReal = (pedido, real) =>
+export const margenReal = (pedido, real) =>
   real == null
     ? "Margen clavado: el precio sale de acá"
     : `Pediste ${pctCorto(pedido, 1)} · con el precio redondeado queda ${pctCorto(real, 1)}`;
 
-const pesos = (n) =>
+export const pesos = (n) =>
   new Intl.NumberFormat("es-AR", {
     style: "currency",
     currency: "ARS",
@@ -937,11 +715,9 @@ function FilaPerfume({
   perfume,
   usos,
   ajustes,
-  planes,
   columnas,
   onCambiar,
   onSoltarMargen,
-  onSoltarMargenML,
   onSoltarMargenTN,
   onBorrar,
   onFoto,
@@ -1024,10 +800,8 @@ function FilaPerfume({
       <Precios
         perfume={perfume}
         ajustes={ajustes}
-        planes={planes}
         onCambiar={onCambiar}
         onSoltarMargen={onSoltarMargen}
-        onSoltarMargenML={onSoltarMargenML}
         onSoltarMargenTN={onSoltarMargenTN}
       />
 
