@@ -360,6 +360,8 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - La comisión y el envío de ML del catálogo viven en `perfumes.json` bajo
   `ajustes`, no en cada pedido: el precio de lista no depende de a quién le
   compraste. `AJUSTES_POR_DEFECTO` está en `almacenamiento.js`.
+- **Cada cambio de `costo` queda asentado en `historialCostos`** (ver "Ventas de
+  Mercado Libre"): las ventas se miden contra el costo de su momento.
 - **"Pasar costos al catálogo"** copia el Precio sin Ganancia al `costo` del
   perfume. Hay dos disparadores sobre la misma función: el botón de la banda de
   acciones, que toma **todas las filas incluidas**, y un atajo **por fila** en la
@@ -498,7 +500,8 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 ## Conexión con Mercado Libre
 - Pestaña **Mercado Libre** (`vista === "mercadolibre"`). Además de los precios
   por plan, vincula cada plan con su publicación real y le manda precio y stock.
-  Publicar nuevos, ventas y preguntas todavía no están.
+  Además, la sección **Ventas** (ver abajo). Publicar nuevos y preguntas todavía
+  no están.
 - Es la app propia de Franco en el DevCenter (su ID está en `.env.local`). Es la
   **misma app que usa el conector de ML de Claude**, que solo da documentación:
   por eso tiene **dos Redirect URIs** — la de claude.ai (del conector, no
@@ -527,8 +530,33 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - **El vínculo:** `publicacionesML` en el perfume, mapa `plan → MLA…`, gemelo de
   `preciosML`. Aparece en `perfumes.json` solo cuando Franco elige una
   publicación; sin la clave = sin vincular, sin migración. **Nunca se empareja
-  solo**: el buscador arranca con el nombre del perfume, pero se elige, y marca
-  las publicaciones ya usadas por otro plan.
+  solo**: el buscador arranca con el nombre del perfume, pero se elige.
+- El buscador **no muestra las publicaciones ya vinculadas** en otro lado (otro
+  plan, otro perfume, o la otra mitad —normal/catálogo— del mismo plan), salvo la
+  de ese mismo vínculo, con su tilde. Pedido de Franco: al vincular la de
+  catálogo aparecía la normal. Abajo hay un "Mostrar las N ya vinculadas" que
+  las trae marcadas "ya en …", para mover una sin desvincularla antes.
+- Las publicaciones de catálogo llevan el título del producto de ML, que **no
+  suele traer la medida** ("Lattafa Musamam Black Intense Eau De Parfum"). Por
+  eso el buscador de catálogo arranca con el nombre **sin** "100ml"
+  (`sinMedida`), y en los dos "100 ml" y "100ml" valen igual (`paraBuscar`).
+  Antes las de catálogo del Musamam no aparecían.
+- **Cada plan tiene dos vínculos: la publicación normal y la de catálogo.** La de
+  catálogo va en `publicacionesCatalogoML`, mapa gemelo `plan → MLA`, y **no**
+  adentro de `publicacionesML`: así lo que manda precios no cambió. **La de
+  catálogo no recibe precios ni stock desde la app**: ML la sincroniza sola con la
+  normal (doc "Publicar en catálogo": la sincronización es automática y no se
+  puede desactivar; Franco lo comprobó: actualizar la normal movió la de
+  catálogo). Se vincula para ver su precio y para que **Ventas** cuente sus
+  ventas con el perfume y su costo (`indiceDePublicaciones` lee los dos mapas; la
+  fila sale marcada "catálogo"). En la celda es el renglón chico de abajo, que
+  aparece solo si el plan ya tiene la normal; el buscador pone primero las de
+  catálogo, avisa que no recibe precios y no ofrece cambiar stock.
+- **ML pasa el precio a la de catálogo unos segundos después**, no en el mismo
+  momento. Por eso, tras "Actualizar precios en ML" se relee enseguida y otra vez
+  a los `RELEER_TRAS_ACTUALIZAR` (10 s). Mientras la normal ya tiene el precio de
+  la app y la de catálogo no, la de catálogo dice "sincronizando" en gris, no en
+  óxido: no es un error. Antes había que recargar la página para verla al día.
 - La celda "En ML" muestra el precio publicado: verde si coincide con el del
   catálogo, óxido si no (compara, no es ganancia: nada de ámbar).
 - **"Actualizar precios en ML"** relee las publicaciones, arma
@@ -543,6 +571,56 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   de su `vite-plugin-ml.js` un `fetch` falso que intercepta
   `api.mercadolibre.com` (y un `.env.local` con un secret de mentira). Las
   escrituras en ML real las decide Franco, una por una.
+
+## Ventas de Mercado Libre
+- Sección **Ventas** de la pestaña ML (selector Precios | Ventas, estado de
+  pantalla). **Solo lectura**: no escribe en ML ni en `datos/`. Piezas:
+  `GET /api/ml/ventas?desde&hasta` (AAAA-MM-DD, hora de Argentina) en
+  `vite-plugin-ml.js`, `gananciasDeVentas()` en `src/gananciasML.js` (pura,
+  probada desde Node) y la pantalla `src/VentasML.jsx`.
+- **`gananciasML.js` no se puede llamar `ventasML.js`**: en Windows choca con
+  `VentasML.jsx`, igual que `clienteML.js` con `MercadoLibre.jsx`. El build falla
+  con `"default" is not exported`.
+- De dónde sale cada número (doc oficial de ML, consultada con el conector):
+  - Órdenes: `/orders/search?seller=…&order.date_closed.from/to`, de a 50, tope
+    1000 (si hay más, la respuesta trae `truncado`). Cuentan `paid` y
+    `partially_refunded` (marcada); canceladas y sin pagar se cuentan aparte.
+  - Ingreso = `unit_price × quantity` (`unit_price` ya trae los descuentos).
+  - Comisión = `sale_fee × quantity`: **`sale_fee` es por unidad**. Se cruza con
+    `payments[].marketplace_fee`; si difieren en más de $1 la fila se marca. Si
+    eso aparece con ventas reales de varias unidades, el supuesto está mal.
+  - Envío = `senders[].cost` del vendedor en `/shipments/<id>/costs` (header
+    `x-format-new: true`; la FAQ de ML lo da como la fuente para conciliar). Un
+    carrito comparte envío entre varias órdenes: se pide **una vez por envío** y
+    se reparte entre sus ítems **por ingreso**, el último se lleva el redondeo y
+    la suma cierra exacta. Si ML no lo devuelve, la fila va con "?" y sin envío.
+  - Retenciones e impuestos no vienen en la orden (están en la facturación por
+    período): fuera, y la pantalla lo dice.
+- El cruce venta → perfume es `publicacionesML` y `publicacionesCatalogoML` de la
+  lista **resuelta**, nunca por nombre. Lo que no está vinculado va en una tabla aparte, con ingreso,
+  comisión, envío y "te queda" (en tinta: no es ganancia), **sin costo inventado**.
+  Un perfume vinculado sin costo: ganancia "—" y no entra en el total.
+- Ganancia = ingreso − comisión − envío − costo; margen = ganancia ÷ costo, la
+  misma cuenta que la columna Margen de los pedidos. Ámbar solo en la ganancia.
+- **El costo es el que regía en el instante de la venta**, no el de hoy (pedido
+  por Franco: el costo cambia después de vender). Para eso existe
+  `historialCostos: [{desde, costo}]` en el perfume, `src/historialCostos.js`:
+  - `registrarCosto(perfume, costo, ahora)` es **el único camino** para cambiar
+    un costo: lo usan `cambiarPerfume` (la celda del catálogo) y
+    `aplicarAlCatalogo` ("pasar costos al catálogo"). Si se agrega otro lugar que
+    escriba `costo`, tiene que pasar por ahí.
+  - `desde` es un instante ISO **con hora** (elegido por Franco: dos cambios en
+    el mismo día quedan los dos). `null` = "desde antes del historial": sale del
+    costo que había al primer cambio, así lo vendido antes usa ése.
+  - Cambios a menos de 2 minutos de la última entrada la **reemplazan**:
+    `NumberCell` escribe en cada tecla y "65000" dejaría 6, 65, 650… Volver al
+    costo anterior (Escape) quita la entrada.
+  - `costoEnFecha(perfume, instante)`: la última entrada con `desde <=` venta.
+    Si cae en la de `null` o el perfume no tiene historial, el costo va con `~`
+    (aproximado: no se sabe si antes hubo otros cambios).
+  - Abrir la app no escribe: el campo aparece en `perfumes.json` recién con el
+    primer cambio de costo de cada perfume.
+- En desarrollo la sección pide las ventas dos veces al entrar: es `StrictMode`.
 
 ## Fórmulas (idénticas al Excel)
 - Factor de Gasto = Costos Extras (ARS) ÷ Inversión Total (USD) → ARS por USD de costo

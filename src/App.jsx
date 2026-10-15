@@ -38,6 +38,7 @@ import {
   urlFoto,
 } from "./almacenamiento";
 import Catalogo, { buscarPerfumes, ConVistaPrevia } from "./Catalogo";
+import { registrarCosto } from "./historialCostos";
 import MercadoLibre from "./MercadoLibre";
 import { resolverPrecios, resolverPreciosDelCatalogo } from "./precios";
 import { NumberCell } from "./NumberCell";
@@ -1539,8 +1540,16 @@ export default function App() {
       )
     );
 
-  const cambiarPerfume = (id, campos) =>
-    setPerfumes((ps) => ps.map((p) => (p.id === id ? { ...p, ...campos } : p)));
+  /* El costo pasa por `registrarCosto`: deja asentado desde cuándo rige, para
+     que las ventas de ML se midan contra el costo de su momento. */
+  const cambiarPerfume = (id, { costo, ...campos }) =>
+    setPerfumes((ps) =>
+      ps.map((p) => {
+        if (p.id !== id) return p;
+        const conCampos = { ...p, ...campos };
+        return costo === undefined ? conCampos : registrarCosto(conCampos, costo);
+      })
+    );
 
   const borrarPerfume = (perfume) => {
     const u = usosPorPerfume[perfume.id] ?? { total: 0, enPantalla: 0, enOtros: 0, pedidos: [] };
@@ -1688,7 +1697,7 @@ export default function App() {
     const nuevos = new Map(
       lista.map((p) => [p.id, promediando && p.actual > 0 ? promediado(p) : p.nuevo])
     );
-    setPerfumes((ps) => ps.map((p) => (nuevos.has(p.id) ? { ...p, costo: nuevos.get(p.id) } : p)));
+    setPerfumes((ps) => ps.map((p) => (nuevos.has(p.id) ? registrarCosto(p, nuevos.get(p.id)) : p)));
     if (nuevos.size === 1) {
       // El aviso va donde estaba el ojo: en la propia fila, no en la banda.
       setPasadoEnFila(lista[0].id);

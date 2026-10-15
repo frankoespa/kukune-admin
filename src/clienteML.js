@@ -43,7 +43,20 @@ export const leerPublicacionesML = async () => (await pedir("/publicaciones")).p
 export const actualizarPublicacionML = (id, cambios) =>
   pedir(`/publicaciones/${id}`, { method: "PUT", body: JSON.stringify(cambios) });
 
+/* Solo lectura. `desde`/`hasta` en AAAA-MM-DD, hora de Argentina.
+   -> { ordenes, envios, total, truncado } (ver gananciasDeVentas en gananciasML.js) */
+export const leerVentasML = (desde, hasta) =>
+  pedir(`/ventas?${new URLSearchParams({ desde, hasta })}`);
+
 export const vinculosDe = (perfume) => perfume?.publicacionesML ?? {};
+
+/* La publicación de catálogo de cada plan, mapa gemelo (`plan → MLA`). Aparte y
+   no adentro de `publicacionesML` para que lo que manda precios no cambie: la de
+   catálogo no los recibe, ML se los sincroniza desde la normal. Sirve para ver
+   su precio y para que Ventas reconozca sus ventas. */
+export const vinculosCatalogoDe = (perfume) => perfume?.publicacionesCatalogoML ?? {};
+
+export const CAMPO_DE_VINCULO = { normal: "publicacionesML", catalogo: "publicacionesCatalogoML" };
 
 export const nombreDePlan = (plan) => (Number(plan) === 1 ? "1 pago" : `${plan} cuotas`);
 

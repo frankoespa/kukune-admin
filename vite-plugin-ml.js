@@ -23,6 +23,9 @@ import { loadEnv } from "vite";
    · POST /api/ml/autorizar/codigo       {pegado} → canjea el código por tokens
    · GET  /api/ml/publicaciones          todas las publicaciones del vendedor
    · PUT  /api/ml/publicaciones/<MLA…>   {price?, available_quantity?}
+   · GET  /api/ml/ventas?desde=AAAA-MM-DD&hasta=AAAA-MM-DD
+                                         órdenes del período + lo que cobró ML
+                                         por cada envío. Solo lectura.
 
    El refresh token de ML ROTA en cada uso: el viejo deja de valer. Por eso el
    nuevo se guarda siempre y las renovaciones van de a una (`renovando`): dos
@@ -36,6 +39,10 @@ const API = "https://api.mercadolibre.com";
 const AUTH = "https://auth.mercadolibre.com.ar/authorization";
 
 const ITEM_VALIDO = /^MLA\d+$/;
+const FECHA_VALIDA = /^\d{4}-\d{2}-\d{2}$/;
+const POR_PAGINA = 50;
+const TOPE_PAGINAS = 20; // 1000 órdenes
+const ENVIOS_A_LA_VEZ = 5;
 const ATRIBUTOS =
   "id,title,price,available_quantity,status,permalink,thumbnail,listing_type_id,variations,catalog_listing,catalog_product_id";
 
@@ -127,6 +134,7 @@ export default function pluginML() {
         headers: {
           Authorization: `Bearer ${t.access_token}`,
           ...(opciones.body ? { "content-type": "application/json" } : {}),
+          ...(opciones.headers || {}),
         },
       });
       const datos = await r.json().catch(() => ({}));
@@ -159,6 +167,56 @@ export default function pluginML() {
         for (const x of r) if (x.code === 200) items.push(resumir(x.body));
       }
       return items;
+    };
+
+    /* Ventas del período, por fecha de cierre (cuando se acreditó el pago, que
+       es también como ordena ML para el vendedor). Se traen todas las páginas
+       hasta TOPE_PAGINAS; si quedan más, se avisa con `truncado`. */
+    const ventas = async (userId, desde, hasta) => {
+      const ordenes = [];
+      let total = 0;
+      for (let pagina = 0; pagina < TOPE_PAGINAS; pagina++) {
+        const q = new URLSearchParams({
+          seller: String(userId),
+          "order.date_closed.from": `${desde}T00:00:00.000-03:00`,
+          "order.date_closed.to": `${hasta}T23:59:59.000-03:00`,
+          sort: "date_desc",
+          offset: String(pagina * POR_PAGINA),
+          limit: String(POR_PAGINA),
+        });
+        const r = await ml(`/orders/search?${q}`);
+        total = r.paging?.total ?? 0;
+        ordenes.push(...(r.results ?? []).map(resumirOrden));
+        if (!r.results?.length || ordenes.length >= total) break;
+      }
+
+      /* Lo que ML le cobró al vendedor por cada envío: `senders[].cost` de
+         /shipments/<id>/costs. Las órdenes de un mismo carrito comparten el
+         envío, así que se pide una vez por envío. De a ENVIOS_A_LA_VEZ: con un
+         mes de ventas son decenas de pedidos. Si uno falla queda `null` con el
+         motivo, y la venta se muestra igual. */
+      // Solo los de órdenes que cuentan (ESTADOS_QUE_CUENTAN en gananciasML.js):
+      // el envío de una cancelada no se usa.
+      const cuentan = ordenes.filter((o) => o.estado === "paid" || o.estado === "partially_refunded");
+      const ids = [...new Set(cuentan.map((o) => o.envioId).filter(Boolean))];
+      const envios = {};
+      for (let i = 0; i < ids.length; i += ENVIOS_A_LA_VEZ) {
+        await Promise.all(
+          ids.slice(i, i + ENVIOS_A_LA_VEZ).map(async (id) => {
+            try {
+              const c = await ml(`/shipments/${id}/costs`, { headers: { "x-format-new": "true" } });
+              const yo = (c.senders ?? []).find((s) => String(s.user_id) === String(userId));
+              envios[id] = {
+                costoVendedor: Number(yo?.cost) || 0,
+                pagoComprador: Number(c.receiver?.cost) || 0,
+              };
+            } catch (e) {
+              envios[id] = { error: e.message };
+            }
+          })
+        );
+      }
+      return { ordenes, envios, total, truncado: ordenes.length < total };
     };
 
     const cuerpo = async (req) => {
@@ -220,6 +278,17 @@ export default function pluginML() {
         if (req.method === "GET" && ruta === "/publicaciones") {
           const yo = await ml("/users/me");
           return responder(res, { publicaciones: await publicaciones(yo.id) });
+        }
+
+        if (req.method === "GET" && ruta === "/ventas") {
+          const q = new URL(req.url, "http://x").searchParams;
+          const desde = q.get("desde") ?? "";
+          const hasta = q.get("hasta") ?? "";
+          if (!FECHA_VALIDA.test(desde) || !FECHA_VALIDA.test(hasta))
+            throw new ErrorML(400, "Fechas inválidas (AAAA-MM-DD)");
+          if (desde > hasta) throw new ErrorML(400, "La fecha de inicio es posterior a la de fin");
+          const yo = await ml("/users/me");
+          return responder(res, { userId: yo.id, ...(await ventas(yo.id, desde, hasta)) });
         }
 
         const m = ruta.match(/^\/publicaciones\/([^/]+)$/);
@@ -287,4 +356,27 @@ const resumir = (x) => ({
   // Una publicación de catálogo es otra publicación, con su MLA y su precio,
   // aunque tenga el mismo título que la "normal" del mismo perfume.
   catalogo: !!x.catalog_listing,
+});
+
+/* Lo que la pantalla de ventas necesita de una orden. `unit_price` ya viene con
+   los descuentos aplicados; `sale_fee` es la comisión por unidad. La comisión de
+   los pagos (`marketplace_fee`) va aparte para poder cruzarla. */
+const resumirOrden = (o) => ({
+  id: o.id,
+  fecha: o.date_closed || o.date_created,
+  estado: o.status,
+  packId: o.pack_id ?? null,
+  envioId: o.shipping?.id ?? null,
+  comisionPagos: (o.payments ?? [])
+    .filter((p) => p.status === "approved")
+    .reduce((s, p) => s + (Number(p.marketplace_fee) || 0), 0),
+  items: (o.order_items ?? []).map((x) => ({
+    itemId: x.item?.id,
+    titulo: x.item?.title,
+    variacion: x.item?.variation_id ?? null,
+    cantidad: Number(x.quantity) || 0,
+    precioUnitario: Number(x.unit_price) || 0,
+    comisionUnitaria: Number(x.sale_fee) || 0,
+    tipo: x.listing_type_id,
+  })),
 });

@@ -86,10 +86,44 @@ export function BandaConexion({
 }
 
 /* ---------- La celda "En ML" de cada plan ----------
-   Sin vínculo: un botón para elegir la publicación. Con vínculo: el precio que
+   Dos vínculos por plan: la publicación normal (arriba) y, si existe, la de
+   catálogo (abajo, más chica). La de catálogo NO recibe precios desde acá: ML
+   la sincroniza sola con la normal. Se vincula para verla y para que sus ventas
+   cuenten en Ventas con el perfume y su costo. */
+export function CeldaPublicacion({
+  perfume,
+  plan,
+  precioCatalogo,
+  itemId,
+  itemCatalogo,
+  conectado,
+  publicaciones,
+  pubPorId,
+  usadas,
+  onVincular,
+  onStock,
+}) {
+  const comunes = { perfume, plan, precioCatalogo, conectado, publicaciones, pubPorId, usadas, onVincular, onStock };
+  // Si la normal ya tiene el precio de la app y la de catálogo no, es que ML
+  // todavía no la sincronizó: no es un error.
+  const normal = itemId ? pubPorId.get(itemId) : null;
+  const normalAlDia = !!normal && Number(normal.precio) === Number(precioCatalogo);
+  return (
+    <div className="flex flex-col px-1.5" style={{ background: "var(--zona-ml)" }}>
+      <BotonPublicacion tipo="normal" itemId={itemId} {...comunes} />
+      {/* Sin la normal no se ofrece la de catálogo: la de catálogo copia su precio. */}
+      {(itemId || itemCatalogo) && (
+        <BotonPublicacion tipo="catalogo" itemId={itemCatalogo} normalAlDia={normalAlDia} {...comunes} />
+      )}
+    </div>
+  );
+}
+
+/* Sin vínculo: un botón para elegir la publicación. Con vínculo: el precio que
    tiene publicado, en verde si coincide con el del catálogo y en óxido si no.
    Verde/óxido y no ámbar: esto compara, no es ganancia. */
-export function CeldaPublicacion({
+function BotonPublicacion({
+  tipo,
   perfume,
   plan,
   precioCatalogo,
@@ -100,10 +134,12 @@ export function CeldaPublicacion({
   usadas,
   onVincular,
   onStock,
+  normalAlDia = false,
 }) {
   const [abierto, setAbierto] = useState(false);
   const boton = useRef(null);
   const pub = itemId ? pubPorId.get(itemId) : null;
+  const deCatalogo = tipo === "catalogo";
 
   let contenido;
   let color = "var(--humo-claro)";
@@ -111,12 +147,14 @@ export function CeldaPublicacion({
   if (!itemId) {
     contenido = (
       <span className="flex items-center justify-end gap-1">
-        <Link2 size={12} /> vincular
+        <Link2 size={deCatalogo ? 10 : 12} /> {deCatalogo ? "catálogo" : "vincular"}
       </span>
     );
-    titulo = conectado
-      ? `Elegir la publicación de ${nombreDePlan(plan)} de ${perfume.nombre}`
-      : "Conectá Mercado Libre para vincular";
+    titulo = !conectado
+      ? "Conectá Mercado Libre para vincular"
+      : deCatalogo
+      ? `Elegir la publicación de catálogo de ${nombreDePlan(plan)} de ${perfume.nombre}. No recibe precios desde acá: ML la sincroniza con la normal.`
+      : `Elegir la publicación de ${nombreDePlan(plan)} de ${perfume.nombre}`;
   } else if (!publicaciones) {
     contenido = itemId;
     titulo = "Vinculada. Conectá Mercado Libre para ver su precio.";
@@ -126,32 +164,42 @@ export function CeldaPublicacion({
     titulo = `${itemId} ya no aparece entre tus publicaciones. Clic para cambiarla.`;
   } else {
     const coincide = Number(pub.precio) === Number(precioCatalogo);
-    contenido = pesos(pub.precio);
-    color = coincide ? "var(--verde)" : "var(--oxido)";
-    titulo = `${pub.titulo} (${pub.id}) · ${detallePublicacion(pub)}. ${
-      coincide ? "Mismo precio que el catálogo." : `El catálogo dice ${pesos(precioCatalogo)}.`
-    }`;
+    // La de catálogo atrasada con la normal ya al día: ML la está sincronizando.
+    const sincronizando = deCatalogo && !coincide && normalAlDia;
+    contenido = sincronizando ? "sincronizando" : pesos(pub.precio);
+    color = coincide ? "var(--verde)" : sincronizando ? "var(--humo)" : "var(--oxido)";
+    // En la de catálogo, "el catálogo" se confundiría con el catálogo de ML.
+    const nuestro = deCatalogo ? "la app" : "el catálogo";
+    titulo = `${deCatalogo ? "Publicación de catálogo: " : ""}${pub.titulo} (${pub.id}) · ${detallePublicacion(pub)}. ${
+      sincronizando
+        ? `Todavía tiene ${pesos(pub.precio)}: la normal ya tiene ${pesos(precioCatalogo)} y ML se lo pasa a la de catálogo en unos segundos. Se relee sola después de actualizar; si no, tocá Releer.`
+        : coincide
+        ? `Mismo precio que ${nuestro}.`
+        : `${deCatalogo ? "La app" : "El catálogo"} dice ${pesos(precioCatalogo)}.`
+    }${deCatalogo && !sincronizando ? " ML le sincroniza el precio desde la publicación normal." : ""}`;
   }
 
   return (
-    <div className="px-1.5" style={{ background: "var(--zona-ml)" }}>
+    <>
       <button
         ref={boton}
         type="button"
         disabled={!conectado}
         onClick={() => setAbierto(true)}
         title={titulo}
-        aria-label={`Publicación de ${nombreDePlan(plan)} de ${perfume.nombre}`}
-        className={`k-num w-full truncate rounded-[3px] px-1 py-1.5 text-right text-[12px] transition hover:bg-[var(--zona-ml-honda)] disabled:cursor-not-allowed ${
-          itemId ? "" : "opacity-60 group-hover:opacity-100"
-        }`}
+        aria-label={`Publicación ${deCatalogo ? "de catálogo " : ""}de ${nombreDePlan(plan)} de ${perfume.nombre}`}
+        className={`k-num w-full truncate rounded-[3px] px-1 text-right transition hover:bg-[var(--zona-ml-honda)] disabled:cursor-not-allowed ${
+          deCatalogo ? "py-0.5 text-[10.5px]" : "py-1.5 text-[12px]"
+        } ${itemId ? "" : "opacity-60 group-hover:opacity-100"}`}
         style={{ color }}
       >
+        {deCatalogo && itemId && <span style={{ color: "var(--humo)" }}>cat. </span>}
         {contenido}
       </button>
       {abierto && (
         <BuscadorPublicacion
           ancla={boton}
+          tipo={tipo}
           perfume={perfume}
           plan={plan}
           itemId={itemId}
@@ -159,7 +207,7 @@ export function CeldaPublicacion({
           usadas={usadas}
           onElegir={(id) => {
             setAbierto(false);
-            onVincular(perfume, plan, id);
+            onVincular(perfume, plan, id, tipo);
           }}
           onStock={(p, n) => {
             setAbierto(false);
@@ -168,7 +216,7 @@ export function CeldaPublicacion({
           onCerrar={() => setAbierto(false)}
         />
       )}
-    </div>
+    </>
   );
 }
 
@@ -177,11 +225,16 @@ export function CeldaPublicacion({
    dentro de la fila quedaría recortado por el `overflow`. El emparejado NUNCA
    es automático: arranca buscando con el nombre del perfume, pero se elige —
    un vínculo errado es mandarle el precio a otro perfume. */
+// "100 ml" y "100ml" son lo mismo: se juntan antes de comparar palabra por palabra.
+const paraBuscar = (s) => normalizarTexto(s).replace(/(\d)\s+ml\b/g, "$1ml");
+const sinMedida = (s) => s.replace(/\b\d+(?:[.,]\d+)?\s*ml\b/gi, "").replace(/\s+/g, " ").trim();
+
 const ANCHO_BUSCADOR = 460;
 const ALTO_BUSCADOR = 400;
 
 function BuscadorPublicacion({
   ancla,
+  tipo,
   perfume,
   plan,
   itemId,
@@ -191,7 +244,12 @@ function BuscadorPublicacion({
   onStock,
   onCerrar,
 }) {
-  const [consulta, setConsulta] = useState(() => perfume.nombre);
+  /* Las publicaciones de catálogo llevan el título del producto de ML, que no
+     suele traer la medida ("Lattafa Musamam Black Intense Eau De Parfum"): con
+     "100ml" en la búsqueda inicial quedaban todas afuera. */
+  const [consulta, setConsulta] = useState(() =>
+    tipo === "catalogo" ? sinMedida(perfume.nombre) : perfume.nombre
+  );
   const [caja, setCaja] = useState(() => ancla.current?.getBoundingClientRect());
   const actual = itemId ? publicaciones.find((x) => x.id === itemId) : null;
   const [stock, setStock] = useState(actual?.stock ?? 0);
@@ -210,16 +268,26 @@ function BuscadorPublicacion({
     };
   }, [ancla, onCerrar]);
 
-  const encontradas = useMemo(() => {
-    const palabras = normalizarTexto(consulta).split(/\s+/).filter(Boolean);
-    const lista = palabras.length
+  /* Las ya vinculadas a otro plan o perfume (o a la otra mitad de este mismo
+     plan) no se ofrecen: una publicación no se vincula dos veces. Se pueden
+     mostrar a pedido, para mover una sin desvincularla antes. La de este mismo
+     vínculo sí aparece, con su tilde. */
+  const [verOcupadas, setVerOcupadas] = useState(false);
+  const { encontradas, ocultas } = useMemo(() => {
+    const palabras = paraBuscar(consulta).split(/\s+/).filter(Boolean);
+    const coinciden = palabras.length
       ? publicaciones.filter((x) => {
-          const t = normalizarTexto(`${x.titulo} ${x.id}`);
+          const t = paraBuscar(`${x.titulo} ${x.id}`);
           return palabras.every((w) => t.includes(w));
         })
       : publicaciones;
-    return lista.slice(0, 80);
-  }, [consulta, publicaciones]);
+    const libres = coinciden.filter((x) => x.id === itemId || !usadas.has(x.id));
+    const lista = verOcupadas ? coinciden : libres;
+    // Buscando la de catálogo, las de catálogo van primero (sin esconder las otras).
+    const ordenada =
+      tipo === "catalogo" ? [...lista].sort((a, b) => Number(b.catalogo) - Number(a.catalogo)) : lista;
+    return { encontradas: ordenada.slice(0, 80), ocultas: coinciden.length - libres.length };
+  }, [consulta, publicaciones, tipo, usadas, itemId, verOcupadas]);
 
   if (!caja) return null;
   const abajo = caja.bottom + 4 + ALTO_BUSCADOR <= window.innerHeight;
@@ -239,7 +307,7 @@ function BuscadorPublicacion({
       <div className="fixed inset-0 z-[64]" onMouseDown={onCerrar} />
       <div
         role="dialog"
-        aria-label={`Elegir la publicación de ${nombreDePlan(plan)} de ${perfume.nombre}`}
+        aria-label={`Elegir la publicación ${tipo === "catalogo" ? "de catálogo " : ""}de ${nombreDePlan(plan)} de ${perfume.nombre}`}
         className="fixed z-[65] flex flex-col overflow-hidden rounded-[4px] border shadow-xl"
         style={{
           left: izquierda,
@@ -253,7 +321,14 @@ function BuscadorPublicacion({
         <div className="border-b px-3 py-2" style={{ borderColor: "var(--linea)" }}>
           <span className="k-col mb-1.5 block" style={{ color: "var(--humo)" }}>
             {perfume.nombre} · {nombreDePlan(plan)}
+            {tipo === "catalogo" ? " · catálogo" : ""}
           </span>
+          {tipo === "catalogo" && (
+            <p className="mb-1.5 text-[11px]" style={{ color: "var(--humo)" }}>
+              La publicación de catálogo de este plan. No recibe precios desde la app: ML se los
+              sincroniza desde la normal. Sirve para ver su precio y contar sus ventas.
+            </p>
+          )}
           <input
             autoFocus
             value={consulta}
@@ -269,7 +344,9 @@ function BuscadorPublicacion({
             className="flex items-center gap-2 border-b px-3 py-2 text-[12px]"
             style={{ borderColor: "var(--linea)", background: "var(--zona-ml)" }}
           >
-            {actual ? (
+            {actual && tipo === "catalogo" ? (
+              <span style={{ color: "var(--humo)" }}>Stock {actual.stock}: lo sincroniza ML desde la normal.</span>
+            ) : actual ? (
               <>
                 <span style={{ color: "var(--humo)" }}>Stock en ML</span>
                 <div className="w-[72px]">
@@ -301,7 +378,9 @@ function BuscadorPublicacion({
         <ul data-scroll className="flex-1 overflow-y-auto">
           {encontradas.length === 0 && (
             <li className="px-3 py-4 text-center text-[12.5px]" style={{ color: "var(--humo-claro)" }}>
-              Ninguna publicación coincide. Probá con menos palabras.
+              {ocultas > 0
+                ? "Las que coinciden ya están vinculadas."
+                : "Ninguna publicación coincide. Probá con menos palabras."}
             </li>
           )}
           {encontradas.map((x) => {
@@ -337,6 +416,17 @@ function BuscadorPublicacion({
             );
           })}
         </ul>
+        {ocultas > 0 && (
+          <button
+            onClick={() => setVerOcupadas((v) => !v)}
+            className="k-col border-t px-3 py-2 text-left transition hover:bg-[var(--zona-ml)]"
+            style={{ borderColor: "var(--linea)", color: "var(--humo)" }}
+          >
+            {verOcupadas
+              ? "Ocultar las ya vinculadas"
+              : `Mostrar ${ocultas === 1 ? "la ya vinculada" : `las ${ocultas} ya vinculadas`}`}
+          </button>
+        )}
       </div>
     </>,
     document.body

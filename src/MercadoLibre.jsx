@@ -14,9 +14,12 @@ import {
   leerPublicacionesML,
   nombreDePlan,
   pedirAutorizacionML,
+  CAMPO_DE_VINCULO,
+  vinculosCatalogoDe,
   vinculosDe,
 } from "./clienteML";
 import { BandaConexion, CeldaPublicacion, PanelActualizar } from "./MLConexion";
+import VentasML from "./VentasML";
 
 /* ============================================================
    Mercado Libre.
@@ -29,6 +32,7 @@ import { BandaConexion, CeldaPublicacion, PanelActualizar } from "./MLConexion";
    ============================================================ */
 
 const PLANES_DE_CUOTAS = [3, 6, 9, 12];
+const RELEER_TRAS_ACTUALIZAR = 10000;
 
 /* Misma regla que el catálogo: una sola fuente para encabezado y filas, en línea
    porque la cantidad depende de los planes, y sin `gap` para que la franja de
@@ -53,6 +57,8 @@ export default function MercadoLibre({
   onConfirmar,
 }) {
   const [consulta, setConsulta] = useState("");
+  // Precios (lo de siempre) o Ventas (solo lectura). Es de pantalla: no se guarda.
+  const [seccion, setSeccion] = useState("precios");
   const [cuenta, setCuenta] = useState(null); // null = preguntando
   const [publicaciones, setPublicaciones] = useState(null);
   const [errorML, setErrorML] = useState("");
@@ -93,6 +99,18 @@ export default function MercadoLibre({
       vigente = false;
     };
   }, [traerPublicaciones]);
+
+  /* Después de mandar precios se relee enseguida (la normal ya cambió) y otra vez
+     a los RELEER_TRAS_ACTUALIZAR ms: ML pasa el precio a la de catálogo unos
+     segundos después, y sin la segunda lectura quedaba "sincronizando" hasta
+     tocar Releer. */
+  const segundaLectura = useRef(null);
+  useEffect(() => () => clearTimeout(segundaLectura.current), []);
+  const releerTrasActualizar = () => {
+    traerPublicaciones();
+    clearTimeout(segundaLectura.current);
+    segundaLectura.current = setTimeout(traerPublicaciones, RELEER_TRAS_ACTUALIZAR);
+  };
 
   /* ML no acepta localhost como redirect: vuelve a kukune.com.ar con el código
      en la dirección, y Franco la pega acá. Es el mismo camino que el script de
@@ -142,23 +160,29 @@ export default function MercadoLibre({
      para no vincular la misma dos veces sin darse cuenta. */
   const usadas = useMemo(() => {
     const m = new Map();
-    for (const p of perfumes)
+    for (const p of perfumes) {
       for (const [plan, id] of Object.entries(vinculosDe(p)))
         m.set(id, `${p.nombre} · ${nombreDePlan(plan)}`);
+      for (const [plan, id] of Object.entries(vinculosCatalogoDe(p)))
+        m.set(id, `${p.nombre} · ${nombreDePlan(plan)} · catálogo`);
+    }
     return m;
   }, [perfumes]);
 
+  // Solo las normales: son las que reciben precio.
   const vinculados = useMemo(
     () => perfumes.reduce((n, p) => n + Object.keys(vinculosDe(p)).length, 0),
     [perfumes]
   );
 
-  // Lo único que esta pantalla agrega a perfumes.json, y solo cuando se elige.
-  const vincular = (perfume, plan, itemId) => {
-    const resto = { ...vinculosDe(perfume) };
+  /* Lo único que esta pantalla agrega a perfumes.json, y solo cuando se elige.
+     `tipo`: "normal" (recibe precios) o "catalogo" (ML la sincroniza sola). */
+  const vincular = (perfume, plan, itemId, tipo = "normal") => {
+    const campo = CAMPO_DE_VINCULO[tipo];
+    const resto = { ...(perfume[campo] ?? {}) };
     if (itemId) resto[plan] = itemId;
     else delete resto[plan];
-    onCambiar(perfume.id, { publicacionesML: Object.keys(resto).length ? resto : undefined });
+    onCambiar(perfume.id, { [campo]: Object.keys(resto).length ? resto : undefined });
   };
 
   const abrirActualizar = async () => {
@@ -208,30 +232,55 @@ export default function MercadoLibre({
 
   return (
     <section className="mx-auto max-w-[1480px] px-6 py-8">
-      <div className="mb-6">
-        <h2 className="k-rotulo mb-1">Mercado Libre</h2>
-        <p className="text-[12.5px]" style={{ color: "var(--humo)" }}>
-          Un precio por plan de pago: cada plan es una publicación aparte. El nombre, la foto y
-          el costo se cargan en el catálogo.
-        </p>
-      </div>
-
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <div className="relative">
-          <Search
-            size={14}
-            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2"
-            style={{ color: "var(--humo-claro)" }}
-          />
-          <input
-            value={consulta}
-            onChange={(e) => setConsulta(e.target.value)}
-            placeholder="Buscar"
-            className="w-[260px] rounded-[3px] border py-1.5 pl-8 pr-2 text-[12.5px]"
-            style={{ background: "var(--papel)", borderColor: "var(--linea)", color: "var(--tinta)" }}
-          />
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="k-rotulo mb-1">Mercado Libre</h2>
+          <p className="text-[12.5px]" style={{ color: "var(--humo)" }}>
+            {seccion === "precios"
+              ? "Un precio por plan de pago: cada plan es una publicación aparte. El nombre, la foto y el costo se cargan en el catálogo."
+              : "Lo vendido en Mercado Libre y lo que dejó, con la comisión y el envío que cobró ML y el costo de cada perfume cuando se vendió. Solo lectura."}
+          </p>
+        </div>
+        <div className="flex overflow-hidden rounded-[3px] border" style={{ borderColor: "var(--linea)" }}>
+          {[
+            ["precios", "Precios"],
+            ["ventas", "Ventas"],
+          ].map(([id, texto]) => (
+            <button
+              key={id}
+              onClick={() => setSeccion(id)}
+              aria-pressed={seccion === id}
+              className="k-col px-3 py-[7px] transition"
+              style={
+                seccion === id
+                  ? { background: "var(--tinta)", color: "var(--papel)" }
+                  : { background: "var(--papel)", color: "var(--humo)" }
+              }
+            >
+              {texto}
+            </button>
+          ))}
         </div>
       </div>
+
+      {seccion === "precios" && (
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <div className="relative">
+            <Search
+              size={14}
+              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2"
+              style={{ color: "var(--humo-claro)" }}
+            />
+            <input
+              value={consulta}
+              onChange={(e) => setConsulta(e.target.value)}
+              placeholder="Buscar"
+              className="w-[260px] rounded-[3px] border py-1.5 pl-8 pr-2 text-[12.5px]"
+              style={{ background: "var(--papel)", borderColor: "var(--linea)", color: "var(--tinta)" }}
+            />
+          </div>
+        </div>
+      )}
 
       <BandaConexion
         cuenta={cuenta}
@@ -248,43 +297,49 @@ export default function MercadoLibre({
         </p>
       )}
 
-      <AjustesML ajustes={ajustes} onAjustes={onAjustes} />
-
-      {panel && (
-        <PanelActualizar {...panel} onCerrar={() => setPanel(null)} onTerminado={traerPublicaciones} />
-      )}
-
-      {visibles.length === 0 ? (
-        <p className="py-12 text-center text-[13px]" style={{ color: "var(--humo-claro)" }}>
-          {perfumes.length === 0
-            ? "El catálogo está vacío. Los perfumes se agregan en la pestaña Catálogo."
-            : "Ningún perfume coincide con la búsqueda."}
-        </p>
+      {seccion === "ventas" ? (
+        <VentasML perfumes={perfumes} cuenta={cuenta} />
       ) : (
-        <div className="overflow-x-auto pb-2">
-          <div style={{ minWidth: anchoMinimo(planes) }}>
-            <EncabezadoML planes={planes} columnas={columnas} />
-            <ul className="grid gap-1.5">
-              {visibles.map((p) => (
-                <FilaML
-                  key={p.id}
-                  perfume={p}
-                  ajustes={ajustes}
-                  planes={planes}
-                  columnas={columnas}
-                  onCambiar={onCambiar}
-                  onSoltarMargenML={onSoltarMargenML}
-                  conectado={!!cuenta?.conectado}
-                  publicaciones={publicaciones}
-                  pubPorId={pubPorId}
-                  usadas={usadas}
-                  onVincular={vincular}
-                  onStock={cambiarStock}
-                />
-              ))}
-            </ul>
-          </div>
-        </div>
+        <>
+          <AjustesML ajustes={ajustes} onAjustes={onAjustes} />
+
+          {panel && (
+            <PanelActualizar {...panel} onCerrar={() => setPanel(null)} onTerminado={releerTrasActualizar} />
+          )}
+
+          {visibles.length === 0 ? (
+            <p className="py-12 text-center text-[13px]" style={{ color: "var(--humo-claro)" }}>
+              {perfumes.length === 0
+                ? "El catálogo está vacío. Los perfumes se agregan en la pestaña Catálogo."
+                : "Ningún perfume coincide con la búsqueda."}
+            </p>
+          ) : (
+            <div className="overflow-x-auto pb-2">
+              <div style={{ minWidth: anchoMinimo(planes) }}>
+                <EncabezadoML planes={planes} columnas={columnas} />
+                <ul className="grid gap-1.5">
+                  {visibles.map((p) => (
+                    <FilaML
+                      key={p.id}
+                      perfume={p}
+                      ajustes={ajustes}
+                      planes={planes}
+                      columnas={columnas}
+                      onCambiar={onCambiar}
+                      onSoltarMargenML={onSoltarMargenML}
+                      conectado={!!cuenta?.conectado}
+                      publicaciones={publicaciones}
+                      pubPorId={pubPorId}
+                      usadas={usadas}
+                      onVincular={vincular}
+                      onStock={cambiarStock}
+                    />
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </section>
   );
@@ -606,6 +661,7 @@ function FilaML({
             plan={x.plan}
             precioCatalogo={x.precio}
             itemId={vinculosDe(perfume)[x.plan]}
+            itemCatalogo={vinculosCatalogoDe(perfume)[x.plan]}
             conectado={conectado}
             publicaciones={publicaciones}
             pubPorId={pubPorId}
