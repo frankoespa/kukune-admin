@@ -536,6 +536,17 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   de ese mismo vínculo, con su tilde. Pedido de Franco: al vincular la de
   catálogo aparecía la normal. Abajo hay un "Mostrar las N ya vinculadas" que
   las trae marcadas "ya en …", para mover una sin desvincularla antes.
+- **Las cuotas de una publicación salen del tipo + los `tags`** (no hay campo
+  propio; doc "Campañas con cuotas para Marketplace"), en
+  `cuotasDePublicacion()` de `clienteML.js`: `gold_pro` (Premium) sin tag = 6
+  cuotas sin interés, con `3x_campaign`/`9x_campaign`/`12x_campaign` = 3/9/12;
+  `gold_special` (Clásica) = 1 pago, o con `pcj-co-funded` = "3 a 12 cuotas con
+  interés bajo" (las elige el comprador; la API no dice cuántas: plan `null`).
+  Por eso `ATRIBUTOS` del plugin pide `tags`. ML ya no las llama Clásica/Premium,
+  así que el buscador y los `title` muestran las cuotas. El buscador ordena
+  primero las del plan que se vincula y avisa en óxido las que no son
+  (`avisoDePlan`); la celda vinculada a un plan que no es el suyo lleva un `!`.
+  Solo avisa: no impide vincular.
 - Las publicaciones de catálogo llevan el título del producto de ML, que **no
   suele traer la medida** ("Lattafa Musamam Black Intense Eau De Parfum"). Por
   eso el buscador de catálogo arranca con el nombre **sin** "100ml"
@@ -594,13 +605,25 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
     carrito comparte envío entre varias órdenes: se pide **una vez por envío** y
     se reparte entre sus ítems **por ingreso**, el último se lleva el redondeo y
     la suma cierra exacta. Si ML no lo devuelve, la fila va con "?" y sin envío.
-  - Retenciones e impuestos no vienen en la orden (están en la facturación por
-    período): fuera, y la pantalla lo dice.
+  - Impuestos = retenciones que **Mercado Pago** descuenta del cobro (IIBB de
+    la provincia y demás). **No vienen en la orden**: están en el pago,
+    `GET https://api.mercadopago.com/v1/payments/<id>` (mismo token que ML; los
+    ids salen de `order.payments`), en `charges_details` con `type: "tax"` y
+    `accounts.from: "collector"`, `original − refunded`. Se suman los pagos
+    aprobados de la orden y se reparten entre sus ítems por ingreso, como el
+    envío. Si MP no devuelve un pago, la orden va con "?" y sin impuestos.
+    `nombreDeImpuesto()` traduce "tax_withholding-santa_fe" a "Retención IIBB
+    Santa Fe". Verificado contra una venta real del Urban Elixir (14/10):
+    98.200 − 15.045,07 − 8.290 − 3.437 = 71.427,93, el neto de MP al centavo.
+  - Ese mismo pago trae también la comisión (`meli_percentage_fee`) y el envío
+    (`shp_…`), y `transaction_details.net_received_amount`. Hoy la comisión y el
+    envío siguen saliendo de la orden y de `/shipments`; el pago queda como
+    fuente para cruzarlos si algún día no cierran.
 - El cruce venta → perfume es `publicacionesML` y `publicacionesCatalogoML` de la
   lista **resuelta**, nunca por nombre. Lo que no está vinculado va en una tabla aparte, con ingreso,
   comisión, envío y "te queda" (en tinta: no es ganancia), **sin costo inventado**.
   Un perfume vinculado sin costo: ganancia "—" y no entra en el total.
-- Ganancia = ingreso − comisión − envío − costo; margen = ganancia ÷ costo, la
+- Ganancia = ingreso − comisión − envío − impuestos − costo; margen = ganancia ÷ costo, la
   misma cuenta que la columna Margen de los pedidos. Ámbar solo en la ganancia.
 - **El costo es el que regía en el instante de la venta**, no el de hoy (pedido
   por Franco: el costo cambia después de vender). Para eso existe

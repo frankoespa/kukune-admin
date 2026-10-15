@@ -4,7 +4,7 @@ import { urlFoto } from "./almacenamiento";
 import { pctSinMiles as pctCorto } from "./numeros";
 import { ConVistaPrevia, pesos } from "./Catalogo";
 import { leerVentasML, nombreDePlan } from "./clienteML";
-import { gananciasDeVentas } from "./gananciasML";
+import { gananciasDeVentas, nombreDeImpuesto } from "./gananciasML";
 
 /* ============================================================
    Ventas de Mercado Libre y lo que dejaron. SOLO LECTURA: trae órdenes y
@@ -58,10 +58,10 @@ const ATAJOS = [
   ["30", "Últimos 30 días"],
 ];
 
-// fecha · foto · perfume · plan · cant · ingreso · comisión · envío · costo · ganancia · margen
-const COLUMNAS_VINCULADAS = "104px 52px minmax(180px,1fr) 84px 52px 104px 96px 88px 104px 104px 72px";
-// fecha · publicación · MLA · cant · ingreso · comisión · envío · te queda
-const COLUMNAS_SUELTAS = "104px minmax(240px,1fr) 128px 52px 104px 96px 88px 104px";
+// fecha · foto · perfume · plan · cant · ingreso · comisión · envío · impuestos · costo · ganancia · margen
+const COLUMNAS_VINCULADAS = "104px 52px minmax(180px,1fr) 84px 52px 104px 96px 88px 92px 104px 104px 72px";
+// fecha · publicación · MLA · cant · ingreso · comisión · envío · impuestos · te queda
+const COLUMNAS_SUELTAS = "104px minmax(240px,1fr) 128px 52px 104px 96px 88px 92px 104px";
 
 const colorGanancia = (g) => (g == null ? "var(--humo-claro)" : g >= 0 ? "var(--ambar)" : "var(--oxido)");
 
@@ -90,7 +90,7 @@ export default function VentasML({ perfumes, cuenta }) {
   }, [conectado, traer]);
 
   const r = useMemo(
-    () => (datos ? gananciasDeVentas(datos.ordenes, datos.envios, perfumes) : null),
+    () => (datos ? gananciasDeVentas(datos.ordenes, datos.envios, perfumes, datos.pagos) : null),
     [datos, perfumes]
   );
 
@@ -191,7 +191,7 @@ function Totales({ r, truncado, total }) {
         t.sinCosto === 1 ? "" : "n"
       } en la ganancia.`,
     t.sinVincular > 0 &&
-      `${t.sinVincular} de publicaciones sin vincular: suman al ingreso, la comisión y el envío, no a la ganancia.`,
+      `${t.sinVincular} de publicaciones sin vincular: suman al ingreso, la comisión, el envío y los impuestos, no a la ganancia.`,
     t.costoAproximado > 0 &&
       `${t.costoAproximado} con costo aproximado (~): se vendieron antes de que el perfume tuviera historial de costos.`,
     t.sinEnvio > 0 && `${t.sinEnvio} sin el costo del envío: ML no lo devolvió y se cuentan sin él.`,
@@ -201,7 +201,8 @@ function Totales({ r, truncado, total }) {
       `No se cuentan ${r.excluidas.canceladas} cancelada${r.excluidas.canceladas === 1 ? "" : "s"} y ${
         r.excluidas.sinPagar
       } sin pagar.`,
-    "Retenciones e impuestos no vienen en la orden: se ven en la facturación de ML.",
+    t.sinImpuestos > 0 &&
+      `${t.sinImpuestos} sin los impuestos: Mercado Pago no devolvió el pago y se cuentan sin ellos.`,
   ].filter(Boolean);
 
   return (
@@ -212,6 +213,9 @@ function Totales({ r, truncado, total }) {
         {cifra("Ingreso", pesos(t.ingreso))}
         {cifra("Comisión ML", pesos(t.comision))}
         {cifra("Envío", pesos(t.envio))}
+        {cifra("Impuestos", pesos(t.impuestos), {
+          titulo: "Retenciones e impuestos que Mercado Pago descontó de cada cobro (IIBB y demás)",
+        })}
         {cifra("Costo", pesos(t.costo), {
           titulo: `Costo del catálogo de las ${t.conGanancia} ventas con costo, al momento de cada venta`,
         })}
@@ -273,6 +277,27 @@ function Fecha({ f }) {
   );
 }
 
+/* Lo que Mercado Pago descontó del cobro: retenciones de IIBB y demás. El
+   detalle va en el title; si la orden se repartió entre varios ítems, es la
+   parte de este. */
+const Impuestos = ({ f }) => (
+  <Cifra
+    color={f.impuestosDesconocidos ? "var(--oxido)" : undefined}
+    titulo={
+      f.impuestosDesconocidos
+        ? "Mercado Pago no devolvió el pago de esta venta: la cuenta va sin impuestos"
+        : f.detalleImpuestos.length
+        ? f.detalleImpuestos.map((x) => `${nombreDeImpuesto(x.nombre)}: ${pesos(x.monto)}`).join("\n") +
+          (f.detalleImpuestos.reduce((s, x) => s + x.monto, 0) !== f.impuestos
+            ? "\n(de toda la orden; esta es la parte de este ítem)"
+            : "")
+        : "Mercado Pago no descontó impuestos en este cobro"
+    }
+  >
+    {f.impuestosDesconocidos ? "?" : pesos(f.impuestos)}
+  </Cifra>
+);
+
 const Envio = ({ f }) => (
   <Cifra
     color={f.envioDesconocido ? "var(--oxido)" : undefined}
@@ -297,7 +322,7 @@ function TablaVinculadas({ filas }) {
     );
   return (
     <div className="mb-8 overflow-x-auto pb-2">
-      <div style={{ minWidth: 1100 }}>
+      <div style={{ minWidth: 1200 }}>
         <Encabezado
           columnas={COLUMNAS_VINCULADAS}
           titulos={[
@@ -309,6 +334,7 @@ function TablaVinculadas({ filas }) {
             ["Ingreso"],
             ["Comisión"],
             ["Envío"],
+            ["Impuestos"],
             ["Costo"],
             ["Ganancia"],
             ["Margen"],
@@ -353,6 +379,7 @@ function TablaVinculadas({ filas }) {
               <Cifra color="var(--tinta)">{pesos(f.ingreso)}</Cifra>
               <Cifra>{pesos(f.comision)}</Cifra>
               <Envio f={f} />
+              <Impuestos f={f} />
               <Cifra
                 color={f.costo == null ? "var(--humo-claro)" : f.costoAproximado ? "var(--humo)" : "var(--tinta)"}
                 titulo={
@@ -371,7 +398,7 @@ function TablaVinculadas({ filas }) {
                 titulo={
                   f.ganancia == null
                     ? "Sin costo no hay ganancia que mostrar"
-                    : `${pesos(f.ingreso)} − comisión ${pesos(f.comision)} − envío ${pesos(f.envio)} − costo ${pesos(f.costo)}`
+                    : `${pesos(f.ingreso)} − comisión ${pesos(f.comision)} − envío ${pesos(f.envio)} − impuestos ${pesos(f.impuestos)} − costo ${pesos(f.costo)}`
                 }
               >
                 {f.ganancia == null ? "—" : pesos(f.ganancia)}
@@ -397,7 +424,7 @@ function TablaSueltas({ filas }) {
         En ML; la de catálogo va en el renglón chico de abajo) para verla.
       </p>
       <div className="overflow-x-auto pb-2">
-        <div style={{ minWidth: 980 }}>
+        <div style={{ minWidth: 1080 }}>
           <Encabezado
             columnas={COLUMNAS_SUELTAS}
             titulos={[
@@ -408,6 +435,7 @@ function TablaSueltas({ filas }) {
               ["Ingreso"],
               ["Comisión"],
               ["Envío"],
+              ["Impuestos"],
               ["Te queda"],
             ]}
           />
@@ -429,8 +457,9 @@ function TablaSueltas({ filas }) {
                 <Cifra color="var(--tinta)">{pesos(f.ingreso)}</Cifra>
                 <Cifra>{pesos(f.comision)}</Cifra>
                 <Envio f={f} />
+                <Impuestos f={f} />
                 {/* No es ganancia (falta el costo): va en tinta, no en ámbar. */}
-                <Cifra color="var(--tinta)" titulo="Ingreso menos comisión y envío, antes de restar el costo del perfume">
+                <Cifra color="var(--tinta)" titulo="Ingreso menos comisión, envío e impuestos, antes de restar el costo del perfume">
                   {pesos(f.neto)}
                 </Cifra>
               </li>

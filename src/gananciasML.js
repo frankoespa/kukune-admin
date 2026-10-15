@@ -3,8 +3,9 @@ import { costoEnFecha } from "./historialCostos.js";
 /* ============================================================
    Ventas de Mercado Libre: qué se vendió y cuánto dejó.
 
-   Recibe lo que devuelve GET /api/ml/ventas (órdenes resumidas y el costo de
-   cada envío para el vendedor) y la lista RESUELTA del catálogo. Cruza cada
+   Recibe lo que devuelve GET /api/ml/ventas (órdenes resumidas, el costo de
+   cada envío para el vendedor y los impuestos de cada pago) y la lista
+   RESUELTA del catálogo. Cruza cada
    ítem vendido con su perfume por `publicacionesML` (plan → MLA): el vínculo
    que eligió Franco, nunca un emparejado por nombre.
 
@@ -14,9 +15,12 @@ import { costoEnFecha } from "./historialCostos.js";
    · envío    = lo que ML le cobró al vendedor por ese envío. Un carrito
                 comparte un envío entre varias órdenes: se reparte entre sus
                 ítems en proporción al ingreso, y la suma cierra exacta.
+   · impuestos = retenciones e impuestos que Mercado Pago descontó del cobro
+                (IIBB y demás), de los pagos aprobados de la orden. Se reparten
+                entre los ítems de la orden igual que el envío.
    · costo    = el costo del catálogo que regía cuando se vendió
                 (`historialCostos`), × cantidad.
-   · ganancia = ingreso − comisión − envío − costo; margen = ganancia ÷ costo,
+   · ganancia = ingreso − comisión − envío − impuestos − costo; margen = ganancia ÷ costo,
                 la misma cuenta que la columna Margen de los pedidos.
 
    Lo que no tiene vínculo no inventa costo: va en `sinVincular`, sin ganancia.
@@ -31,6 +35,21 @@ const ESTADOS_CANCELADOS = new Set(["cancelled", "invalid"]);
 const TOLERANCIA_COMISION = 1;
 
 const redondear = (n) => Math.round(n * 100) / 100;
+
+/* Mercado Pago nombra los impuestos como "tax_withholding-santa_fe". Las
+   retenciones con nombre de provincia son de Ingresos Brutos (IIBB). Lo que no
+   se reconoce se muestra legible tal cual: mejor eso que adivinar. */
+const PROVINCIAS = new Set(
+  "buenos_aires caba capital_federal catamarca chaco chubut cordoba corrientes entre_rios formosa jujuy la_pampa la_rioja mendoza misiones neuquen rio_negro salta san_juan san_luis santa_cruz santa_fe santiago_del_estero tierra_del_fuego tucuman".split(" ")
+);
+const SIGLAS = { iva: "IVA", iibb: "IIBB" };
+const legible = (s) => SIGLAS[s] ?? s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+export function nombreDeImpuesto(nombre) {
+  const [tipo, resto] = String(nombre ?? "").split("-");
+  if (tipo === "tax_withholding" && resto)
+    return PROVINCIAS.has(resto) ? `Retención IIBB ${legible(resto)}` : `Retención ${legible(resto)}`;
+  return legible(String(nombre ?? "Impuesto"));
+}
 
 /* MLA → { perfume, plan, catalogo }. Entran las dos de cada plan: la normal
    (`publicacionesML`) y la de catálogo (`publicacionesCatalogoML`). Si dos
@@ -48,7 +67,7 @@ export function indiceDePublicaciones(perfumes) {
   return m;
 }
 
-export function gananciasDeVentas(ordenes, envios, perfumes) {
+export function gananciasDeVentas(ordenes, envios, perfumes, pagos) {
   const indice = indiceDePublicaciones(perfumes);
   const excluidas = { canceladas: 0, sinPagar: 0 };
   const cuentan = [];
@@ -82,6 +101,9 @@ export function gananciasDeVentas(ordenes, envios, perfumes) {
         comisionNoCierra,
         envio: 0,
         envioDesconocido: false,
+        impuestos: 0,
+        detalleImpuestos: [],
+        impuestosDesconocidos: false,
         vinculo,
       });
     });
@@ -102,23 +124,29 @@ export function gananciasDeVentas(ordenes, envios, perfumes) {
       for (const f of grupo) f.envioDesconocido = true;
       continue;
     }
-    const total = Number(e.costoVendedor) || 0;
-    const base = grupo.reduce((s, f) => s + f.ingreso, 0);
-    let repartido = 0;
-    grupo.forEach((f, i) => {
-      const parte =
-        i === grupo.length - 1
-          ? redondear(total - repartido)
-          : redondear(base > 0 ? (total * f.ingreso) / base : total / grupo.length);
-      f.envio = parte;
-      repartido += parte;
-    });
+    repartir(grupo, Number(e.costoVendedor) || 0, "envio");
+  }
+
+  /* Los impuestos, por orden: la suma de los de sus pagos aprobados. Si falta
+     alguno de esos pagos (Mercado Pago no lo devolvió), la orden se marca y se
+     cuenta sin impuestos, como el envío desconocido. */
+  for (const o of cuentan) {
+    const grupo = filas.filter((f) => f.ordenId === o.id);
+    const aprobados = (o.pagos ?? []).filter((p) => p.estado === "approved");
+    const leidos = aprobados.map((p) => pagos?.[p.id]);
+    if (leidos.some((p) => !p || p.error != null)) {
+      for (const f of grupo) f.impuestosDesconocidos = true;
+      continue;
+    }
+    const detalle = leidos.flatMap((p) => p.impuestos ?? []);
+    repartir(grupo, detalle.reduce((s, x) => s + x.monto, 0), "impuestos");
+    for (const f of grupo) f.detalleImpuestos = detalle;
   }
 
   const vinculadas = [];
   const sinVincular = [];
   for (const { vinculo, ...f } of filas) {
-    const neto = f.ingreso - f.comision - f.envio;
+    const neto = f.ingreso - f.comision - f.envio - f.impuestos;
     if (!vinculo) {
       sinVincular.push({ ...f, neto: redondear(neto), costo: null, ganancia: null, margen: null });
       continue;
@@ -147,7 +175,23 @@ export function gananciasDeVentas(ordenes, envios, perfumes) {
   return { vinculadas, sinVincular, excluidas, totales: totalesDe(vinculadas, sinVincular) };
 }
 
-/* Ingreso, comisión y envío suman todo lo vendido. Costo y ganancia solo lo que
+/* Reparte `total` entre las filas del grupo en proporción al ingreso y lo
+   escribe en `campo`. El último se lleva el resto del redondeo: la suma cierra
+   exacta. */
+function repartir(grupo, total, campo) {
+  const base = grupo.reduce((s, f) => s + f.ingreso, 0);
+  let repartido = 0;
+  grupo.forEach((f, i) => {
+    const parte =
+      i === grupo.length - 1
+        ? redondear(total - repartido)
+        : redondear(base > 0 ? (total * f.ingreso) / base : total / grupo.length);
+    f[campo] = parte;
+    repartido += parte;
+  });
+}
+
+/* Ingreso, comisión, envío e impuestos suman todo lo vendido. Costo y ganancia solo lo que
    tiene costo: sumar una ganancia sin costo sería sumar el ingreso entero. */
 function totalesDe(vinculadas, sinVincular) {
   const todas = [...vinculadas, ...sinVincular];
@@ -161,6 +205,7 @@ function totalesDe(vinculadas, sinVincular) {
     ingreso: suma(todas, "ingreso"),
     comision: suma(todas, "comision"),
     envio: suma(todas, "envio"),
+    impuestos: suma(todas, "impuestos"),
     costo,
     ganancia,
     margen: costo > 0 ? ganancia / costo : null,
@@ -168,6 +213,7 @@ function totalesDe(vinculadas, sinVincular) {
     sinCosto: vinculadas.length - conGanancia.length,
     costoAproximado: conGanancia.filter((f) => f.costoAproximado).length,
     sinEnvio: todas.filter((f) => f.envioDesconocido).length,
+    sinImpuestos: new Set(todas.filter((f) => f.impuestosDesconocidos).map((f) => f.ordenId)).size,
     comisionNoCierra: new Set(todas.filter((f) => f.comisionNoCierra).map((f) => f.ordenId)).size,
     sinVincular: sinVincular.length,
   };

@@ -4,7 +4,13 @@ import { Check, Link2, PlugZap, RefreshCw, Upload } from "lucide-react";
 import { NumberCell } from "./NumberCell";
 import { pctSinMiles as pctCorto } from "./numeros";
 import { normalizarTexto, pesos } from "./Catalogo";
-import { actualizarPublicacionML, detallePublicacion, nombreDePlan } from "./clienteML";
+import {
+  actualizarPublicacionML,
+  avisoDePlan,
+  cuotasDePublicacion,
+  detallePublicacion,
+  nombreDePlan,
+} from "./clienteML";
 
 /* ============================================================
    Las piezas de la pestaña de Mercado Libre que hablan con ML de verdad:
@@ -177,6 +183,17 @@ function BotonPublicacion({
         ? `Mismo precio que ${nuestro}.`
         : `${deCatalogo ? "La app" : "El catálogo"} dice ${pesos(precioCatalogo)}.`
     }${deCatalogo && !sincronizando ? " ML le sincroniza el precio desde la publicación normal." : ""}`;
+    // Vinculada a un plan que no es el suyo: se avisa, no se cambia nada.
+    const aviso = avisoDePlan(pub, plan);
+    if (aviso) {
+      titulo += ` Ojo: esta publicación ${aviso}.`;
+      contenido = (
+        <>
+          <span style={{ color: "var(--oxido)" }}>! </span>
+          {contenido}
+        </>
+      );
+    }
   }
 
   return (
@@ -283,9 +300,13 @@ function BuscadorPublicacion({
       : publicaciones;
     const libres = coinciden.filter((x) => x.id === itemId || !usadas.has(x.id));
     const lista = verOcupadas ? coinciden : libres;
-    // Buscando la de catálogo, las de catálogo van primero (sin esconder las otras).
-    const ordenada =
-      tipo === "catalogo" ? [...lista].sort((a, b) => Number(b.catalogo) - Number(a.catalogo)) : lista;
+    /* Primero las del plan que se está vinculando (por sus cuotas), y buscando la
+       de catálogo, las de catálogo antes que las normales. Nada se esconde: el
+       orden ayuda, la que se elige la decide Franco. */
+    const puntaje = (x) =>
+      (cuotasDePublicacion(x).plan === Number(plan) ? 2 : 0) +
+      (tipo === "catalogo" && x.catalogo ? 1 : 0);
+    const ordenada = [...lista].sort((a, b) => puntaje(b) - puntaje(a));
     return { encontradas: ordenada.slice(0, 80), ocultas: coinciden.length - libres.length };
   }, [consulta, publicaciones, tipo, usadas, itemId, verOcupadas]);
 
@@ -405,6 +426,9 @@ function BuscadorPublicacion({
                     <span className="k-num block truncate text-[11px]" style={{ color: "var(--humo)" }}>
                       {x.id} · {detallePublicacion(x)}
                       {ocupada && !esta ? ` · ya en ${ocupada}` : ""}
+                      {avisoDePlan(x, plan) && (
+                        <span style={{ color: "var(--oxido)" }}> · {avisoDePlan(x, plan)}</span>
+                      )}
                     </span>
                   </span>
                   <span className="k-num shrink-0 text-[12.5px]" style={{ color: "var(--tinta)" }}>

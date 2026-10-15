@@ -25,7 +25,8 @@ import { loadEnv } from "vite";
    · PUT  /api/ml/publicaciones/<MLA…>   {price?, available_quantity?}
    · GET  /api/ml/ventas?desde=AAAA-MM-DD&hasta=AAAA-MM-DD
                                          órdenes del período + lo que cobró ML
-                                         por cada envío. Solo lectura.
+                                         por cada envío + impuestos de cada
+                                         pago (Mercado Pago). Solo lectura.
 
    El refresh token de ML ROTA en cada uso: el viejo deja de valer. Por eso el
    nuevo se guarda siempre y las renovaciones van de a una (`renovando`): dos
@@ -42,9 +43,10 @@ const ITEM_VALIDO = /^MLA\d+$/;
 const FECHA_VALIDA = /^\d{4}-\d{2}-\d{2}$/;
 const POR_PAGINA = 50;
 const TOPE_PAGINAS = 20; // 1000 órdenes
-const ENVIOS_A_LA_VEZ = 5;
+const A_LA_VEZ = 5;
+const API_MP = "https://api.mercadopago.com";
 const ATRIBUTOS =
-  "id,title,price,available_quantity,status,permalink,thumbnail,listing_type_id,variations,catalog_listing,catalog_product_id";
+  "id,title,price,available_quantity,status,permalink,thumbnail,listing_type_id,variations,catalog_listing,catalog_product_id,tags";
 
 /* Lo que se pega puede ser la dirección entera (…?code=TG-…&state=…) o solo el
    código. Pura y exportada para probarla desde Node. */
@@ -129,7 +131,8 @@ export default function pluginML() {
 
     const ml = async (ruta, opciones = {}) => {
       const t = await tokenVigente();
-      const r = await fetch(`${API}${ruta}`, {
+      // Una URL entera va tal cual: es Mercado Pago (MP), que acepta el mismo token.
+      const r = await fetch(ruta.startsWith("https://") ? ruta : `${API}${ruta}`, {
         ...opciones,
         headers: {
           Authorization: `Bearer ${t.access_token}`,
@@ -192,31 +195,45 @@ export default function pluginML() {
 
       /* Lo que ML le cobró al vendedor por cada envío: `senders[].cost` de
          /shipments/<id>/costs. Las órdenes de un mismo carrito comparten el
-         envío, así que se pide una vez por envío. De a ENVIOS_A_LA_VEZ: con un
-         mes de ventas son decenas de pedidos. Si uno falla queda `null` con el
-         motivo, y la venta se muestra igual. */
+         envío, así que se pide una vez por envío. */
       // Solo los de órdenes que cuentan (ESTADOS_QUE_CUENTAN en gananciasML.js):
       // el envío de una cancelada no se usa.
       const cuentan = ordenes.filter((o) => o.estado === "paid" || o.estado === "partially_refunded");
-      const ids = [...new Set(cuentan.map((o) => o.envioId).filter(Boolean))];
-      const envios = {};
-      for (let i = 0; i < ids.length; i += ENVIOS_A_LA_VEZ) {
+      const envios = await deAPocos(
+        [...new Set(cuentan.map((o) => o.envioId).filter(Boolean))],
+        async (id) => {
+          const c = await ml(`/shipments/${id}/costs`, { headers: { "x-format-new": "true" } });
+          const yo = (c.senders ?? []).find((s) => String(s.user_id) === String(userId));
+          return { costoVendedor: Number(yo?.cost) || 0, pagoComprador: Number(c.receiver?.cost) || 0 };
+        }
+      );
+
+      /* Impuestos y retenciones (IIBB, etc.): no vienen en la orden, los descuenta
+         Mercado Pago del cobro. Están en el pago, en `charges_details` con
+         `type: "tax"` que paga el vendedor (`accounts.from: "collector"`).
+         Mismo token que ML. */
+      const pagos = await deAPocos(
+        [...new Set(cuentan.flatMap((o) => o.pagos.filter((p) => p.estado === "approved").map((p) => p.id)))],
+        async (id) => resumirPago(await ml(`${API_MP}/v1/payments/${id}`))
+      );
+      return { ordenes, envios, pagos, total, truncado: ordenes.length < total };
+    };
+
+    /* De a A_LA_VEZ en paralelo: con un mes de ventas son decenas de pedidos. Si
+       uno falla queda `{ error }` y la venta se muestra igual, sin ese dato. */
+    const deAPocos = async (ids, traer) => {
+      const salida = {};
+      for (let i = 0; i < ids.length; i += A_LA_VEZ)
         await Promise.all(
-          ids.slice(i, i + ENVIOS_A_LA_VEZ).map(async (id) => {
+          ids.slice(i, i + A_LA_VEZ).map(async (id) => {
             try {
-              const c = await ml(`/shipments/${id}/costs`, { headers: { "x-format-new": "true" } });
-              const yo = (c.senders ?? []).find((s) => String(s.user_id) === String(userId));
-              envios[id] = {
-                costoVendedor: Number(yo?.cost) || 0,
-                pagoComprador: Number(c.receiver?.cost) || 0,
-              };
+              salida[id] = await traer(id);
             } catch (e) {
-              envios[id] = { error: e.message };
+              salida[id] = { error: e.message };
             }
           })
         );
-      }
-      return { ordenes, envios, total, truncado: ordenes.length < total };
+      return salida;
     };
 
     const cuerpo = async (req) => {
@@ -356,6 +373,8 @@ const resumir = (x) => ({
   // Una publicación de catálogo es otra publicación, con su MLA y su precio,
   // aunque tenga el mismo título que la "normal" del mismo perfume.
   catalogo: !!x.catalog_listing,
+  // Las cuotas que ofrece viven en los tags (3x_campaign…): ver cuotasDePublicacion.
+  tags: x.tags ?? [],
 });
 
 /* Lo que la pantalla de ventas necesita de una orden. `unit_price` ya viene con
@@ -367,6 +386,7 @@ const resumirOrden = (o) => ({
   estado: o.status,
   packId: o.pack_id ?? null,
   envioId: o.shipping?.id ?? null,
+  pagos: (o.payments ?? []).map((p) => ({ id: p.id, estado: p.status })),
   comisionPagos: (o.payments ?? [])
     .filter((p) => p.status === "approved")
     .reduce((s, p) => s + (Number(p.marketplace_fee) || 0), 0),
@@ -380,3 +400,18 @@ const resumirOrden = (o) => ({
     tipo: x.listing_type_id,
   })),
 });
+
+/* Del pago de Mercado Pago, lo que el vendedor paga en impuestos y retenciones:
+   `charges_details` con `type: "tax"` desde el vendedor (`collector`), menos
+   lo devuelto. El nombre viene como "tax_withholding-santa_fe". El neto es para
+   cruzar contra la cuenta de la app. */
+const resumirPago = (p) => {
+  const impuestos = (p.charges_details ?? [])
+    .filter((c) => c.type === "tax" && c.accounts?.from === "collector")
+    .map((c) => ({
+      nombre: c.name,
+      monto: (Number(c.amounts?.original) || 0) - (Number(c.amounts?.refunded) || 0),
+    }))
+    .filter((c) => c.monto !== 0);
+  return { impuestos, neto: Number(p.transaction_details?.net_received_amount) || null };
+};
