@@ -337,14 +337,19 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   también la caja de ajustes que las configura, para que se vea qué configura
   qué. La versión `-honda` es para las bandas del encabezado. El ámbar no se usa
   para esto: por eso el precio "publicar en ML" dejó de ser ámbar.
-- **La tabla tiene encabezado de dos niveles** (canal arriba —con una banda por
-  plan— y columnas abajo), `sticky top-0` contra la ventana: esta pantalla
+- **Las columnas de ML (precio, margen, ganancia y "En ML" por plan) y la caja
+  de sus ajustes viven en la pestaña Mercado Libre** (`src/MercadoLibre.jsx`), no
+  en el catálogo: ahí ya no entraban. Lo de arriba sobre `preciosML`, `margenesML`
+  y cuotas sigue valiendo igual; los datos no se movieron de `perfumes.json`.
+- **La tabla tiene encabezado de dos niveles** (canal arriba —en ML, una banda
+  por plan— y columnas abajo), `sticky top-0` contra la ventana: esta pantalla
   scrollea con la página, no tiene contenedor propio como la del pedido.
-  Encabezado y filas reciben **las mismas `columnas`**, que salen de
-  `columnasDeCatalogo(planes)`, y los dos llevan `border` (transparente en el
-  encabezado) para que el borde de la fila no corra las columnas un píxel.
+  Encabezado y filas reciben **las mismas `columnas`** (`COLUMNAS_CATALOGO` en el
+  catálogo, `columnasDeML(planes)` en ML), y los dos llevan `border`
+  (transparente en el encabezado) para que el borde de la fila no corra las
+  columnas un píxel.
 - Esas columnas van como **`gridTemplateColumns` en línea, no como clase de
-  Tailwind**: la cantidad depende de cuántos planes se publiquen, y Tailwind
+  Tailwind**: en ML la cantidad depende de cuántos planes se publiquen, y Tailwind
   genera sus clases leyendo el código, así que un `grid-cols-[...]` armado en
   tiempo de ejecución no existiría en el CSS. **La grilla va sin `gap`
   horizontal**: el aire lo pone cada celda con su padding, así el color del canal
@@ -487,6 +492,57 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   ejemplos": pisaba de un clic las formas que Franco había cargado.
 - Zona de color `--zona-tn` / `--zona-tn-honda`. No va al PDF de precios ni al
   orden "Por margen" (que siguen mirando la venta directa).
+- Franco quiere, más adelante, sacarlo del catálogo a su propia pestaña como se
+  hizo con Mercado Libre (mismo molde: `MercadoLibre.jsx`).
+
+## Conexión con Mercado Libre
+- Pestaña **Mercado Libre** (`vista === "mercadolibre"`). Además de los precios
+  por plan, vincula cada plan con su publicación real y le manda precio y stock.
+  Publicar nuevos, ventas y preguntas todavía no están.
+- Es la app propia de Franco en el DevCenter (su ID está en `.env.local`). Es la
+  **misma app que usa el conector de ML de Claude**, que solo da documentación:
+  por eso tiene **dos Redirect URIs** — la de claude.ai (del conector, no
+  borrarla) y `https://kukune.com.ar` (la de esta pestaña). Sin la segunda, ML
+  muestra "Lo sentimos, la aplicación no puede conectarse a tu cuenta". Para
+  escribir, la app necesita scopes de lectura **y escritura**.
+- **El secret y los tokens no llegan nunca al navegador.** `vite-plugin-ml.js`
+  (enganchado a dev y preview) habla con ML y expone `/api/ml/*`. La app se
+  configura en `.env.local` (ignorado): `ML_CLIENT_ID` y `ML_CLIENT_SECRET`
+  (obligatorios; el ID **no se escribe en el código**, a pedido de Franco: si
+  falta alguno, la pestaña lo dice y no ofrece Conectar) y `ML_REDIRECT_URI`
+  (opcional, por defecto `REDIRECT_POR_DEFECTO`). Cambiar de app es editar ese
+  archivo y reiniciar. Tokens: `datos/ml/tokens.json`, que
+  guarda de qué `app_id` son: con otra app se leen como "no conectado" y se
+  vuelve a conectar. Los vínculos con publicaciones no dependen de la app.
+  El cliente es `src/clienteML.js` — **no se puede llamar `mercadolibre.js`**: en
+  Windows choca con `MercadoLibre.jsx` y `import "./MercadoLibre"` agarra el que no es.
+- **El refresh token de ML rota en cada uso.** Se guarda siempre el nuevo y las
+  renovaciones van de a una (`renovando`); dos a la vez queman el token.
+- Hubo un script suelto de preguntas (`mercado_libre/preguntas-ml.ps1`), nunca
+  usado; se borró. Las preguntas, cuando se hagan, van en esta pestaña.
+- Conectar: ML no acepta `localhost` como redirect, así que vuelve a
+  kukune.com.ar y Franco pega esa dirección en un `Dialogo`. La pestaña de ML se
+  abre **en el clic, antes del `await`**: abierta después, el navegador la toma
+  como popup y la bloquea.
+- **El vínculo:** `publicacionesML` en el perfume, mapa `plan → MLA…`, gemelo de
+  `preciosML`. Aparece en `perfumes.json` solo cuando Franco elige una
+  publicación; sin la clave = sin vincular, sin migración. **Nunca se empareja
+  solo**: el buscador arranca con el nombre del perfume, pero se elige, y marca
+  las publicaciones ya usadas por otro plan.
+- La celda "En ML" muestra el precio publicado: verde si coincide con el del
+  catálogo, óxido si no (compara, no es ganancia: nada de ámbar).
+- **"Actualizar precios en ML"** relee las publicaciones, arma
+  `cambiosParaML(perfumesResueltos, publicaciones, planes)` (pura, en
+  `clienteML.js`) y muestra **todos** los cambios con tilde por renglón. Nada se
+  manda hasta confirmar; va de a uno y el resultado queda en cada renglón. Sale
+  de la lista **resuelta**: con el estado crudo, los clavados irían con el precio
+  viejo. Las publicaciones con variaciones no se tocan (el server las rechaza).
+- El stock no vive en el catálogo: ML es la fuente. Se cambia desde el buscador
+  de una publicación vinculada, con confirmación.
+- **Probar sin tocar ML real**: en la copia del scratchpad se le agrega al final
+  de su `vite-plugin-ml.js` un `fetch` falso que intercepta
+  `api.mercadolibre.com` (y un `.env.local` con un secret de mentira). Las
+  escrituras en ML real las decide Franco, una por una.
 
 ## Fórmulas (idénticas al Excel)
 - Factor de Gasto = Costos Extras (ARS) ÷ Inversión Total (USD) → ARS por USD de costo

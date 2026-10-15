@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
 import { urlFoto } from "./almacenamiento";
 import { analisisDePrecio, margenesDePlanes, planesPublicables, preciosDePlanes } from "./precios";
@@ -6,6 +6,17 @@ import { SelectorRedondeo } from "./TiendaNube";
 import { NumberCell } from "./NumberCell";
 import { pctSinMiles as pctCorto } from "./numeros";
 import { buscarPerfumes, ConVistaPrevia, margenReal, pesos } from "./Catalogo";
+import {
+  actualizarPublicacionML,
+  cambiosParaML,
+  enviarCodigoML,
+  estadoML,
+  leerPublicacionesML,
+  nombreDePlan,
+  pedirAutorizacionML,
+  vinculosDe,
+} from "./clienteML";
+import { BandaConexion, CeldaPublicacion, PanelActualizar } from "./MLConexion";
 
 /* ============================================================
    Mercado Libre.
@@ -19,28 +30,159 @@ import { buscarPerfumes, ConVistaPrevia, margenReal, pesos } from "./Catalogo";
 
 const PLANES_DE_CUOTAS = [3, 6, 9, 12];
 
-export const nombreDePlan = (plan) => (plan === 1 ? "1 pago" : `${plan} cuotas`);
-
 /* Misma regla que el catálogo: una sola fuente para encabezado y filas, en línea
    porque la cantidad depende de los planes, y sin `gap` para que la franja de
    color del canal sea continua.
 
    Columnas: foto · nombre · costo · ganancia directa ‖
-             (precio · margen · ganancia) por cada plan */
+             (precio · margen · ganancia · en ML) por cada plan */
 const columnasDeML = (planes) =>
   [
     "52px minmax(200px,1fr) 100px 100px",
-    planes.map(() => "112px 88px 100px").join(" "),
+    planes.map(() => "112px 88px 100px 104px").join(" "),
   ].join(" ");
 
-const anchoMinimo = (planes) => 52 + 200 + 200 + planes.length * 300;
+const anchoMinimo = (planes) => 52 + 200 + 200 + planes.length * 404;
 
-export default function MercadoLibre({ perfumes, ajustes, onAjustes, onCambiar, onSoltarMargenML }) {
+export default function MercadoLibre({
+  perfumes,
+  ajustes,
+  onAjustes,
+  onCambiar,
+  onSoltarMargenML,
+  onConfirmar,
+}) {
   const [consulta, setConsulta] = useState("");
+  const [cuenta, setCuenta] = useState(null); // null = preguntando
+  const [publicaciones, setPublicaciones] = useState(null);
+  const [errorML, setErrorML] = useState("");
+  const [trayendo, setTrayendo] = useState(false);
+  const [panel, setPanel] = useState(null); // { cambios, perdidos }
   /* Un pago siempre, más los planes con comisión cargada: cada uno es una
      publicación distinta en ML y tiene su propio precio. */
   const planes = useMemo(() => planesPublicables(ajustes.cuotasML), [ajustes.cuotasML]);
   const columnas = columnasDeML(planes);
+
+  /* Solo lectura: al entrar se pregunta si hay conexión y se traen las
+     publicaciones. Nada de esto escribe ni en ML ni en el catálogo. */
+  const traerPublicaciones = useCallback(async () => {
+    setTrayendo(true);
+    setErrorML("");
+    try {
+      const pubs = await leerPublicacionesML();
+      setPublicaciones(pubs);
+      return pubs;
+    } catch (e) {
+      setErrorML(`No se pudieron traer las publicaciones (${e.message}).`);
+      return null;
+    } finally {
+      setTrayendo(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let vigente = true;
+    estadoML()
+      .then((c) => {
+        if (!vigente) return;
+        setCuenta(c);
+        if (c.conectado) traerPublicaciones();
+      })
+      .catch((e) => vigente && setCuenta({ conectado: false, error: e.message }));
+    return () => {
+      vigente = false;
+    };
+  }, [traerPublicaciones]);
+
+  /* ML no acepta localhost como redirect: vuelve a kukune.com.ar con el código
+     en la dirección, y Franco la pega acá. Es el mismo camino que el script de
+     preguntas. */
+  const conectar = async () => {
+    setErrorML("");
+    // La pestaña se abre YA, en el clic, y después se le pone la dirección: si
+    // se abriera después del `await`, el navegador lo toma como popup y lo bloquea.
+    const ventana = window.open("", "_blank");
+    try {
+      const { url } = await pedirAutorizacionML();
+      if (ventana) {
+        ventana.opener = null;
+        ventana.location.href = url;
+      } else {
+        setErrorML(`El navegador no abrió la pestaña. Abrí esta dirección a mano: ${url}`);
+      }
+      onConfirmar({
+        titulo: "Conectar Mercado Libre",
+        texto:
+          "Se abrió Mercado Libre en otra pestaña. Entrá con la cuenta de KUKUNE y autorizá la app. Te va a mandar a kukune.com.ar: copiá la dirección completa de la barra (la que tiene ?code=TG-…) y pegala acá.",
+        conCampo: true,
+        marcador: "https://kukune.com.ar/?code=TG-…",
+        etiquetaOk: "Conectar",
+        onAceptar: async (pegado) => {
+          try {
+            const c = await enviarCodigoML(pegado);
+            setCuenta(c);
+            traerPublicaciones();
+          } catch (e) {
+            setErrorML(`No se pudo conectar (${e.message}).`);
+          }
+        },
+      });
+    } catch (e) {
+      ventana?.close();
+      setErrorML(e.message);
+    }
+  };
+
+  const pubPorId = useMemo(
+    () => new Map((publicaciones ?? []).map((x) => [x.id, x])),
+    [publicaciones]
+  );
+
+  /* A qué perfume y plan está vinculada cada publicación: el buscador lo marca
+     para no vincular la misma dos veces sin darse cuenta. */
+  const usadas = useMemo(() => {
+    const m = new Map();
+    for (const p of perfumes)
+      for (const [plan, id] of Object.entries(vinculosDe(p)))
+        m.set(id, `${p.nombre} · ${nombreDePlan(plan)}`);
+    return m;
+  }, [perfumes]);
+
+  const vinculados = useMemo(
+    () => perfumes.reduce((n, p) => n + Object.keys(vinculosDe(p)).length, 0),
+    [perfumes]
+  );
+
+  // Lo único que esta pantalla agrega a perfumes.json, y solo cuando se elige.
+  const vincular = (perfume, plan, itemId) => {
+    const resto = { ...vinculosDe(perfume) };
+    if (itemId) resto[plan] = itemId;
+    else delete resto[plan];
+    onCambiar(perfume.id, { publicacionesML: Object.keys(resto).length ? resto : undefined });
+  };
+
+  const abrirActualizar = async () => {
+    // Se releen antes de comparar: el precio en ML pudo cambiar desde que
+    // entraste a la pestaña.
+    const pubs = await traerPublicaciones();
+    if (!pubs) return;
+    setPanel(cambiosParaML(perfumes, pubs, planes));
+  };
+
+  const cambiarStock = (pub, stock) =>
+    onConfirmar({
+      titulo: "Cambiar el stock en Mercado Libre",
+      texto: `"${pub.titulo}" (${pub.id}): de ${pub.stock} a ${stock} unidades. Se cambia en la publicación real.`,
+      etiquetaOk: "Cambiar stock",
+      onAceptar: async () => {
+        try {
+          const r = await actualizarPublicacionML(pub.id, { available_quantity: stock });
+          setPublicaciones((ps) => ps.map((x) => (x.id === pub.id ? r.publicacion : x)));
+        } catch (e) {
+          setErrorML(`No se pudo cambiar el stock de ${pub.id} (${e.message}).`);
+        }
+      },
+    });
 
   /* Orden alfabético congelado por conjunto, como en el catálogo. Acá no se
      escriben nombres, pero sí precios, y la lista no debe moverse por eso. */
@@ -91,7 +233,26 @@ export default function MercadoLibre({ perfumes, ajustes, onAjustes, onCambiar, 
         </div>
       </div>
 
+      <BandaConexion
+        cuenta={cuenta}
+        publicaciones={publicaciones}
+        vinculados={vinculados}
+        trayendo={trayendo}
+        onConectar={conectar}
+        onRefrescar={traerPublicaciones}
+        onActualizar={abrirActualizar}
+      />
+      {errorML && (
+        <p className="mb-4 text-[12.5px]" style={{ color: "var(--oxido)" }}>
+          {errorML}
+        </p>
+      )}
+
       <AjustesML ajustes={ajustes} onAjustes={onAjustes} />
+
+      {panel && (
+        <PanelActualizar {...panel} onCerrar={() => setPanel(null)} onTerminado={traerPublicaciones} />
+      )}
 
       {visibles.length === 0 ? (
         <p className="py-12 text-center text-[13px]" style={{ color: "var(--humo-claro)" }}>
@@ -113,6 +274,12 @@ export default function MercadoLibre({ perfumes, ajustes, onAjustes, onCambiar, 
                   columnas={columnas}
                   onCambiar={onCambiar}
                   onSoltarMargenML={onSoltarMargenML}
+                  conectado={!!cuenta?.conectado}
+                  publicaciones={publicaciones}
+                  pubPorId={pubPorId}
+                  usadas={usadas}
+                  onVincular={vincular}
+                  onStock={cambiarStock}
                 />
               ))}
             </ul>
@@ -220,7 +387,7 @@ function EncabezadoML({ planes, columnas }) {
           <span
             key={plan}
             className="k-col px-2 py-1.5"
-            style={{ background: "var(--zona-ml-honda)", color: "var(--tinta)", gridColumn: "span 3" }}
+            style={{ background: "var(--zona-ml-honda)", color: "var(--tinta)", gridColumn: "span 4" }}
           >
             Mercado Libre · {nombreDePlan(plan)}
           </span>
@@ -236,6 +403,7 @@ function EncabezadoML({ planes, columnas }) {
             {col("Precio", "var(--zona-ml)")}
             {col("Margen", "var(--zona-ml)")}
             {col("Ganancia", "var(--zona-ml)")}
+            {col("En ML", "var(--zona-ml)")}
           </Fragment>
         ))}
       </div>
@@ -246,7 +414,20 @@ function EncabezadoML({ planes, columnas }) {
 const colorGanancia = (g) =>
   g === null ? "var(--humo-claro)" : g >= 0 ? "var(--ambar)" : "var(--oxido)";
 
-function FilaML({ perfume, ajustes, planes, columnas, onCambiar, onSoltarMargenML }) {
+function FilaML({
+  perfume,
+  ajustes,
+  planes,
+  columnas,
+  onCambiar,
+  onSoltarMargenML,
+  conectado,
+  publicaciones,
+  pubPorId,
+  usadas,
+  onVincular,
+  onStock,
+}) {
   const r = analisisDePrecio({
     costo: perfume.costo,
     precioPublico: perfume.precioPublico,
@@ -420,6 +601,18 @@ function FilaML({ perfume, ajustes, planes, columnas, onCambiar, onSoltarMargenM
                     ? ""
                     : ` Para igualar la venta directa habría que publicar ${pesos(x.sugerido)}.`),
           })}
+          <CeldaPublicacion
+            perfume={perfume}
+            plan={x.plan}
+            precioCatalogo={x.precio}
+            itemId={vinculosDe(perfume)[x.plan]}
+            conectado={conectado}
+            publicaciones={publicaciones}
+            pubPorId={pubPorId}
+            usadas={usadas}
+            onVincular={onVincular}
+            onStock={onStock}
+          />
         </Fragment>
       ))}
     </li>
