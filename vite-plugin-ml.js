@@ -2,6 +2,7 @@ import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { loadEnv } from "vite";
+import { crearPublicador } from "./ml-publicar.js";
 
 /* ============================================================
    Mercado Libre, del lado del server.
@@ -64,6 +65,7 @@ export default function pluginML() {
   let secret = "";
   let appId = "";
   let redirectUri = REDIRECT_POR_DEFECTO;
+  let basePublicaciones = "";
 
   const montar = (server) => {
     const raiz = path.resolve(server.config.root, "datos", "ml");
@@ -129,22 +131,31 @@ export default function pluginML() {
       return renovando;
     };
 
-    const ml = async (ruta, opciones = {}) => {
+    /* Sin tirar error: -> { ok, status, datos }. Lo usa publicar, que necesita
+       leer los avisos de ML (`cause`) también cuando la respuesta es un 400. */
+    const mlCrudo = async (ruta, opciones = {}) => {
       const t = await tokenVigente();
       // Una URL entera va tal cual: es Mercado Pago (MP), que acepta el mismo token.
       const r = await fetch(ruta.startsWith("https://") ? ruta : `${API}${ruta}`, {
         ...opciones,
         headers: {
           Authorization: `Bearer ${t.access_token}`,
-          ...(opciones.body ? { "content-type": "application/json" } : {}),
+          // JSON solo si el cuerpo es texto: una foto va como FormData y el
+          // fetch le pone su propio content-type multipart.
+          ...(typeof opciones.body === "string" ? { "content-type": "application/json" } : {}),
           ...(opciones.headers || {}),
         },
       });
       const datos = await r.json().catch(() => ({}));
-      if (!r.ok) {
+      return { ok: r.ok, status: r.status, datos };
+    };
+
+    const ml = async (ruta, opciones = {}) => {
+      const { ok, status, datos } = await mlCrudo(ruta, opciones);
+      if (!ok) {
         // ML a veces explica en `cause` (lista) y no en `message`.
         const causa = Array.isArray(datos.cause) ? datos.cause.map((c) => c.message).join(" · ") : "";
-        throw new ErrorML(r.status, [datos.message, causa].filter(Boolean).join(" — ") || `Error ${r.status}`);
+        throw new ErrorML(status, [datos.message, causa].filter(Boolean).join(" — ") || `Error ${status}`);
       }
       return datos;
     };
@@ -249,9 +260,19 @@ export default function pluginML() {
       res.end(JSON.stringify(datos));
     };
 
+    // Publicar perfumes (fotos de la carpeta Mercadolibre de cada uno): ml-publicar.js.
+    const rutasDePublicar = crearPublicador({
+      ml,
+      mlCrudo,
+      raizDatos: raiz,
+      base: basePublicaciones || path.resolve(server.config.root, "..", "Mi Negocio", "branding", "publicaciones"),
+    });
+
     server.middlewares.use("/api/ml", async (req, res) => {
       const ruta = (req.url || "/").split("?")[0].replace(/\/+$/, "") || "/";
       try {
+        if (await rutasDePublicar(req, res, ruta, { cuerpo, responder })) return;
+
         if (req.method === "GET" && ruta === "/estado") {
           const falta = faltantes();
           if (falta.length) return responder(res, { conectado: false, falta });
@@ -343,7 +364,8 @@ export default function pluginML() {
   return {
     name: "kukune-ml",
     configResolved(config) {
-      const env = loadEnv(config.mode, config.root, "ML_");
+      const env = loadEnv(config.mode, config.root, ["ML_", "KUKUNE_"]);
+      basePublicaciones = (env.KUKUNE_PUBLICACIONES || "").trim();
       secret = (env.ML_CLIENT_SECRET || "").trim();
       appId = (env.ML_CLIENT_ID || "").trim();
       redirectUri = (env.ML_REDIRECT_URI || "").trim() || REDIRECT_POR_DEFECTO;

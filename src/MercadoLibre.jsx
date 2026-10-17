@@ -20,6 +20,8 @@ import {
 } from "./clienteML";
 import { BandaConexion, CeldaPublicacion, PanelActualizar } from "./MLConexion";
 import VentasML from "./VentasML";
+import PublicarML from "./PublicarML";
+import ActualizarML from "./ActualizarML";
 
 /* ============================================================
    Mercado Libre.
@@ -64,6 +66,12 @@ export default function MercadoLibre({
   const [errorML, setErrorML] = useState("");
   const [trayendo, setTrayendo] = useState(false);
   const [panel, setPanel] = useState(null); // { cambios, perdidos }
+  // El perfume que se está publicando (id): el panel lee siempre la versión
+  // resuelta y al día, así ve los vínculos que va agregando.
+  const [publicandoId, setPublicandoId] = useState(null);
+  const publicando = perfumes.find((p) => p.id === publicandoId) ?? null;
+  const [actualizandoId, setActualizandoId] = useState(null);
+  const actualizando = perfumes.find((p) => p.id === actualizandoId) ?? null;
   /* Un pago siempre, más los planes con comisión cargada: cada uno es una
      publicación distinta en ML y tiene su propio precio. */
   const planes = useMemo(() => planesPublicables(ajustes.cuotasML), [ajustes.cuotasML]);
@@ -307,6 +315,30 @@ export default function MercadoLibre({
             <PanelActualizar {...panel} onCerrar={() => setPanel(null)} onTerminado={releerTrasActualizar} />
           )}
 
+          {publicando && (
+            <PublicarML
+              perfume={publicando}
+              ajustes={ajustes}
+              planes={planes}
+              onAjustes={onAjustes}
+              onCambiar={onCambiar}
+              onConfirmar={onConfirmar}
+              onCerrar={() => setPublicandoId(null)}
+              onPublicado={releerTrasActualizar}
+            />
+          )}
+
+          {actualizando && (
+            <ActualizarML
+              perfume={actualizando}
+              planes={planes}
+              onCambiar={onCambiar}
+              onConfirmar={onConfirmar}
+              onCerrar={() => setActualizandoId(null)}
+              onActualizado={releerTrasActualizar}
+            />
+          )}
+
           {visibles.length === 0 ? (
             <p className="py-12 text-center text-[13px]" style={{ color: "var(--humo-claro)" }}>
               {perfumes.length === 0
@@ -333,6 +365,8 @@ export default function MercadoLibre({
                       usadas={usadas}
                       onVincular={vincular}
                       onStock={cambiarStock}
+                      onPublicar={() => setPublicandoId(p.id)}
+                      onActualizar={() => setActualizandoId(p.id)}
                     />
                   ))}
                 </ul>
@@ -482,6 +516,8 @@ function FilaML({
   usadas,
   onVincular,
   onStock,
+  onPublicar,
+  onActualizar,
 }) {
   const r = analisisDePrecio({
     costo: perfume.costo,
@@ -549,9 +585,36 @@ function FilaML({
         </ConVistaPrevia>
       </div>
 
-      <span className="truncate px-2 text-[13px]" style={{ color: "var(--tinta)" }} title={perfume.nombre}>
-        {perfume.nombre}
-      </span>
+      <div className="flex min-w-0 items-center gap-1.5 px-2">
+        <span className="truncate text-[13px]" style={{ color: "var(--tinta)" }} title={perfume.nombre}>
+          {perfume.nombre}
+        </span>
+        {/* Publicar aparece al pasar el mouse, como el "=": solo si algún plan
+            todavía no tiene publicación vinculada. */}
+        {conectado && planes.some((plan) => !vinculosDe(perfume)[plan]) && (
+          <button
+            type="button"
+            onClick={onPublicar}
+            title={`Publicar ${perfume.nombre} en Mercado Libre (los planes sin publicación)`}
+            className="k-col shrink-0 rounded-[3px] border px-1.5 py-0.5 opacity-0 transition group-hover:opacity-100 focus:opacity-100"
+            style={{ borderColor: "var(--linea)", color: "var(--humo)" }}
+          >
+            Publicar
+          </button>
+        )}
+        {/* Fotos, ficha, nombre y descripción de lo ya publicado (solo las normales). */}
+        {conectado && planes.some((plan) => vinculosDe(perfume)[plan]) && (
+          <button
+            type="button"
+            onClick={onActualizar}
+            title={`Actualizar fotos, ficha, nombre o descripción de ${perfume.nombre} en Mercado Libre`}
+            className="k-col shrink-0 rounded-[3px] border px-1.5 py-0.5 opacity-0 transition group-hover:opacity-100 focus:opacity-100"
+            style={{ borderColor: "var(--linea)", color: "var(--humo)" }}
+          >
+            Actualizar
+          </button>
+        )}
+      </div>
 
       {cifra(sinCosto ? "—" : pesos(perfume.costo), {
         fondo: "var(--zona-directa)",

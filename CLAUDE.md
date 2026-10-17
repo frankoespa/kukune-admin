@@ -500,8 +500,8 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 ## Conexión con Mercado Libre
 - Pestaña **Mercado Libre** (`vista === "mercadolibre"`). Además de los precios
   por plan, vincula cada plan con su publicación real y le manda precio y stock.
-  Además, la sección **Ventas** (ver abajo). Publicar nuevos y preguntas todavía
-  no están.
+  Además, las secciones **Ventas**, **Publicar** y **Actualizar** (ver abajo). Las preguntas
+  todavía no están.
 - Es la app propia de Franco en el DevCenter (su ID está en `.env.local`). Es la
   **misma app que usa el conector de ML de Claude**, que solo da documentación:
   por eso tiene **dos Redirect URIs** — la de claude.ai (del conector, no
@@ -644,6 +644,95 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   - Abrir la app no escribe: el campo aparece en `perfumes.json` recién con el
     primer cambio de costo de cada perfume.
 - En desarrollo la sección pide las ventas dos veces al entrar: es `StrictMode`.
+
+## Publicar en Mercado Libre
+- Botón **"Publicar"** en la fila del perfume (pestaña ML → Precios), al pasar
+  el mouse, si algún plan no tiene publicación vinculada. Abre `PublicarML.jsx`
+  (portal, z 55: debajo del `Dialogo`, que confirma encima). Server:
+  `ml-publicar.js`, enganchado por `vite-plugin-ml.js`. Puras: `src/armadoML.js`
+  (sin imports, la usan el server y el panel, probada desde Node). **No se puede
+  llamar `publicarML.js`**: choca con `PublicarML.jsx` en Windows (ya pasó).
+- **Fotos y texto salen SOLO de `<base>/<Perfume>/Mercadolibre/`** (`base` =
+  `KUKUNE_PUBLICACIONES` en `.env.local`, o `../Mi Negocio/branding/publicaciones`).
+  **Nada de `Tiendanube/`**, pedido de Franco: cada canal con lo suyo. Esas
+  carpetas se leen, nunca se escriben; los nombres que llegan del navegador se
+  rechazan si traen barras o `..`. Fotos JPG/PNG en orden de nombre (la primera
+  es la principal); las de menos de 500 px (mínimo de ML) no se pueden tildar.
+  Si la carpeta no tiene `Mercadolibre/`, el panel dice qué ruta crear.
+- Esa carpeta la arma el skill **fotos-mercadolibre**: se llama `MercadoLibre`
+  (en Windows es la misma que `Mercadolibre`) y trae fotos `<perfume>_ml_N.jpg` de
+  1200×1200 y el texto **`publicacion_ml.txt`** (se acepta también
+  `publicacion.txt`: `NOMBRES_TXT` en `armadoML.js`). Del texto: la sección
+  TÍTULO es el nombre sugerido de la publicación (`tituloDesdeTxt`); la
+  descripción es el resto **sin** TÍTULO, SEO ni "FICHA TÉCNICA DE ML" (esa es
+  para completar los campos, no para el comprador), y la referencia al lado del
+  formulario es justamente "FICHA TÉCNICA DE ML" si está. Verificado con la
+  carpeta real del Lattafa Fahad, solo leyendo.
+- La carpeta del perfume **se propone, no se elige sola** (`proponerCarpeta`, por
+  palabras). Se marca "sugerida" solo con parecido ≥ 60% y sin empate: con los
+  nombres reales, "La Vivacite" se parecía 40% a "Dark Door Sport". Lo elegido se
+  guarda en el perfume (`carpetaPublicacion`).
+- **La ficha técnica se carga a mano** (decisión de Franco), `CAMPOS_FICHA` en
+  `armadoML.js`; los valores de las listas salen de `/categories/MLA1271/attributes`.
+  Al lado, solo de referencia, la ficha del texto (ver arriba). Se guarda en
+  el perfume (`fichaML`, y `familyNameML`) al tocar Validar.
+- Lo que pide ML (doc + la publicación real del Musamam): categoría **MLA1271**.
+  La cuenta está en **User Products** (`user_product_seller`): **no se manda
+  `title`, se manda `family_name`** y ML arma el título. Obligatorios: BRAND,
+  PERFUME_NAME, UNIT_VOLUME y GTIN o EMPTY_GTIN_REASON. Plan → tipo con
+  `tipoDePlan()` (el inverso de `cuotasDePublicacion`). Multivaluados (familias,
+  notas) van como `values: [{name}]`.
+- **Condiciones** (garantía, factura, máximo por compra, medidas del paquete) en
+  `ajustes.publicacionML`, editables en el panel. El arranque
+  (`CONDICIONES_POR_DEFECTO`) es lo que tiene la publicación del Musamam.
+- **Validar no publica**: sube las fotos y corre `POST /items/validate` por plan.
+  ML **no tiene sandbox**: lo publicado es real. "Publicar N" se habilita solo si
+  todo validó, cualquier cambio obliga a validar de nuevo, y pide confirmación.
+  El server **vuelve a validar** antes de crear: si alguna no pasa, no crea ninguna.
+  Después va de a una: `POST /items`, `/description`, espera a que ML le asigne
+  `catalog_product_id` (hasta 4 × 2,5 s) y crea la de catálogo con
+  `POST /items/catalog_listings`. Lo creado queda vinculado aunque falle lo
+  siguiente; nada se reintenta solo.
+- Las fotos se suben **una vez**: el id de ML se recuerda por sha1 del archivo en
+  `datos/ml/fotos-subidas.json` (archivo aparte, no es del negocio).
+- Al terminar relee las publicaciones nuevas y dice si quedaron **como el
+  Musamam**: las 4 (normal y catálogo de 1 pago y 6 cuotas) en el **mismo User
+  Product** —comparten stock— y cada normal con `item_relations` a su de
+  catálogo. Si no, lo marca en óxido; no corrige nada.
+- `mlCrudo()` en el plugin devuelve `{ok, status, datos}` sin tirar error (hace
+  falta leer `cause` en los 400), y solo pone `content-type: json` si el cuerpo
+  es texto: una foto va como `FormData` multipart.
+- **Probado solo en la copia, con ML falso.** La primera publicación real la hace
+  Franco con un perfume que elija.
+
+## Actualizar una publicación
+- Botón **"Actualizar"** en la fila (al lado de "Publicar") cuando el perfume
+  tiene alguna publicación normal vinculada. Abre `ActualizarML.jsx`: fotos,
+  ficha técnica, nombre y descripción. **Precio y stock no**: siguen en sus botones.
+- **Solo las normales.** Las de catálogo llevan las fotos y la ficha del
+  producto de catálogo de ML, no las del vendedor (aclaración de Franco), y el
+  server rechaza un PUT a una de catálogo.
+- **Las fotos de la carpeta reemplazan a todas** (decisión de Franco): en ML,
+  `PUT /items/<id>` con `pictures` deja exactamente la lista que se manda y borra
+  el resto. Va detrás de una casilla apagada al abrir, y la confirmación (en
+  óxido) dice que las fotos actuales se borran.
+- Lee lo que hay hoy en ML (`GET /api/ml/publicacion/<MLA>`) y precarga la
+  ficha con `fichaDesdeAtributos()` (el inverso de `atributosDeFicha`).
+  `cambiosDeActualizacion()` arma el resumen y **solo manda lo que cambió**
+  (verificado: el PUT de prueba llevó solo las fotos y `BRAND`). Notas con otro
+  espaciado o familias en otro orden no cuentan como cambio, y **vaciar un campo
+  tampoco**: borrar un atributo en ML es otra operación.
+- Fotos, ficha y nombre se sincronizan solos entre las del mismo **User
+  Product**: se manda **una por producto de usuario** (`grupos`) y después se
+  releen todas las normales (`/api/ml/publicaciones/estado`): "ya tiene los
+  cambios", "sincronizando" (gris) y una segunda lectura a los 10 s; si sigue
+  distinta, óxido.
+- El **nombre** (`family_name`) se traba si alguna del producto ya vendió: ML no
+  deja cambiarlo. El Musamam real tiene 4 ventas.
+- Las piezas comunes con Publicar (carpeta y fotos, ficha, rótulos) viven en
+  `src/piezasPublicarML.jsx` (`useCarpetaML`, `SelectorDeFotos`, `CampoFicha`).
+- Leído contra el Musamam real con GET (solo lectura): 7 fotos, ficha completa,
+  y la marca en ML está escrita **"Lataffa"**. El primer PUT real lo hace Franco.
 
 ## Fórmulas (idénticas al Excel)
 - Factor de Gasto = Costos Extras (ARS) ÷ Inversión Total (USD) → ARS por USD de costo

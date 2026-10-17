@@ -48,6 +48,45 @@ export const actualizarPublicacionML = (id, cambios) =>
 export const leerVentasML = (desde, hasta) =>
   pedir(`/ventas?${new URLSearchParams({ desde, hasta })}`);
 
+/* ---- Publicar (ver ml-publicar.js) ---- */
+
+/* -> { base, existe, carpetas: [{ nombre, existe, fotos: [{archivo, ancho, alto, bytes}], txt }] }
+   `existe` de cada carpeta = si tiene la subcarpeta Mercadolibre. */
+export const leerCarpetasML = () => pedir("/carpetas");
+
+/* Una foto o el texto (publicacion_ml.txt) de `<carpeta>/Mercadolibre/`. */
+export const urlDeCarpetaML = (carpeta, archivo) =>
+  `${URL_ML}/carpetas/${encodeURIComponent(carpeta)}/${encodeURIComponent(archivo)}`;
+
+export const leerTxtDeCarpetaML = async (carpeta, archivo) => {
+  if (!archivo) return "";
+  const r = await fetch(urlDeCarpetaML(carpeta, archivo));
+  return r.ok ? r.text() : "";
+};
+
+/* -> { ATRIBUTO: [valores posibles] } de la categoría de perfumes. */
+export const leerFichaML = async () => (await pedir("/ficha")).listas;
+
+/* No publica: sube las fotos y le pregunta a ML si aceptaría cada plan. */
+export const validarPublicacionML = (pedido) =>
+  pedir("/publicar/validar", { method: "POST", body: JSON.stringify(pedido) });
+
+/* ESCRIBE EN ML: crea las publicaciones. Solo después de una confirmación. */
+export const publicarEnML = (pedido) => pedir("/publicar", { method: "POST", body: JSON.stringify(pedido) });
+
+/* ---- Actualizar una que ya existe (ver ml-publicar.js) ---- */
+
+/* -> { id, familyName, vendidas, userProductId, catalogo, fotos: [{id, url}], attributes, descripcion } */
+export const leerPublicacionML = (id) => pedir(`/publicacion/${id}`);
+
+/* ESCRIBE EN ML. `itemIds`: una normal por producto de usuario. Solo después de
+   una confirmación. -> { fotos (ids subidos) | null, resultados: [{itemId, ok, errores, advertencias}] } */
+export const actualizarEnML = (pedido) => pedir("/actualizar", { method: "POST", body: JSON.stringify(pedido) });
+
+/* Relee varias para ver si ML ya les pasó los cambios. */
+export const estadoDePublicacionesML = async (ids) =>
+  (await pedir(`/publicaciones/estado?${new URLSearchParams({ ids: ids.join(",") })}`)).publicaciones;
+
 export const vinculosDe = (perfume) => perfume?.publicacionesML ?? {};
 
 /* La publicación de catálogo de cada plan, mapa gemelo (`plan → MLA`). Aparte y
