@@ -118,6 +118,24 @@ export function redondearPrecio(precio, { redondeo = 1, k = 1, costo } = {}) {
   return desvioMaximoPP <= 0.05 ? Math.round(precio) : Math.round(precio * 100) / 100;
 }
 
+/* Precio promocional de Tiendanube: el precio de la app (el que deja la
+   ganancia) es lo que paga el cliente, y el normal se infla para mostrarse
+   tachado. `precio / (1 − descuento)` redondeado SIEMPRE hacia arriba ("Sin
+   redondear" = al peso siguiente), así el descuento que se ve queda igual o un
+   poco mayor al pedido. No entra en ninguna cuenta de ganancia.
+   -> el precio tachado, o null si no hay precio o el descuento no tiene sentido. */
+export function precioTachadoTN(precio, descuento, redondeo = 1) {
+  const p = Number(precio) || 0;
+  const d = Number(descuento) || 0;
+  if (!(p > 0) || !(d > 0) || !(d < 1)) return null;
+  const r = Number(redondeo) > 1 ? Number(redondeo) : 1;
+  return Math.ceil(p / (1 - d) / r - 1e-9) * r;
+}
+
+/* El descuento que se ve en la tienda con un precio tachado: 1 − precio ÷ tachado. */
+export const descuentoVisto = (precio, tachado) =>
+  Number(tachado) > 0 && Number(precio) > 0 ? 1 - Number(precio) / Number(tachado) : null;
+
 /* El precio a publicar en un canal para que quede la MISMA ganancia que se
    hace vendiendo directo. Despeje de `precio·k − envío − costo = ganancia`. */
 export function precioParaIgualar({ costo, ganancia, comision = 0, envio = 0, redondeo = 1 }) {

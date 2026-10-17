@@ -40,6 +40,7 @@ import {
 import Catalogo, { buscarPerfumes, ConVistaPrevia } from "./Catalogo";
 import { registrarCosto } from "./historialCostos";
 import MercadoLibre from "./MercadoLibre";
+import PestanaTiendaNube from "./PestanaTiendaNube";
 import { resolverPrecios, resolverPreciosDelCatalogo } from "./precios";
 import { NumberCell } from "./NumberCell";
 import { ContextoBloqueo, useBloqueo } from "./bloqueo";
@@ -1831,6 +1832,7 @@ export default function App() {
                 ["pedido", "Mesa de precios"],
                 ["catalogo", "Catálogo"],
                 ["mercadolibre", "Mercado Libre"],
+                ["tiendanube", "Tiendanube"],
               ].map(([id, texto]) => (
                 <button
                   key={id}
@@ -1972,7 +1974,6 @@ export default function App() {
           exportando={armandoPrecios}
           onCambiar={cambiarPerfume}
           onSoltarMargen={soltarMargenDelCatalogo}
-          onSoltarMargenTN={soltarMargenTNDelCatalogo}
           onCrear={crearPerfume}
           onBorrar={borrarPerfume}
           onFoto={ponerFoto}
@@ -1986,6 +1987,17 @@ export default function App() {
           onAjustes={(campos) => setAjustes((a) => ({ ...a, ...campos }))}
           onCambiar={cambiarPerfume}
           onSoltarMargenML={soltarMargenMLDelCatalogo}
+          onConfirmar={setDialogo}
+        />
+      )}
+
+      {vista === "tiendanube" && (
+        <PestanaTiendaNube
+          perfumes={perfumesResueltos}
+          ajustes={ajustes}
+          onAjustes={(campos) => setAjustes((a) => ({ ...a, ...campos }))}
+          onCambiar={cambiarPerfume}
+          onSoltarMargenTN={soltarMargenTNDelCatalogo}
           onConfirmar={setDialogo}
         />
       )}

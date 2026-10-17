@@ -24,7 +24,7 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   `src/main.jsx` solo monta `<App />`.
 - Piezas separadas de `App.jsx`: `src/pdf.js` (catálogo PDF), `src/precios.js`
   (precio sugerido por margen), `src/almacenamiento.js` (cliente de los archivos)
-  y `src/Catalogo.jsx` (la pantalla del catálogo). La navegación entre pantallas
+  y las pantallas `src/Catalogo.jsx`, `src/MercadoLibre.jsx` y `src/PestanaTiendaNube.jsx`. La navegación entre pantallas
   es un `useState` (`vista`), no hay router.
 - `src/pdf.js`: arma el catálogo para el proveedor con
   jsPDF. Recibe datos planos (`{ producto, cantidad, foto }[]`) y devuelve el
@@ -299,7 +299,7 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   margen, sugerido}`). Se apoya en `resultadoDeCanal({costo, precio, comision,
   envio})` y `precioParaIgualar()`. Tiendanube **no** entró por ahí: tiene
   varias formas de pago con IVA, descuento y mínimo, y lleva sus propias
-  funciones (ver "Tiendanube en el catálogo").
+  funciones (ver "Tiendanube").
 - **El envío local (Rosario) no entra en ninguna cuenta.** Es la columna *con
   envío* = `precioPublico + envioLocal`, el precio que se le cotiza al cliente
   que pide entrega. La ganancia y el margen se siguen midiendo contra el costo,
@@ -425,7 +425,13 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - `dibujarFotoEn(doc, foto, x, y, w, h)` sirve a los dos PDF; `dibujarFoto`
   quedó como el atajo con las medidas de la cuadrícula del proveedor.
 
-## Tiendanube en el catálogo
+## Tiendanube
+- **Vive en su propia pestaña** (`vista === "tiendanube"`, `src/PestanaTiendaNube.jsx`),
+  con el molde de `MercadoLibre.jsx`. Se mudó del catálogo, no se duplicó: el
+  catálogo quedó con costo, venta directa y usos. **Los datos no se movieron**:
+  `precioTN`, `margenTN` y `ajustes.tiendaNube` siguen en `perfumes.json` y la
+  mudanza no reescribió nada. La pestaña recibe `perfumesResueltos` y
+  `soltarMargenTNDelCatalogo`, y muestra costo y ganancia directa de referencia.
 - **Fuente de verdad sobre cómo cobra y descuenta Tiendanube: su Centro de
   Ayuda**, https://ayuda.tiendanube.com/. Antes de tocar comisiones, cupones,
   promociones o medios de pago, mirar ahí si algo cambió, en vez de suponer.
@@ -490,12 +496,62 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
     precios. La cuenta es el parámetro `cupon` de `analisisTiendaNube()`; sin
     cupón da exactamente lo de siempre.
 - **Quitar una forma de pago pide confirmación** con el `Dialogo` de `App.jsx`
-  (llega como `onConfirmar` por `Catalogo`). Ya no existe "Volver a los
+  (llega como `onConfirmar` por la pestaña). Ya no existe "Volver a los
   ejemplos": pisaba de un clic las formas que Franco había cargado.
 - Zona de color `--zona-tn` / `--zona-tn-honda`. No va al PDF de precios ni al
   orden "Por margen" (que siguen mirando la venta directa).
-- Franco quiere, más adelante, sacarlo del catálogo a su propia pestaña como se
-  hizo con Mercado Libre (mismo molde: `MercadoLibre.jsx`).
+
+## Conexión con Tiendanube
+- Mismo molde que ML: vincular cada perfume con su variante y mandarle precio y
+  stock, siempre con confirmación. Piezas: `vite-plugin-tn.js` (dev y preview,
+  expone `/api/tn/*`: `estado`, `autorizar`, `autorizar/codigo`, `productos`,
+  `PUT variantes/<p>/<v>`), `src/clienteTN.js` (cliente + puras) y
+  `src/ConexionTN.jsx` (banda, `CeldaTN`, `BuscadorTN`, `PanelActualizarTN`).
+  **`clienteTN.js` no se puede llamar `tiendanube.js`**: choca con `TiendaNube.jsx`.
+- **La app la crea Franco** en el portal de Partners de Tiendanube, con scope
+  `write_products` y redirect `https://kukune.com.ar` (pide también URLs de
+  privacidad y de webhooks de datos: alcanzan páginas de kukune.com.ar).
+  `TN_CLIENT_ID` y `TN_CLIENT_SECRET` van en `.env.local`; sin ellos la pestaña
+  lo dice. Token en `datos/tn/tokens.json`, con el `app_id`: con otra app se lee
+  "no conectado". **El token no vence**: no hay renovación que cuidar.
+- Conectar: igual que ML, Tiendanube vuelve a kukune.com.ar con `?code=` (dura
+  5 minutos) y Franco pega la dirección en un `Dialogo`. Se verifica el `state`.
+- API (doc oficial, tiendanube.github.io/api-documentation):
+  `https://api.tiendanube.com/2025-03/<store_id>`, `Authorization: Bearer` y
+  **`User-Agent` obligatorio** (sin él, 400). Tope 2 pedidos/s: todo va de a uno
+  (`RESPIRO_MS` en el panel). `GET /products` pagina de a 200 y pasada la
+  última devuelve **404 "Last page"**, que no es error.
+- **Precio y stock son de la variante.** El vínculo es `publicacionTN:
+  {productId, variantId}` en el perfume, puesto a mano (el buscador arranca con
+  el nombre sin la medida y no muestra las ya vinculadas a otro perfume). Sin la
+  clave = sin vincular, sin migración.
+- **Precio promocional, decidido al mandar** (pedido de Franco, no se guarda en
+  el catálogo): el precio de la app es lo que **paga el cliente**. Con promoción
+  va en `promotional_price` y `price` se infla para mostrarse tachado; sin
+  promoción va en `price` con `promotional_price: null` (si tenía, se saca). La
+  ganancia no cambia: el descuento por medio de pago de Tiendanube se combina con
+  el promocional por defecto (Centro de Ayuda), así que las cuentas de siempre
+  valen sobre `precioTN`.
+- Tachado: `precioTachadoTN(precio, descuento, redondeo)` en `precios.js`,
+  `precio / (1 − d)` **hacia arriba** al redondeo de Tiendanube; el % que se ve
+  queda igual o un poco mayor (20% sobre $123.000 → $154.000, se ve 20,1%).
+  `ajustes.tiendaNube.descuentoMostrado` (default 20%, con candado) es solo el
+  que se **propone**; no entra en ninguna cuenta.
+- En el panel cada renglón arranca **como está publicado**: con promoción
+  prendida y el % exacto que se ve hoy (`descuento`, sin redondear) o apagada.
+  **El % mostrado redondeado (20,3%) no se usa para recalcular**: daba un tachado
+  de $136.100 donde había $136.000 y el renglón figuraba como cambio sin serlo.
+  Recién al editar el % se pasa a `pct / 100`. Un renglón que no cambiaría nada
+  dice "igual" y no se manda; "Mostrar también los que ya coinciden" deja prender
+  o apagar la promoción a los que ya tienen el precio bien.
+- **Stock**: desde el buscador de la variante vinculada, con `Dialogo`. El
+  plugin pregunta `GET /locations` una vez: sin ubicaciones manda `stock`, con
+  una manda `inventory_levels`, **con varias no toca nada** (409: habría que
+  elegir en cuál). `stock_management: false` = infinito, la celda lo dice.
+- **Probado solo en la copia, con Tiendanube falsa** (un `fetch` que intercepta
+  `api.tiendanube.com` y `www.tiendanube.com/apps/authorize/token`): conectar,
+  vincular, prender y apagar promociones, stock con y sin varias ubicaciones.
+  Con la tienda real, primero solo leer; los primeros cambios los hace Franco.
 
 ## Conexión con Mercado Libre
 - Pestaña **Mercado Libre** (`vista === "mercadolibre"`). Además de los precios

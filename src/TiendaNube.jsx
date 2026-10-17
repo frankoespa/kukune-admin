@@ -109,6 +109,20 @@ export function AjustesTiendaNube({ tn, onCambiar, onConfirmar }) {
           </div>
         </div>
         <SelectorRedondeo valor={tn.redondeo} onCambiar={(redondeo) => cambiar({ redondeo })} />
+        {/* Solo el que se PROPONE al mandar precios con promoción: no cambia
+            ninguna cuenta ni ningún precio del catálogo. */}
+        <div className="block" title="El que se propone al mandar precios a Tiendanube con precio promocional. No cambia ninguna cuenta.">
+          {rotulo("Descuento a mostrar")}
+          <div className="w-[88px]">
+            <CampoProtegido
+              valor={+((tn.descuentoMostrado ?? 0.2) * 100).toFixed(2)}
+              onCambiar={(v) => cambiar({ descuentoMostrado: Math.min(Math.max(v, 0), 90) / 100 })}
+              mostrar={(v) => porcentaje((v || 0) / 100)}
+              suffix="%"
+              etiqueta="el descuento a mostrar"
+            />
+          </div>
+        </div>
         <button
           type="button"
           onClick={() => setAbierto((v) => !v)}

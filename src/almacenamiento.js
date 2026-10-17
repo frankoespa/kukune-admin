@@ -128,6 +128,8 @@ export const AJUSTES_POR_DEFECTO = {
     envioGratis: 0,
     comision: 0, // la de Tiendanube, que se suma a la de cada forma de pago
     redondeo: 1000,
+    // El % que se propone al mandar precios con promoción (precio tachado).
+    descuentoMostrado: 0.2,
     formas: FORMAS_TN_POR_DEFECTO,
   },
 };
