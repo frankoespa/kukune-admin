@@ -31,7 +31,8 @@ import { loadEnv } from "vite";
 
 const API = "https://api.tiendanube.com/2025-03";
 const AUTORIZAR = "https://www.tiendanube.com/apps";
-const AGENTE = "KUKUNE (https://kukune.com.ar)";
+// El portal de socios pide el correo de contacto como User-Agent.
+const AGENTE = "KUKUNE (frankoespa@gmail.com)";
 const POR_PAGINA = 200;
 
 /* Lo que se pega puede ser la dirección entera (…?code=…&state=…) o el código
