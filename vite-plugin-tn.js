@@ -23,7 +23,8 @@ import { loadEnv } from "vite";
    · GET  /api/tn/productos                 todos los productos con sus variantes
    · PUT  /api/tn/variantes/<prod>/<var>    {price?, promotional_price?, stock?} (ESCRIBE)
 
-   Doc oficial: tiendanube.github.io/api-documentation. Versión 2025-03,
+   Doc oficial: https://tiendanube.dev (la de antes era
+   tiendanube.github.io/api-documentation). Versión 2025-03,
    `Authorization: Bearer`, `User-Agent` obligatorio (sin él da 400) y tope de
    2 pedidos por segundo: todo va de a uno.
    ============================================================ */
@@ -78,7 +79,6 @@ export default function pluginTN() {
     const archivoToken = path.join(raiz, "tokens.json");
     const faltantes = () => [!appId && "TN_CLIENT_ID", !secret && "TN_CLIENT_SECRET"].filter(Boolean);
     let estadoPendiente = null; // `state` del pedido de autorización, solo en memoria
-    let ubicaciones = null; // GET /locations, se pregunta una vez
 
     /* Un token de otra app (se cambió TN_CLIENT_ID) se lee como "no conectado". */
     const leerToken = async () => {
@@ -137,18 +137,21 @@ export default function pluginTN() {
       return lista;
     };
 
-    /* Si la tienda usa ubicaciones (Multiple Locations), el stock se cambia por
-       `inventory_levels`; con una sola, sin `location_id`. Con varias no se toca
-       desde acá: habría que elegir en cuál. */
-    const leerUbicaciones = async () => {
-      if (ubicaciones) return ubicaciones;
-      try {
-        const r = await tn("/locations");
-        ubicaciones = Array.isArray(r) ? r : [];
-      } catch {
-        ubicaciones = [];
-      }
-      return ubicaciones;
+    /* El stock va por POST /products/<p>/variants/stock (doc "Product Variant",
+       tiendanube.dev): `replace` con el `id` de la variante escribe en la
+       ubicación por defecto, haya o no Múltiples Ubicaciones. Si la variante
+       tiene stock en más de una ubicación (`inventory_levels`, solo presente con
+       Múltiples Ubicaciones) no se toca: habría que elegir en cuál. Se mira en la
+       variante y no en GET /locations, que pediría el permiso `read_locations`. */
+    const cambiarStock = async (producto, variante, n) => {
+      const actual = await tn(`/products/${producto}/variants/${variante}`);
+      if ((actual.inventory_levels?.length ?? 0) > 1)
+        throw new ErrorTN(409, "Ese producto tiene stock en varias ubicaciones: cambialo desde Tiendanube");
+      const r = await tn(`/products/${producto}/variants/stock`, {
+        method: "POST",
+        body: JSON.stringify({ action: "replace", value: n, id: Number(variante) }),
+      });
+      return (Array.isArray(r) ? r : []).find((v) => String(v.id) === String(variante)) ?? actual;
     };
 
     const cuerpo = async (req) => {
@@ -221,17 +224,16 @@ export default function pluginTN() {
               throw new ErrorTN(400, "El promocional tiene que ser menor que el precio normal");
             cambios.promotional_price = promo === null ? null : Number(promo);
           }
+          let stock = null;
           if (pedido.stock != null) {
-            const n = Number(pedido.stock);
-            if (!Number.isInteger(n) || n < 0) throw new ErrorTN(400, "Stock inválido");
-            const ubic = await leerUbicaciones();
-            if (ubic.length > 1)
-              throw new ErrorTN(409, "La tienda tiene varias ubicaciones: cambiá ese stock desde Tiendanube");
-            if (ubic.length === 1) cambios.inventory_levels = [{ stock: n }];
-            else cambios.stock = n;
+            stock = Number(pedido.stock);
+            if (!Number.isInteger(stock) || stock < 0) throw new ErrorTN(400, "Stock inválido");
           }
-          if (!Object.keys(cambios).length) throw new ErrorTN(400, "No hay nada que cambiar");
-          const r = await tn(`/products/${producto}/variants/${variante}`, { method: "PUT", body: JSON.stringify(cambios) });
+          if (!Object.keys(cambios).length && stock == null) throw new ErrorTN(400, "No hay nada que cambiar");
+          let r = null;
+          if (Object.keys(cambios).length)
+            r = await tn(`/products/${producto}/variants/${variante}`, { method: "PUT", body: JSON.stringify(cambios) });
+          if (stock != null) r = await cambiarStock(producto, variante, stock);
           return responder(res, { variante: resumirVariante(r) });
         }
 

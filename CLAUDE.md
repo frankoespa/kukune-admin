@@ -509,14 +509,23 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   `src/ConexionTN.jsx` (banda, `CeldaTN`, `BuscadorTN`, `PanelActualizarTN`).
   **`clienteTN.js` no se puede llamar `tiendanube.js`**: choca con `TiendaNube.jsx`.
 - **La app la crea Franco** en el portal de Partners de Tiendanube, con scope
-  `write_products` y redirect `https://kukune.com.ar` (pide también URLs de
-  privacidad y de webhooks de datos: alcanzan páginas de kukune.com.ar).
+  `write_products` y redirect `https://kukune.com.ar`. Todas las URLs de la app
+  son obligatorias (admin, preferencias, privacidad, los tres webhooks de datos
+  —store redact, customer redact, data request— y soporte): alcanzan páginas de
+  kukune.com.ar. **Si la redirección queda en la que viene por defecto**
+  (`partners.tiendanube.com/applications/authentication/<id>`), al aceptar pide
+  el login de socio en vez de volver con el `code`.
   `TN_CLIENT_ID` y `TN_CLIENT_SECRET` van en `.env.local`; sin ellos la pestaña
   lo dice. Token en `datos/tn/tokens.json`, con el `app_id`: con otra app se lee
   "no conectado". **El token no vence**: no hay renovación que cuidar.
 - Conectar: igual que ML, Tiendanube vuelve a kukune.com.ar con `?code=` (dura
   5 minutos) y Franco pega la dirección en un `Dialogo`. Se verifica el `state`.
-- API (doc oficial, tiendanube.github.io/api-documentation):
+- **Doc oficial: https://tiendanube.dev** (la de antes,
+  tiendanube.github.io/api-documentation, quedó vieja). "Autenticación" y
+  "Product Variant" de la 2025-03 son las páginas que se usaron. Para probar
+  con la API real sin la tienda de verdad, el portal de socios permite crear
+  una **tienda de demostración** e instalar la app ahí.
+- API:
   `https://api.tiendanube.com/2025-03/<store_id>`, `Authorization: Bearer` y
   **`User-Agent` obligatorio** (sin él, 400). Tope 2 pedidos/s: todo va de a uno
   (`RESPIRO_MS` en el panel). `GET /products` pagina de a 200 y pasada la
@@ -544,10 +553,14 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   Recién al editar el % se pasa a `pct / 100`. Un renglón que no cambiaría nada
   dice "igual" y no se manda; "Mostrar también los que ya coinciden" deja prender
   o apagar la promoción a los que ya tienen el precio bien.
-- **Stock**: desde el buscador de la variante vinculada, con `Dialogo`. El
-  plugin pregunta `GET /locations` una vez: sin ubicaciones manda `stock`, con
-  una manda `inventory_levels`, **con varias no toca nada** (409: habría que
-  elegir en cuál). `stock_management: false` = infinito, la celda lo dice.
+- **Stock**: desde el buscador de la variante vinculada, con `Dialogo`. Va por
+  `POST /products/<p>/variants/stock` con `{action: "replace", value, id}`, el
+  endpoint que la doc da para eso: escribe en la ubicación por defecto, haya o
+  no Múltiples Ubicaciones. Antes de escribir se lee la variante: si su
+  `inventory_levels` (solo existe con Múltiples Ubicaciones, que depende del
+  plan) trae más de una ubicación, **no se toca nada** (409: habría que elegir
+  en cuál). Se mira en la variante y no en `GET /locations` porque eso pediría
+  el permiso `read_locations`. `stock_management: false` = infinito.
 - **Probado solo en la copia, con Tiendanube falsa** (un `fetch` que intercepta
   `api.tiendanube.com` y `www.tiendanube.com/apps/authorize/token`): conectar,
   vincular, prender y apagar promociones, stock con y sin varias ubicaciones.
