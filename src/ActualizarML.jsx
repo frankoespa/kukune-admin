@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, RefreshCw, Upload, X } from "lucide-react";
-import { actualizarEnML, estadoDePublicacionesML, leerPublicacionML, nombreDePlan, vinculosDe } from "./clienteML";
+import { ArrowLeft, ArrowRight, Check, RefreshCw, RotateCcw, Upload, X } from "lucide-react";
+import { actualizarEnML, estadoDePublicacionesML, leerPublicacionML, nombreDePlan, urlDeCarpetaML, vinculosDe } from "./clienteML";
 import { CAMPOS_FICHA, cambiosDeActualizacion, descripcionDesdeTxt, fichaDesdeAtributos, fichaDesdeTxt } from "./armadoML";
-import { Aviso, CampoFicha, Paso, SelectorDeFotos, caja, campo, useCarpetaML, useListasFicha } from "./piezasPublicarML";
+import { Aviso, CampoFicha, Paso, SelectorDeFotos, caja, campo, usable, useCarpetaML, useListasFicha } from "./piezasPublicarML";
 
 /* ============================================================
    Actualizar las publicaciones de un perfume que ya existen: fotos, ficha,
@@ -11,8 +11,9 @@ import { Aviso, CampoFicha, Paso, SelectorDeFotos, caja, campo, useCarpetaML, us
 
    · Solo las NORMALES: las de catálogo llevan las fotos y la ficha del producto
      de catálogo de ML (aclaración de Franco).
-   · Fotos: las de la carpeta MercadoLibre/ REEMPLAZAN a todas las de ML
-     (decisión de Franco). En ML, la lista de fotos que se manda es la final.
+   · Fotos: se arma la tira final ("Así va a quedar"), que arranca igual a la
+     de hoy: se quitan, se mueven y se suman las de la carpeta MercadoLibre/.
+     En ML la lista que se manda es la final: lo que no va, se borra.
    · Fotos, ficha y nombre se sincronizan solos entre las publicaciones del
      mismo User Product: se manda una por producto de usuario y después se
      relee cada una para ver si ML ya les pasó el cambio.
@@ -32,7 +33,8 @@ export default function ActualizarML({ perfume, planes, onCambiar, onConfirmar, 
   const [ficha, setFicha] = useState({});
   const [familyName, setFamilyName] = useState("");
   const [descripcion, setDescripcion] = useState("");
-  const [reemplazar, setReemplazar] = useState(false);
+  // La tira final: { tipo: "ml", id, url } | { tipo: "carpeta", archivo }. null hasta leer ML.
+  const [tira, setTira] = useState(null);
   const [resultado, setResultado] = useState(null);
   const [control, setControl] = useState(null); // { id → "al día" | "sincronizando" | "distinta" }
   const [trabajando, setTrabajando] = useState(false);
@@ -49,6 +51,7 @@ export default function ActualizarML({ perfume, planes, onCambiar, onConfirmar, 
         setBase(b);
         setTodas(t);
         setFicha(fichaDesdeAtributos(b.attributes));
+        setTira(b.fotos.map((f) => ({ tipo: "ml", id: f.id, url: f.url })));
         setFamilyName(b.familyName);
         setDescripcion(b.descripcion);
       })
@@ -77,12 +80,12 @@ export default function ActualizarML({ perfume, planes, onCambiar, onConfirmar, 
 
   const cambios = base
     ? cambiosDeActualizacion(
-        { ficha: fichaBase, familyName: base.familyName, descripcion: base.descripcion, fotos: base.fotos.length },
+        { ficha: fichaBase, familyName: base.familyName, descripcion: base.descripcion, fotos: base.fotos.map((f) => f.id) },
         {
           ficha,
           familyName: nombreTrabado ? base.familyName : familyName,
           descripcion,
-          fotos: reemplazar ? carpetas.fotosElegidas : null,
+          fotos: tira,
         }
       )
     : { renglones: [] };
@@ -117,9 +120,9 @@ export default function ActualizarML({ perfume, planes, onCambiar, onConfirmar, 
       ancho: "max-w-lg",
       texto: `Se cambia en ${grupos.length === 1 ? "la publicación" : `${grupos.length} publicaciones`} de "${perfume.nombre}" (y ML lo pasa a las demás del mismo producto): ${cambios.renglones
         .map((r) => `${r.campo}: ${r.antes} → ${r.despues}`)
-        .join("; ")}.${cambios.fotos ? " Las fotos que hay hoy en la publicación se borran." : ""}`,
+        .join("; ")}.${cambios.quitadas ? cambios.quitadas === 1 ? " Se borra 1 foto de la publicación." : ` Se borran ${cambios.quitadas} fotos de la publicación.` : ""}`,
       etiquetaOk: "Actualizar en ML",
-      peligro: !!cambios.fotos,
+      peligro: cambios.quitadas > 0,
       onAceptar: async () => {
         setTrabajando(true);
         setError("");
@@ -181,21 +184,22 @@ export default function ActualizarML({ perfume, planes, onCambiar, onConfirmar, 
           {base && (
             <>
               <Paso n={1} titulo="Fotos">
-                <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
-                  En Mercado Libre hoy ({base.fotos.length})
+                <TiraDeFotos
+                  base={base.fotos}
+                  tira={tira ?? []}
+                  setTira={setTira}
+                  carpeta={carpetas.carpeta}
+                  deLaCarpeta={carpetas.fotos.filter(usable).map((f) => f.archivo)}
+                  bloqueada={trabajando || !!resultado}
+                />
+                <span className="k-col mb-1 mt-4 block" style={{ color: "var(--humo)" }}>
+                  Fotos de la carpeta
                 </span>
-                <ul className="mb-3 flex flex-wrap gap-1.5">
-                  {base.fotos.map((f, i) => (
-                    <li key={f.id} className="h-[64px] w-[64px] overflow-hidden rounded-[3px] border" style={{ borderColor: "var(--linea)", opacity: reemplazar ? 0.35 : 1 }} title={i === 0 ? "principal" : f.id}>
-                      <img src={f.url} alt="" className="h-full w-full object-cover" />
-                    </li>
-                  ))}
-                </ul>
-                <label className={`mb-3 flex items-center gap-2 text-[12.5px] ${carpetas.fotosElegidas.length ? "cursor-pointer" : "opacity-50"}`} style={{ color: reemplazar ? "var(--oxido)" : "var(--tinta)" }}>
-                  <input type="checkbox" disabled={!carpetas.fotosElegidas.length} checked={reemplazar && carpetas.fotosElegidas.length > 0} onChange={(e) => setReemplazar(e.target.checked)} />
-                  Reemplazar todas por las {carpetas.fotosElegidas.length} tildadas de la carpeta (las de arriba se borran de la publicación)
-                </label>
-                <SelectorDeFotos carpetas={carpetas} />
+                <SelectorDeFotos
+                  carpetas={carpetas}
+                  enLaTira={new Set((tira ?? []).filter((f) => f.tipo === "carpeta").map((f) => f.archivo))}
+                  onAgregar={(archivo) => !trabajando && !resultado && setTira((t) => [...(t ?? []), { tipo: "carpeta", archivo }])}
+                />
               </Paso>
 
               <Paso n={2} titulo="Ficha técnica">
@@ -278,6 +282,134 @@ export default function ActualizarML({ perfume, planes, onCambiar, onConfirmar, 
       </div>
     </div>,
     document.body
+  );
+}
+
+/* La tira de fotos tal como va a quedar en la publicación, en orden (la
+   primera es la principal). Arranca igual a la de hoy; lo que se saca queda
+   abajo para volver a ponerlo. */
+function TiraDeFotos({ base, tira, setTira, carpeta, deLaCarpeta, bloqueada }) {
+  const quitadas = base.filter((f) => !tira.some((t) => t.tipo === "ml" && t.id === f.id));
+  const mover = (i, d) =>
+    setTira((t) => {
+      const j = i + d;
+      if (j < 0 || j >= t.length) return t;
+      const n = [...t];
+      [n[i], n[j]] = [n[j], n[i]];
+      return n;
+    });
+  const quitar = (i) => setTira((t) => t.filter((_, k) => k !== i));
+  const igual = tira.length === base.length && tira.every((t, i) => t.tipo === "ml" && t.id === base[i].id);
+  const boton = "k-col rounded-[3px] border px-2 py-[5px] disabled:opacity-40";
+  const flecha = "rounded-[2px] p-0.5 disabled:opacity-25";
+  return (
+    <div>
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="k-col" style={{ color: "var(--humo)" }}>
+          Así va a quedar ({tira.length}) · hoy en Mercado Libre: {base.length}
+        </span>
+        <button
+          type="button"
+          disabled={bloqueada || igual}
+          onClick={() => setTira(base.map((f) => ({ tipo: "ml", id: f.id, url: f.url })))}
+          className={`${boton} ml-auto flex items-center gap-1`}
+          style={{ borderColor: "var(--linea)", color: "var(--humo)" }}
+        >
+          <RotateCcw size={11} /> Volver a como está en ML
+        </button>
+        <button
+          type="button"
+          disabled={bloqueada || !deLaCarpeta.length}
+          onClick={() => setTira(deLaCarpeta.map((archivo) => ({ tipo: "carpeta", archivo })))}
+          className={boton}
+          style={{ borderColor: "var(--oxido)", color: "var(--oxido)" }}
+          title="Saca todas las de Mercado Libre y deja las de la carpeta, en orden de nombre"
+        >
+          Reemplazar todo por la carpeta ({deLaCarpeta.length})
+        </button>
+      </div>
+      {tira.length === 0 ? (
+        <Aviso>La publicación tiene que quedar con al menos una foto.</Aviso>
+      ) : (
+        <ul className="flex flex-wrap gap-2">
+          {tira.map((f, i) => (
+            <li key={f.tipo === "ml" ? f.id : `c:${f.archivo}`} className="w-[96px]">
+              <div
+                className="relative h-[96px] w-[96px] overflow-hidden rounded-[3px] border"
+                style={{ borderColor: f.tipo === "carpeta" ? "var(--verde)" : "var(--linea)" }}
+                title={f.tipo === "ml" ? f.id : f.archivo}
+              >
+                <img src={f.tipo === "ml" ? f.url : urlDeCarpetaML(carpeta, f.archivo)} alt="" className="h-full w-full object-cover" />
+                {i === 0 && (
+                  <span className="k-col absolute left-1 top-1 rounded-[2px] px-1" style={{ background: "var(--tinta)", color: "var(--papel)" }}>
+                    principal
+                  </span>
+                )}
+                {f.tipo === "carpeta" && (
+                  <span className="k-col absolute bottom-1 left-1 rounded-[2px] px-1" style={{ background: "var(--verde)", color: "var(--papel)" }}>
+                    nueva
+                  </span>
+                )}
+                <button
+                  type="button"
+                  disabled={bloqueada}
+                  onClick={() => quitar(i)}
+                  aria-label="Quitar esta foto"
+                  title="Quitar esta foto"
+                  className="absolute right-1 top-1 rounded-full bg-white p-0.5 disabled:opacity-40"
+                  style={{ color: "var(--oxido)", boxShadow: "0 0 0 1px var(--linea)" }}
+                >
+                  <X size={11} />
+                </button>
+              </div>
+              <span className="mt-1 flex items-center justify-between">
+                <button type="button" disabled={bloqueada || i === 0} onClick={() => mover(i, -1)} aria-label="Mover a la izquierda" className={flecha} style={{ color: "var(--humo)" }}>
+                  <ArrowLeft size={13} />
+                </button>
+                <span className="k-num text-[11px]" style={{ color: "var(--humo)" }}>
+                  {i + 1}
+                </span>
+                <button
+                  type="button"
+                  disabled={bloqueada || i === tira.length - 1}
+                  onClick={() => mover(i, 1)}
+                  aria-label="Mover a la derecha"
+                  className={flecha}
+                  style={{ color: "var(--humo)" }}
+                >
+                  <ArrowRight size={13} />
+                </button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {quitadas.length > 0 && (
+        <div className="mt-3">
+          <span className="k-col mb-1 block" style={{ color: "var(--oxido)" }}>
+            Se borran de la publicación ({quitadas.length})
+          </span>
+          <ul className="flex flex-wrap gap-1.5">
+            {quitadas.map((f) => (
+              <li key={f.id} className="w-[72px]">
+                <div className="h-[64px] w-[64px] overflow-hidden rounded-[3px] border" style={{ borderColor: "var(--linea)", opacity: 0.4 }}>
+                  <img src={f.url} alt="" className="h-full w-full object-cover" />
+                </div>
+                <button
+                  type="button"
+                  disabled={bloqueada}
+                  onClick={() => setTira((t) => [...t, { tipo: "ml", id: f.id, url: f.url }])}
+                  className="k-col mt-0.5 disabled:opacity-40"
+                  style={{ color: "var(--tinta)" }}
+                >
+                  Volver a poner
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
   );
 }
 

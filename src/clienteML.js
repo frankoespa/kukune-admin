@@ -79,8 +79,9 @@ export const publicarEnML = (pedido) => pedir("/publicar", { method: "POST", bod
 /* -> { id, familyName, vendidas, userProductId, catalogo, fotos: [{id, url}], attributes, descripcion } */
 export const leerPublicacionML = (id) => pedir(`/publicacion/${id}`);
 
-/* ESCRIBE EN ML. `itemIds`: una normal por producto de usuario. Solo después de
-   una confirmación. -> { fotos (ids subidos) | null, resultados: [{itemId, ok, errores, advertencias}] } */
+/* ESCRIBE EN ML. `itemIds`: una normal por producto de usuario. `fotos`: la tira
+   final (`{tipo: "ml", id}` | `{tipo: "carpeta", archivo}`). Solo después de una
+   confirmación. -> { fotos (ids finales, en orden) | null, resultados: [{itemId, ok, errores, advertencias}] } */
 export const actualizarEnML = (pedido) => pedir("/actualizar", { method: "POST", body: JSON.stringify(pedido) });
 
 /* Relee varias para ver si ML ya les pasó los cambios. */

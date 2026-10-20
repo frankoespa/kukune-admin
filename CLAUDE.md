@@ -450,6 +450,31 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   el margen mostrado es el de la forma de pago que **menos deja**. Soltar escribe
   `margenTN: null` **y** el `precioTN` resuelto juntos (`soltarMargenTNDelCatalogo`).
   El `=` pone el precio que deja, con la forma más cara, la ganancia directa.
+- **El objetivo puede ser margen o ganancia fija, y medirse contra una forma.**
+  `objetivoTN(perfume)` en `precios.js` lee `margenTN` (fracción) **o**
+  `gananciaTN` (pesos; queda fija aunque cambie el costo —pedido de Franco: si
+  sube el costo, sube el precio—) y `formaTN` (id de la forma de pago; sin la
+  clave = la que menos deja, lo de antes). Uno de margen/ganancia borra al otro
+  (`fijarObjetivoTN` en `App.jsx`, un solo `setPerfumes` para uno o muchos).
+  `precioTiendaNubeDesdeObjetivo()` despeja: sin forma es **exactamente** el
+  algoritmo de siempre (`precioTiendaNubeDesdeMargen` quedó como atajo; verificado
+  con los 47 perfumes reales: precios idénticos); con forma, `objetivo ÷ k` de
+  esa forma con el mismo redondeo hacia arriba. Si la forma fijada tiene mínimo
+  y no llega, devuelve `noAplica` y el resolver no toca el precio. Una forma
+  borrada vuelve sola a "la que menos deja", sin reescribir nada.
+  `analisisTiendaNube({formaId})` agrega `manda` / `gananciaManda` /
+  `margenManda` (la forma fijada); `define` sigue siendo la que menos deja.
+- **El popup del precio (`DetalleTiendaNube`) es editable**: en cada forma,
+  Margen y Ganás son `NumberCell` y escribir en una fija el objetivo contra esa
+  forma; el precio llega resuelto, así que precio y filas cambian al tipear. La
+  fijada lleva la marca ámbar y "fijada"; si otra deja menos, ésa dice "deja
+  menos" (óxido) y el texto de arriba lo avisa. Botones "Medir contra la que
+  menos deja" (borra `formaTN`) y "Soltar". Con un cupón simulado no se edita.
+- **"Aplicar a todos"** (banda arriba de la tabla, `AplicarATodos` en
+  `PestanaTiendaNube.jsx`): margen o ganancia fija + "medido contra", a todos los
+  que se ven **con costo**, **pisando también los de precio a mano** (decisión de
+  Franco). Confirma con `Dialogo` diciendo cuántos tenían precio a mano y cuántos
+  sin costo no se tocan. Escribe en el catálogo, no en Tiendanube.
 - Ajustes en `ajustes.tiendaNube`: `envioGratis` (uno para todo el catálogo; lo
   paga el negocio, **sí entra en la cuenta**, al revés del envío de Rosario),
   `comision` (la de Tiendanube, se suma a la de cada forma), `redondeo` y
@@ -781,10 +806,20 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - **Solo las normales.** Las de catálogo llevan las fotos y la ficha del
   producto de catálogo de ML, no las del vendedor (aclaración de Franco), y el
   server rechaza un PUT a una de catálogo.
-- **Las fotos de la carpeta reemplazan a todas** (decisión de Franco): en ML,
-  `PUT /items/<id>` con `pictures` deja exactamente la lista que se manda y borra
-  el resto. Va detrás de una casilla apagada al abrir, y la confirmación (en
-  óxido) dice que las fotos actuales se borran.
+- **Las fotos se eligen una por una** (pedido de Franco): en ML, `PUT /items/<id>`
+  con `pictures` deja exactamente la lista que se manda, en ese orden, y borra el
+  resto; para conservar una se manda su `id` (doc "Imágenes", Reemplazar
+  imágenes). El panel arma la tira **"Así va a quedar"** (`TiraDeFotos` en
+  `ActualizarML.jsx`), que arranca igual a la de hoy: quitar (X), mover (← →, la
+  primera es la principal), "Volver a poner" las quitadas, y "Agregar" las de la
+  carpeta (`SelectorDeFotos` con `onAgregar`). Atajos: "Reemplazar todo por la
+  carpeta" (lo de antes) y "Volver a como está en ML". Cada elemento es
+  `{tipo: "ml", id, url}` o `{tipo: "carpeta", archivo}`; `resumenDeFotos()` en
+  `armadoML.js` dice si cambia ("3 fotos · 1 se quita · 1 nueva · cambia el
+  orden") y `fotosDeLaTira()` en `ml-publicar.js` sube solo las de la carpeta
+  (una vez, por sha1) y arma `pictures` en el orden de la tira. Si se quita
+  alguna, la confirmación va en óxido y dice cuántas se borran. Probado en la
+  copia con ML falso: el PUT llevó `[VIEJA-3, VIEJA-1, FOTO-2]`.
 - Lee lo que hay hoy en ML (`GET /api/ml/publicacion/<MLA>`) y precarga la
   ficha con `fichaDesdeAtributos()` (el inverso de `atributosDeFicha`).
   `cambiosDeActualizacion()` arma el resumen y **solo manda lo que cambió**

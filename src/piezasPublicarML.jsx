@@ -88,8 +88,10 @@ export function useCarpetaML(perfume, onCambiar) {
   return { listado, errorCarga, leer, carpeta, elegirCarpeta, elegida, fotos, fotosElegidas, fueraDeLaLista, setFueraDeLaLista, propuestas, sugerida, txt };
 }
 
-/* El selector de carpeta y la grilla de fotos con sus casillas. */
-export function SelectorDeFotos({ carpetas }) {
+/* El selector de carpeta y la grilla de fotos con sus casillas. Con `onAgregar`
+   (Actualizar) cada foto lleva "Agregar" en vez de casilla, y las que ya están
+   en la tira (`enLaTira`) lo dicen. */
+export function SelectorDeFotos({ carpetas, onAgregar, enLaTira }) {
   const { errorCarga, listado, carpeta, elegirCarpeta, propuestas, sugerida, leer, elegida, fotos, fueraDeLaLista, setFueraDeLaLista } = carpetas;
   return (
     <>
@@ -143,6 +145,33 @@ export function SelectorDeFotos({ carpetas }) {
           {fotos.map((f, i) => {
             const ok = usable(f);
             const tildada = ok && !fueraDeLaLista.has(f.archivo);
+            if (onAgregar) {
+              const yaEsta = enLaTira?.has(f.archivo);
+              return (
+                <li key={f.archivo} className="w-[104px]" title={ok ? f.archivo : `${f.archivo}: ML pide al menos ${MINIMO_PX} px`}>
+                  <div
+                    className="h-[104px] w-[104px] overflow-hidden rounded-[3px] border"
+                    style={{ borderColor: ok ? "var(--linea)" : "var(--oxido)", opacity: ok && !yaEsta ? 1 : 0.45 }}
+                  >
+                    <img src={urlDeCarpetaML(carpeta, f.archivo)} alt={f.archivo} className="h-full w-full object-cover" />
+                  </div>
+                  <span className="mt-1 flex items-center justify-between gap-1 text-[11px]" style={{ color: ok ? "var(--humo)" : "var(--oxido)" }}>
+                    <span className="k-num">{f.ancho && f.alto ? `${f.ancho}×${f.alto}` : "¿?"}</span>
+                    {ok && (
+                      <button
+                        type="button"
+                        disabled={yaEsta}
+                        onClick={() => onAgregar(f.archivo)}
+                        className="k-col rounded-[3px] border px-1.5 py-0.5 disabled:opacity-60"
+                        style={{ borderColor: "var(--linea)", color: "var(--tinta)" }}
+                      >
+                        {yaEsta ? "Ya está" : "Agregar"}
+                      </button>
+                    )}
+                  </span>
+                </li>
+              );
+            }
             return (
               <li key={f.archivo} className="w-[104px]">
                 <label className={`block ${ok ? "cursor-pointer" : "cursor-not-allowed"}`} title={ok ? f.archivo : `${f.archivo}: ML pide al menos ${MINIMO_PX} px`}>

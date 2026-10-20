@@ -292,12 +292,39 @@ export function cambiosDeActualizacion(actual, nuevo) {
       ? String(nuevo.descripcion).trim()
       : null;
   if (descripcion) renglones.push({ campo: "Descripción", antes: `${String(actual.descripcion ?? "").length} letras`, despues: `${descripcion.length} letras` });
-  const fotos = nuevo.fotos?.length ? nuevo.fotos : null;
-  if (fotos)
-    renglones.push({
-      campo: "Fotos",
-      antes: `${actual.fotos ?? 0} foto${actual.fotos === 1 ? "" : "s"} (se borran)`,
-      despues: `${fotos.length} de la carpeta`,
-    });
-  return { renglones, atributos: atributosDeFicha(cambiados), familyName, descripcion, fotos };
+  // Fotos: `actual.fotos` son los ids de hoy y `nuevo.fotos` la tira final
+  // (`{tipo: "ml", id}` | `{tipo: "carpeta", archivo}`), o null si no se tocó.
+  const resumen = Array.isArray(nuevo.fotos) ? resumenDeFotos(actual.fotos ?? [], nuevo.fotos) : null;
+  const fotos = resumen?.cambia ? nuevo.fotos : null;
+  if (fotos) renglones.push({ campo: "Fotos", antes: resumen.antes, despues: resumen.despues });
+  return { renglones, atributos: atributosDeFicha(cambiados), quitadas: resumen?.quitadas ?? 0, familyName, descripcion, fotos };
+}
+
+/* Qué pasa con las fotos de una publicación si se manda `tira`: ML deja
+   exactamente esa lista, en ese orden (doc "Imágenes", Reemplazar imágenes): las
+   de hoy que no están se borran. `antes` son los ids de hoy, en orden.
+   -> { cambia, quitadas, nuevas, reordena, antes, despues } */
+export function resumenDeFotos(antes, tira) {
+  const hoy = antes.map(String);
+  const quedan = tira.filter((f) => f.tipo === "ml").map((f) => String(f.id));
+  const nuevas = tira.filter((f) => f.tipo === "carpeta").length;
+  const quitadas = hoy.filter((id) => !quedan.includes(id)).length;
+  const mismaSecuencia = !nuevas && quedan.length === hoy.length && quedan.every((id, i) => id === hoy[i]);
+  // ¿Las que quedan siguen en su orden, y las nuevas van todas al final?
+  const enOrden = quedan.join() === hoy.filter((id) => quedan.includes(id)).join();
+  const primeraNueva = tira.findIndex((f) => f.tipo === "carpeta");
+  const nuevasAlFinal = primeraNueva < 0 || tira.slice(primeraNueva).every((f) => f.tipo === "carpeta");
+  const reordena = !mismaSecuencia && (!enOrden || !nuevasAlFinal);
+  const partes = [`${tira.length} foto${tira.length === 1 ? "" : "s"}`];
+  if (quitadas) partes.push(`${quitadas} se quita${quitadas === 1 ? "" : "n"}`);
+  if (nuevas) partes.push(`${nuevas} nueva${nuevas === 1 ? "" : "s"} de la carpeta`);
+  if (reordena) partes.push("cambia el orden");
+  return {
+    cambia: tira.length > 0 && !mismaSecuencia,
+    quitadas,
+    nuevas,
+    reordena,
+    antes: `${hoy.length} foto${hoy.length === 1 ? "" : "s"}`,
+    despues: partes.join(" · "),
+  };
 }

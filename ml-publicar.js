@@ -34,6 +34,8 @@ const ESPERA_CATALOGO = 2500;
 /* Un nombre de carpeta o archivo que viene del navegador: sin barras, sin `..`,
    sin empezar con punto. Lo que no pase esto no toca el disco. */
 const ITEM = /^MLA\d+$/;
+// Id de una foto ya subida a ML ("642584-MLA107576465620_032026").
+const FOTO_ML = /^[\w-]{3,80}$/;
 
 const nombreSeguro = (s) =>
   typeof s === "string" && s.length > 0 && s.length < 200 && !/[\\/]|\.\./.test(s) && !s.startsWith(".");
@@ -309,6 +311,24 @@ export function crearPublicador({ ml, mlCrudo, raizDatos, base }) {
     return { ...resumirParaActualizar(r.datos), descripcion: d.ok ? d.datos?.plain_text ?? "" : "" };
   };
 
+  /* La tira de fotos que quedan, en orden: `{tipo: "ml", id}` es una que ya está
+     publicada y se conserva; `{tipo: "carpeta", archivo}` se sube (una vez, por
+     sha1). ML deja exactamente esta lista: lo que no viene se borra (doc
+     "Imágenes", Reemplazar imágenes). Una lista de nombres sueltos es la forma
+     vieja: todas de la carpeta. -> ids de ML, en orden. */
+  const fotosDeLaTira = async (carpeta, tira) => {
+    const error = (m) => Object.assign(new Error(m), { codigo: 400 });
+    const elementos = tira.map((f) => (typeof f === "string" ? { tipo: "carpeta", archivo: f } : f));
+    for (const f of elementos) {
+      if (f?.tipo === "ml" && !FOTO_ML.test(String(f.id ?? ""))) throw error(`Id de foto inválido: ${f.id}`);
+      if (f?.tipo !== "ml" && f?.tipo !== "carpeta") throw error("Foto inválida");
+    }
+    const archivos = elementos.filter((f) => f.tipo === "carpeta").map((f) => f.archivo);
+    const subidas = archivos.length ? await subirFotos(carpeta, archivos) : [];
+    let i = 0;
+    return elementos.map((f) => (f.tipo === "ml" ? String(f.id) : subidas[i++]));
+  };
+
   const actualizar = async (p) => {
     const error = (m) => Object.assign(new Error(m), { codigo: 400 });
     const ids = [...new Set(p.itemIds ?? [])];
@@ -317,7 +337,7 @@ export function crearPublicador({ ml, mlCrudo, raizDatos, base }) {
     const familyName = p.familyName ? String(p.familyName).trim() : null;
     if (familyName && familyName.length > 120) throw error("El nombre puede tener hasta 120 letras");
     const descripcion = p.descripcion ? String(p.descripcion).trim() : null;
-    const fotos = p.fotos?.length ? await subirFotos(p.carpeta, p.fotos) : null;
+    const fotos = p.fotos?.length ? await fotosDeLaTira(p.carpeta, p.fotos) : null;
     if (!fotos && !atributos.length && !familyName && !descripcion) throw error("No hay nada que cambiar");
 
     const resultados = [];
