@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ListTree, Search, X } from "lucide-react";
 import { urlFoto } from "./almacenamiento";
-import { analisisDePrecio, analisisTiendaNube, precioTiendaNubeDesdeMargen } from "./precios";
+import { analisisDePrecio, analisisTiendaNube, objetivoTN, precioTiendaNubeDesdeMargen } from "./precios";
 import { AjustesTiendaNube, DetalleTiendaNube } from "./TiendaNube";
 import { NumberCell } from "./NumberCell";
 import { buscarPerfumes, ConVistaPrevia, margenReal, pesos } from "./Catalogo";
@@ -18,7 +18,9 @@ import { BandaConexionTN, CeldaTN, PanelActualizarTN } from "./ConexionTN";
    catálogo; acá se ven como referencia.
 
    Un solo precio (`precioTN`) que tiene que dejar la ganancia pague como pague
-   el cliente: el margen que se muestra es el de la forma de pago que MENOS deja.
+   el cliente. El objetivo es un margen (`margenTN`) o una ganancia fija en
+   pesos (`gananciaTN`), medido contra la forma de pago fijada (`formaTN`) o,
+   sin ella, contra la que MENOS deja.
    Las cuentas viven en `precios.js` y el detalle por forma de pago en
    `TiendaNube.jsx`.
    ============================================================ */
@@ -27,7 +29,7 @@ import { BandaConexionTN, CeldaTN, PanelActualizarTN } from "./ConexionTN";
 const COLUMNAS_TN = "52px minmax(200px,1fr) 100px 100px 124px 88px 100px 132px";
 const ANCHO_MINIMO = 52 + 200 + 200 + 312 + 132;
 
-export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCambiar, onSoltarMargenTN, onConfirmar }) {
+export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCambiar, onSoltarMargenTN, onFijarObjetivoTN, onConfirmar }) {
   const [consulta, setConsulta] = useState("");
   const [cuenta, setCuenta] = useState(null); // null = preguntando
   const [productos, setProductos] = useState(null);
@@ -213,6 +215,14 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
         <AjustesTiendaNube tn={ajustes.tiendaNube} onCambiar={(tn) => onAjustes({ tiendaNube: tn })} onConfirmar={onConfirmar} />
       </div>
 
+      <AplicarATodos
+        perfumes={visibles}
+        filtrado={!!consulta.trim()}
+        formas={ajustes.tiendaNube?.formas ?? []}
+        onFijar={onFijarObjetivoTN}
+        onConfirmar={onConfirmar}
+      />
+
       {visibles.length === 0 ? (
         <p className="py-12 text-center text-[13px]" style={{ color: "var(--humo-claro)" }}>
           {perfumes.length === 0
@@ -231,6 +241,7 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
                   ajustes={ajustes}
                   onCambiar={onCambiar}
                   onSoltarMargenTN={onSoltarMargenTN}
+                  onFijarObjetivoTN={onFijarObjetivoTN}
                   conexion={{ conectado: !!cuenta?.conectado, productos, porVariante, usadas, onVincular: vincular, onStock: cambiarStock }}
                 />
               ))}
@@ -279,7 +290,7 @@ function Encabezado() {
 
 const colorGanancia = (g) => (g === null ? "var(--humo-claro)" : g >= 0 ? "var(--ambar)" : "var(--oxido)");
 
-function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, conexion }) {
+function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, onFijarObjetivoTN, conexion }) {
   const r = analisisDePrecio({
     costo: perfume.costo,
     precioPublico: perfume.precioPublico,
@@ -292,9 +303,21 @@ function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, conexion }) {
   const [detalleTN, setDetalleTN] = useState(false);
   const cerrarDetalleTN = useCallback(() => setDetalleTN(false), []);
   const precioTN = Number(perfume.precioTN) || 0;
-  const tnClavado = perfume.margenTN != null;
+  const objetivo = objetivoTN(perfume);
+  const tnClavado = objetivo !== null;
+  const porGanancia = objetivo?.ganancia != null;
   const envioTN = Number(ajustes.tiendaNube?.envioGratis) || 0;
-  const tn = analisisTiendaNube({ costo: perfume.costo, precio: precioTN, ajustesTN: ajustes.tiendaNube });
+  const tn = analisisTiendaNube({
+    costo: perfume.costo,
+    precio: precioTN,
+    ajustesTN: ajustes.tiendaNube,
+    formaId: objetivo?.formaId,
+  });
+  // Margen y ganancia de la forma que manda: la fijada, o la que menos deja.
+  const formaManda = tn.manda >= 0 ? tn.formas[tn.manda].forma.nombre : null;
+  const otraDejaMenos = tn.manda >= 0 && tn.define >= 0 && tn.manda !== tn.define;
+  const fijarMargen = (v) =>
+    onFijarObjetivoTN ? onFijarObjetivoTN([perfume.id], { margen: v / 100 }) : onCambiar(perfume.id, { margenTN: v / 100 });
   // A cuánto publicar para que la forma más cara deje lo mismo que la venta directa.
   const sugeridoTN =
     r.directo.ganancia === null
@@ -398,7 +421,18 @@ function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, conexion }) {
           </>
         )}
       </div>
-      <div className="relative px-1.5" style={{ background: "var(--zona-tn)" }} title={tnClavado ? margenReal(perfume.margenTN, tn.margen) : undefined}>
+      <div
+        className="relative px-1.5"
+        style={{ background: "var(--zona-tn)" }}
+        title={
+          !tnClavado
+            ? undefined
+            : (porGanancia
+                ? `Ganancia fija de ${pesos(objetivo.ganancia)}: el margen sale de ahí.`
+                : margenReal(objetivo.margen, tn.margenManda)) +
+              (formaManda ? ` Medido contra "${formaManda}".` : "")
+        }
+      >
         {sinCosto ? (
           <div className="px-0.5 text-right" title="Cargá el costo para poder fijar un margen">
             <span className="k-num text-[13px]" style={{ color: "var(--humo-claro)" }}>
@@ -407,11 +441,11 @@ function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, conexion }) {
           </div>
         ) : (
           <NumberCell
-            value={+((tnClavado ? perfume.margenTN : tn.margen ?? 0) * 100).toFixed(1)}
-            onChange={(v) => onCambiar(perfume.id, { margenTN: v / 100 })}
+            value={+((tnClavado && !porGanancia ? objetivo.margen : tnClavado ? tn.margenManda ?? 0 : tn.margen ?? 0) * 100).toFixed(1)}
+            onChange={fijarMargen}
             suffix="%"
-            className={tnClavado ? "font-semibold" : ""}
-            style={tnClavado ? { borderLeft: "3px solid var(--ambar)", background: "#FFFDF7" } : undefined}
+            className={tnClavado && !porGanancia ? "font-semibold" : ""}
+            style={tnClavado && !porGanancia ? { borderLeft: "3px solid var(--ambar)", background: "#FFFDF7" } : undefined}
           />
         )}
         {tnClavado && (
@@ -427,21 +461,150 @@ function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, conexion }) {
           </button>
         )}
       </div>
-      {cifra(tn.ganancia === null ? "—" : pesos(tn.ganancia), {
-        fondo: "var(--zona-tn)",
-        color: colorGanancia(tn.ganancia),
-        fuerte: true,
-        titulo:
-          tn.ganancia === null
-            ? "Poné costo y precio para ver qué te deja en Tiendanube"
-            : `Con la forma de pago que más te cobra ("${tn.formas[tn.define].forma.nombre}") te quedan ${pesos(
-                tn.ganancia
-              )}, ya descontado el costo${envioTN > 0 ? " y el envío gratis" : ""}. Con las demás, igual o más.`,
-      })}
+      {/* La ganancia de la forma que manda. Con ganancia fija lleva la marca de
+          "clavado" (es el número que se pidió) y, si se mide contra una forma
+          que no es la que menos deja, un "!" avisa que con otra se gana menos. */}
+      <div className="px-1.5" style={{ background: "var(--zona-tn)" }}>
+        <div
+          className="flex items-center justify-end gap-1 rounded-[3px] px-1.5 py-1"
+          style={porGanancia ? { borderLeft: "3px solid var(--ambar)", background: "#FFFDF7" } : undefined}
+          title={
+            tn.gananciaManda === null
+              ? "Poné costo y precio para ver qué te deja en Tiendanube"
+              : (porGanancia ? `Pediste ${pesos(objetivo.ganancia)} · queda ${pesos(tn.gananciaManda)}. ` : "") +
+                (otraDejaMenos
+                  ? `Con "${formaManda}" (la que fijaste) te quedan ${pesos(tn.gananciaManda)}; con "${
+                      tn.formas[tn.define].forma.nombre
+                    }" te queda menos, ${pesos(tn.ganancia)}.`
+                  : `Con la forma de pago que más te cobra ("${tn.formas[tn.define].forma.nombre}") te quedan ${pesos(
+                      tn.ganancia
+                    )}, ya descontado el costo${envioTN > 0 ? " y el envío gratis" : ""}. Con las demás, igual o más.`)
+          }
+        >
+          {otraDejaMenos && (
+            <span className="k-num text-[12px] font-semibold" style={{ color: "var(--oxido)" }}>
+              !
+            </span>
+          )}
+          <span className="k-num text-[13px] font-semibold" style={{ color: colorGanancia(tn.gananciaManda) }}>
+            {tn.gananciaManda === null ? "—" : pesos(tn.gananciaManda)}
+          </span>
+        </div>
+      </div>
 
       <CeldaTN perfume={perfume} {...conexion} />
 
-      {detalleTN && <DetalleTiendaNube perfume={perfume} precio={precioTN} tn={ajustes.tiendaNube} onCerrar={cerrarDetalleTN} />}
+      {detalleTN && (
+        <DetalleTiendaNube
+          perfume={perfume}
+          precio={precioTN}
+          tn={ajustes.tiendaNube}
+          onCerrar={cerrarDetalleTN}
+          onFijar={onFijarObjetivoTN ? (o) => onFijarObjetivoTN([perfume.id], o) : undefined}
+          onSoltar={() => onSoltarMargenTN(perfume.id, precioTN)}
+        />
+      )}
     </li>
+  );
+}
+
+/* Fijar el mismo objetivo en todos los perfumes que se ven (los que tienen
+   costo): un margen o una ganancia fija en pesos, medido contra la forma que
+   menos deja o contra una forma elegida. Pisa también los de precio a mano —
+   decisión de Franco— y por eso confirma diciendo cuántos son. Escribe en el
+   catálogo, no en Tiendanube: después se manda con "Actualizar precios". */
+function AplicarATodos({ perfumes, filtrado, formas, onFijar, onConfirmar }) {
+  const [tipo, setTipo] = useState("margen");
+  const [valor, setValor] = useState(0);
+  const [formaId, setFormaId] = useState("");
+  if (!onFijar) return null;
+
+  const conCosto = perfumes.filter((p) => Number(p.costo) > 0);
+  const aMano = conCosto.filter((p) => objetivoTN(p) === null).length;
+  const sinCosto = perfumes.length - conCosto.length;
+  const forma = formas.find((f) => f.id === formaId);
+  const listo = valor > 0 && conCosto.length > 0;
+  const texto = tipo === "margen" ? `${String(valor).replace(".", ",")}% de margen` : `${pesos(valor)} de ganancia fija`;
+
+  const aplicar = () =>
+    onConfirmar({
+      titulo: `Aplicar a ${conCosto.length} perfumes`,
+      texto:
+        `Todos quedan con ${texto}, medido contra ${forma ? `"${forma.nombre}"` : "la forma de pago que menos deja"}. ` +
+        (aMano ? `${aMano} tenían el precio puesto a mano y pasan a calcularse. ` : "") +
+        (sinCosto ? `${sinCosto} sin costo no se tocan. ` : "") +
+        (filtrado ? "Solo los que coinciden con la búsqueda. " : "") +
+        "No se manda nada a Tiendanube: después usá \"Actualizar precios en Tiendanube\".",
+      etiquetaOk: "Aplicar",
+      onAceptar: () =>
+        onFijar(
+          conCosto.map((p) => p.id),
+          tipo === "margen" ? { margen: valor / 100, formaId: formaId || null } : { ganancia: valor, formaId: formaId || null }
+        ),
+    });
+
+  const boton = (t, etiqueta) => (
+    <button
+      type="button"
+      onClick={() => setTipo(t)}
+      className="k-col px-2.5 py-[6px] transition"
+      style={tipo === t ? { background: "var(--tinta)", color: "var(--papel)" } : { color: "var(--humo)" }}
+    >
+      {etiqueta}
+    </button>
+  );
+
+  return (
+    <div
+      className="mb-5 flex flex-wrap items-end gap-3 rounded-[4px] border px-4 py-3"
+      style={{ borderColor: "var(--linea)", background: "var(--zona-tn)" }}
+    >
+      <div>
+        <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
+          Aplicar a todos
+        </span>
+        <div className="flex overflow-hidden rounded-[3px] border" style={{ borderColor: "var(--linea)", background: "var(--papel)" }}>
+          {boton("margen", "Margen")}
+          {boton("ganancia", "Ganancia fija")}
+        </div>
+      </div>
+      <label className="block w-[120px]">
+        <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
+          {tipo === "margen" ? "Margen" : "Ganancia por venta"}
+        </span>
+        <NumberCell value={valor} onChange={(v) => setValor(Math.max(0, v))} suffix={tipo === "margen" ? "%" : "$"} />
+      </label>
+      <label className="block">
+        <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
+          Medido contra
+        </span>
+        <select
+          value={formaId}
+          onChange={(e) => setFormaId(e.target.value)}
+          className="rounded-[3px] border px-2 py-[6px] text-[12.5px]"
+          style={{ borderColor: "var(--linea)", background: "var(--papel)", color: "var(--tinta)" }}
+        >
+          <option value="">La forma de pago que menos deja</option>
+          {formas.map((f) => (
+            <option key={f.id} value={f.id}>
+              {f.nombre}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        type="button"
+        onClick={aplicar}
+        disabled={!listo}
+        className="rounded-[3px] px-3.5 py-[7px] text-[12.5px] font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-40"
+        style={{ background: "var(--tinta)" }}
+      >
+        Aplicar a {conCosto.length} perfumes{filtrado ? " (los de la búsqueda)" : ""}
+      </button>
+      <span className="basis-full text-[11.5px]" style={{ color: "var(--humo)" }}>
+        La ganancia fija queda en pesos: si cambia el costo, se mueve el precio y la ganancia sigue igual. Pisa también los
+        precios puestos a mano.
+      </span>
+    </div>
   );
 }

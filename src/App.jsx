@@ -1527,12 +1527,37 @@ export default function App() {
       })
     );
 
-  /* Soltar el margen de Tiendanube: mismo cuidado — `margenTN` y el precio
-     resuelto van juntos, o el perfume vuelve al precio viejo del estado crudo. */
+  /* Soltar el objetivo de Tiendanube: mismo cuidado — margen o ganancia, la forma
+     fijada y el precio resuelto van juntos, o el perfume vuelve al precio viejo
+     del estado crudo. */
   const soltarMargenTNDelCatalogo = (id, precioResuelto) =>
     setPerfumes((ps) =>
-      ps.map((p) => (p.id === id ? { ...p, margenTN: null, precioTN: precioResuelto } : p))
+      ps.map((p) => {
+        if (p.id !== id) return p;
+        const { gananciaTN, formaTN, ...resto } = p;
+        return { ...resto, margenTN: null, precioTN: precioResuelto };
+      })
     );
+
+  /* Fijar el objetivo de Tiendanube en uno o varios perfumes, en un solo
+     `setPerfumes`: margen (fracción) o ganancia en pesos, uno borra al otro, y
+     la forma de pago contra la que se mide (`formaId` null = la que menos deja;
+     `undefined` = la que ya tenía). Lo usan el popup y "Aplicar a todos". */
+  const fijarObjetivoTN = (ids, { margen, ganancia, formaId }) => {
+    const cuales = new Set(ids);
+    setPerfumes((ps) =>
+      ps.map((p) => {
+        if (!cuales.has(p.id)) return p;
+        const { gananciaTN, formaTN, ...resto } = p;
+        const forma = formaId === undefined ? formaTN : formaId;
+        return {
+          ...resto,
+          ...(ganancia != null ? { margenTN: null, gananciaTN: ganancia } : { margenTN: margen }),
+          ...(forma != null ? { formaTN: forma } : {}),
+        };
+      })
+    );
+  };
 
   const soltarMargenDelCatalogo = (id, precioResuelto) =>
     setPerfumes((ps) =>
@@ -1998,6 +2023,7 @@ export default function App() {
           onAjustes={(campos) => setAjustes((a) => ({ ...a, ...campos }))}
           onCambiar={cambiarPerfume}
           onSoltarMargenTN={soltarMargenTNDelCatalogo}
+          onFijarObjetivoTN={fijarObjetivoTN}
           onConfirmar={setDialogo}
         />
       )}

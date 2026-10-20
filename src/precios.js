@@ -221,14 +221,12 @@ export function resolverPreciosDelCatalogo(perfumes, ajustes = {}) {
       if (nuevos) salida = { ...salida, preciosML: nuevos };
     }
 
-    // Tiendanube: un solo precio, que tiene que cubrir la forma de pago más cara.
-    if (p.margenTN != null && ajustes.tiendaNube) {
-      const r = precioTiendaNubeDesdeMargen({
-        costo: p.costo,
-        margen: p.margenTN,
-        ajustesTN: ajustes.tiendaNube,
-      });
-      if (r && r.precio !== (Number(p.precioTN) || 0)) salida = { ...salida, precioTN: r.precio };
+    // Tiendanube: un solo precio, que deja el objetivo con la forma fijada o, sin
+    // ella, con la más cara. Si la fijada no aplica por mínimo, el precio queda.
+    const objetivo = objetivoTN(p);
+    if (objetivo && ajustes.tiendaNube) {
+      const r = precioTiendaNubeDesdeObjetivo({ costo: p.costo, ...objetivo, ajustesTN: ajustes.tiendaNube });
+      if (r && !r.noAplica && r.precio !== (Number(p.precioTN) || 0)) salida = { ...salida, precioTN: r.precio };
     }
 
     if (salida !== p) hubo = true;
@@ -285,7 +283,7 @@ const aplicaTN = (forma, precio) => {
      ayuda, el de medio de pago "solo aplica si los anteriores son combinables".
    El mínimo de una forma se mide contra la compra ya con el cupón. Sin cupón el
    resultado es el de siempre: el cupón no toca ningún precio. */
-export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon }) {
+export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon, formaId }) {
   const c = Number(costo) || 0;
   const p = Number(precio) || 0;
   const envio = Number(ajustesTN.envioGratis) || 0;
@@ -334,7 +332,20 @@ export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon }) {
     if (define < 0 || f.ganancia < formas[define].ganancia) define = i;
   });
   const ganancia = define < 0 ? null : formas[define].ganancia;
-  return { formas, define, ganancia, margen: ganancia === null ? null : ganancia / c };
+  /* `manda`: la forma contra la que se mide el objetivo — la fijada si existe y
+     aplica, si no la que menos deja. `define` sigue siendo la que menos deja. */
+  const fija = indiceFormaTN(formaId, ajustesTN);
+  const manda = fija >= 0 && formas[fija].valida && formas[fija].aplica && formas[fija].ganancia !== null ? fija : define;
+  const gananciaManda = manda < 0 ? null : formas[manda].ganancia;
+  return {
+    formas,
+    define,
+    ganancia,
+    margen: ganancia === null ? null : ganancia / c,
+    manda,
+    gananciaManda,
+    margenManda: gananciaManda === null ? null : gananciaManda / c,
+  };
 }
 
 /* El precio que deja `margen` sobre el costo con la forma de pago más cara.
@@ -346,17 +357,53 @@ export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon }) {
    se suman las que lo cumplen con ese precio y se recalcula hasta que no cambie.
    Devuelve `{ precio, define }` o null si no hay cuenta posible. */
 export function precioTiendaNubeDesdeMargen({ costo, margen, ajustesTN = {} }) {
+  return precioTiendaNubeDesdeObjetivo({ costo, margen, ajustesTN });
+}
+
+/* El objetivo de un perfume en Tiendanube: margen (fracción del costo) o
+   ganancia fija en pesos, medido contra una forma de pago (`formaTN`) o, sin
+   ella, contra la que menos deja. `null` si el perfume tiene el precio a mano. */
+export function objetivoTN(perfume) {
+  if (perfume?.gananciaTN != null) return { ganancia: Number(perfume.gananciaTN), formaId: perfume.formaTN ?? null };
+  if (perfume?.margenTN != null) return { margen: Number(perfume.margenTN), formaId: perfume.formaTN ?? null };
+  return null;
+}
+
+/* La forma fijada, si todavía existe en los ajustes: borrada, se vuelve sola a
+   medir contra la que menos deja. -> índice o -1. */
+export const indiceFormaTN = (formaId, ajustesTN = {}) =>
+  formaId == null ? -1 : (ajustesTN.formas ?? []).findIndex((f) => f.id === formaId);
+
+/* Como `precioTiendaNubeDesdeMargen`, con la ganancia en pesos como alternativa
+   al margen y una forma de pago opcional contra la que medir:
+
+     objetivo = costo + envío + (ganancia ?? costo × margen)
+
+   · Sin forma (o con una que ya no existe): la de siempre, la forma que más
+     cuesta manda.
+   · Con forma: `precio = objetivo ÷ k` de ESA forma, mismo redondeo hacia
+     arriba. Si tiene mínimo y el precio no llega, esa forma no aplica: devuelve
+     `{ precio, define, noAplica: true }` y el precio no se usa.
+   Devuelve `{ precio, define }` o null si no hay cuenta posible. */
+export function precioTiendaNubeDesdeObjetivo({ costo, margen, ganancia, formaId, ajustesTN = {} }) {
   const c = Number(costo) || 0;
-  if (!(c > 0) || margen == null || !Number.isFinite(Number(margen))) return null;
+  const extra = ganancia != null ? Number(ganancia) : margen != null ? c * Number(margen) : NaN;
+  if (!(c > 0) || !Number.isFinite(extra)) return null;
   const formas = ajustesTN.formas ?? [];
   if (!formas.length) return null;
 
-  const objetivo = c + (Number(ajustesTN.envioGratis) || 0) + c * Number(margen);
+  const objetivo = c + (Number(ajustesTN.envioGratis) || 0) + extra;
   const redondeo = Number(ajustesTN.redondeo) > 0 ? Number(ajustesTN.redondeo) : 1;
   const k = formas.map(
     (f) => (1 - (Number(f.descuento) || 0)) * (1 - comisionRealTN(f, ajustesTN))
   );
   if (k.some((x) => !(x > 0))) return null;
+
+  const fija = indiceFormaTN(formaId, ajustesTN);
+  if (fija >= 0) {
+    const precio = redondearPrecio(objetivo / k[fija], { redondeo, k: k[fija], costo: c });
+    return aplicaTN(formas[fija], precio) ? { precio, define: fija } : { precio, define: fija, noAplica: true };
+  }
 
   const precioCon = (activas) => {
     let necesario = 0;

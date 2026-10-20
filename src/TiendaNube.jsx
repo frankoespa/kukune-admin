@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Plus, X, ChevronDown } from "lucide-react";
 import { CampoProtegido } from "./CampoProtegido";
 import { NumberCell } from "./NumberCell";
-import { analisisTiendaNube, comisionRealTN, IVA } from "./precios";
+import { analisisTiendaNube, comisionRealTN, indiceFormaTN, IVA, objetivoTN, precioTiendaNubeDesdeObjetivo } from "./precios";
 import { pctSinMiles } from "./numeros";
 
 /* ============================================================
@@ -251,27 +251,42 @@ function FilaForma({ forma, tn, nueva, onCambiar, onQuitar }) {
 }
 
 /* El detalle de un precio de Tiendanube: qué pasa con cada forma de pago.
-   En un portal al body: la fila del catálogo tiene `overflow: hidden`. */
-export function DetalleTiendaNube({ perfume, precio, tn, onCerrar }) {
+   En un portal al body: la fila del catálogo tiene `overflow: hidden`.
+
+   Con `onFijar`, el margen y la ganancia de cada forma se pueden escribir: eso
+   fija el objetivo del perfume contra ESA forma (`formaTN`) y el precio se
+   despeja solo. `precio` llega ya resuelto desde la lista, así que al tipear se
+   ven el precio y todas las filas nuevas. */
+export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSoltar }) {
   const [copiado, setCopiado] = useState(false);
   /* Cupón simulado: vale para todas las formas de pago y se acumula con su
      descuento. Es una prueba —vive solo mientras el panel está abierto— y no
      toca ningún precio. Porcentaje en número entero (10 = 10%), monto en pesos. */
   const [cupon, setCupon] = useState({ porcentaje: 0, monto: 0, combinable: true });
   const conCupon = cupon.porcentaje > 0 || cupon.monto > 0;
+  const objetivo = objetivoTN(perfume);
+  const formaId = objetivo?.formaId ?? null;
   // Sin cupón: lo que define el precio. Con cupón: lo que te queda si lo usan.
-  const base = analisisTiendaNube({ costo: perfume.costo, precio, ajustesTN: tn });
+  const base = analisisTiendaNube({ costo: perfume.costo, precio, ajustesTN: tn, formaId });
   const r = conCupon
     ? analisisTiendaNube({
         costo: perfume.costo,
         precio,
         ajustesTN: tn,
+        formaId,
         cupon: { porcentaje: cupon.porcentaje / 100, monto: cupon.monto, combinable: cupon.combinable },
       })
     : base;
   const costo = Number(perfume.costo) || 0;
   const envio = Number(tn.envioGratis) || 0;
   const define = base.define >= 0 ? base.formas[base.define] : null;
+  // La forma contra la que se mide el objetivo: la fijada, o la que menos deja.
+  const indiceFija = indiceFormaTN(formaId, tn);
+  const fijada = objetivo ? (indiceFija >= 0 ? indiceFija : base.define) : -1;
+  // Si la fijada no aplica por mínimo con el precio que saldría, el precio no se movió.
+  const despeje = objetivo ? precioTiendaNubeDesdeObjetivo({ costo, ...objetivo, ajustesTN: tn }) : null;
+  // Con un cupón puesto los números son otros: se edita sin cupón.
+  const editable = !!onFijar && !conCupon && costo > 0;
 
   useEffect(() => {
     const tecla = (e) => e.key === "Escape" && onCerrar();
@@ -345,12 +360,64 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar }) {
                 )}
               </p>
             )}
-            {define && (
+            {define && (indiceFija < 0 || indiceFija === base.define) && (
               <p className="mt-1 max-w-[640px] text-[12px]" style={{ color: "var(--humo)" }}>
                 Lo define "{define.forma.nombre}", la que más te cobra. Con esa te quedan{" "}
                 <span className="k-num">{pesos(define.llega)}</span> ({pesos(costo)} de costo
                 {envio > 0 ? ` + ${pesos(envio)} de envío` : ""} + {pesos(define.ganancia)} de ganancia).
               </p>
+            )}
+            {indiceFija >= 0 && indiceFija !== base.define && define && (
+              <p className="mt-1 max-w-[640px] text-[12px]" style={{ color: "var(--humo)" }}>
+                El precio lo define "{base.formas[indiceFija].forma.nombre}", la que fijaste. Ojo: con "{define.forma.nombre}" te
+                queda menos, <span className="k-num">{pesos(define.ganancia)}</span>.
+              </p>
+            )}
+            {despeje?.noAplica && (
+              <p className="mt-1 max-w-[640px] text-[12px]" style={{ color: "var(--oxido)" }}>
+                "{tn.formas[despeje.define].nombre}" pide una compra de al menos {pesos(Number(tn.formas[despeje.define].minimo) || 0)} y
+                con ese objetivo el precio sería {pesos(despeje.precio)}: no aplica, así que el precio quedó como estaba.
+              </p>
+            )}
+            {onFijar && (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {objetivo ? (
+                  <>
+                    <span className="text-[12px]" style={{ color: "var(--tinta)" }}>
+                      Fijado:{" "}
+                      <b className="k-num">
+                        {objetivo.ganancia != null ? pesos(objetivo.ganancia) : pctSinMiles(objetivo.margen, 1)}
+                      </b>{" "}
+                      con {fijada >= 0 ? `"${tn.formas[fijada].nombre}"` : "la que menos deja"}
+                      {indiceFija < 0 ? " (la que menos deja)" : ""}
+                    </span>
+                    {indiceFija >= 0 && (
+                      <button
+                        type="button"
+                        onClick={() => onFijar({ ...objetivo, formaId: null })}
+                        className="k-col rounded-[3px] border px-2.5 py-[5px] transition"
+                        style={{ borderColor: "var(--linea)", color: "var(--humo)", background: "var(--papel)" }}
+                        title="Mismo número, pero medido contra la forma de pago que menos te deja"
+                      >
+                        Medir contra la que menos deja
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={onSoltar}
+                      className="k-col rounded-[3px] border px-2.5 py-[5px] transition"
+                      style={{ borderColor: "var(--linea)", color: "var(--humo)", background: "var(--papel)" }}
+                      title="El precio queda donde está y pasa a ser a mano"
+                    >
+                      Soltar
+                    </button>
+                  </>
+                ) : (
+                  <span className="text-[12px]" style={{ color: "var(--humo)" }}>
+                    Escribí el margen o la ganancia en una forma de pago y el precio se calcula para que esa forma deje eso.
+                  </span>
+                )}
+              </div>
             )}
             <div className="mt-3 flex flex-wrap items-end gap-2">
               <span className="k-col pb-2" style={{ color: "var(--tinta)" }}>
@@ -432,13 +499,29 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar }) {
               const nombre = (
                 <td className="px-2.5 py-2 text-[12.5px]" style={{ color: "var(--tinta)" }}>
                   {f.forma.nombre}
-                  {i === r.define && (
+                  {indiceFija >= 0 && i === indiceFija ? (
                     <span
                       className="k-col ml-1.5 whitespace-nowrap rounded-full px-1.5 py-px text-[9px]"
                       style={{ background: "var(--tinta)", color: "var(--papel)" }}
                     >
-                      {conCupon ? "la que menos deja" : "define el precio"}
+                      fijada
                     </span>
+                  ) : indiceFija >= 0 && i === r.define ? (
+                    <span
+                      className="k-col ml-1.5 whitespace-nowrap rounded-full px-1.5 py-px text-[9px]"
+                      style={{ background: "var(--oxido)", color: "var(--papel)" }}
+                    >
+                      deja menos
+                    </span>
+                  ) : (
+                    i === r.define && (
+                      <span
+                        className="k-col ml-1.5 whitespace-nowrap rounded-full px-1.5 py-px text-[9px]"
+                        style={{ background: "var(--tinta)", color: "var(--papel)" }}
+                      >
+                        {conCupon ? "la que menos deja" : "define el precio"}
+                      </span>
+                    )
                   )}
                 </td>
               );
@@ -512,30 +595,75 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar }) {
                   <td className={td} style={{ color: "var(--tinta)" }}>
                     {pesos(f.llega)}
                   </td>
-                  <td
-                    className={`${td} font-semibold`}
-                    style={{ color: f.ganancia === null ? "var(--humo-claro)" : f.ganancia >= 0 ? "var(--ambar)" : "var(--oxido)" }}
-                  >
-                    {f.ganancia === null ? "—" : pesos(f.ganancia)}
-                  </td>
-                  {/* Ganancia sobre el costo: la misma base que la columna Margen del
-                      catálogo, así los números se comparan tal cual. */}
-                  <td
-                    className={td}
-                    style={{
-                      color:
-                        f.ganancia === null ? "var(--humo-claro)" : f.ganancia >= 0 ? "var(--verde)" : "var(--oxido)",
-                    }}
-                  >
-                    {f.ganancia === null || !(costo > 0) ? "—" : pctSinMiles(f.ganancia / costo, 1)}
-                  </td>
+                  {(() => {
+                    const colorGan =
+                      f.ganancia === null ? "var(--humo-claro)" : f.ganancia >= 0 ? "var(--ambar)" : "var(--oxido)";
+                    const colorMargen =
+                      f.ganancia === null ? "var(--humo-claro)" : f.ganancia >= 0 ? "var(--verde)" : "var(--oxido)";
+                    const margenFila = f.ganancia === null || !(costo > 0) ? null : f.ganancia / costo;
+                    if (!editable || f.ganancia === null)
+                      return (
+                        <>
+                          <td className={`${td} font-semibold`} style={{ color: colorGan }}>
+                            {f.ganancia === null ? "—" : pesos(f.ganancia)}
+                          </td>
+                          {/* Ganancia sobre el costo: la misma base que la columna Margen del
+                              catálogo, así los números se comparan tal cual. */}
+                          <td className={td} style={{ color: colorMargen }}>
+                            {margenFila === null ? "—" : pctSinMiles(margenFila, 1)}
+                          </td>
+                        </>
+                      );
+                    /* Editables. En la forma fijada se muestra lo pedido (con el
+                       redondeo hacia arriba queda igual o un poco más: lo dice el
+                       title); en las demás, lo que dejan con este precio. */
+                    const esFijada = i === fijada;
+                    const porGanancia = esFijada && objetivo.ganancia != null;
+                    const porMargen = esFijada && objetivo.margen != null;
+                    const marca = { borderLeft: "3px solid var(--ambar)", background: "#FFFDF7" };
+                    return (
+                      <>
+                        <td className={td}>
+                          <div
+                            className="ml-auto w-[112px]"
+                            title={porGanancia ? `Pediste ${pesos(objetivo.ganancia)} · queda ${pesos(f.ganancia)}` : `Escribí cuánto querés ganar con "${f.forma.nombre}"`}
+                          >
+                            <NumberCell
+                              value={porGanancia ? objetivo.ganancia : Math.round(f.ganancia)}
+                              onChange={(v) => onFijar({ ganancia: v, formaId: f.forma.id })}
+                              suffix="$"
+                              className="font-semibold"
+                              style={porGanancia ? marca : undefined}
+                            />
+                          </div>
+                        </td>
+                        <td className={td}>
+                          <div
+                            className="ml-auto w-[84px]"
+                            title={porMargen ? `Pediste ${pctSinMiles(objetivo.margen, 1)} · queda ${pctSinMiles(margenFila, 1)}` : `Escribí el margen que querés con "${f.forma.nombre}"`}
+                          >
+                            <NumberCell
+                              value={+((porMargen ? objetivo.margen : margenFila) * 100).toFixed(1)}
+                              onChange={(v) => onFijar({ margen: v / 100, formaId: f.forma.id })}
+                              suffix="%"
+                              style={porMargen ? marca : undefined}
+                            />
+                          </div>
+                        </td>
+                      </>
+                    );
+                  })()}
                 </tr>
               );
             })}
           </tbody>
         </table>
         <p className="px-5 py-3 text-[11.5px]" style={{ color: "var(--humo)" }}>
-          El precio sale de la forma de pago que más te cuesta: con todas las demás ganás igual o más.
+          {indiceFija >= 0
+            ? `El precio sale de "${tn.formas[indiceFija].nombre}", la forma que fijaste. Las demás pueden dejar más o menos.`
+            : "El precio sale de la forma de pago que más te cuesta: con todas las demás ganás igual o más."}
+          {editable && " Escribí el margen o la ganancia en una forma de pago para fijar el precio contra esa forma."}
+          {onFijar && conCupon && " Con un cupón puesto no se edita: sacalo para cambiar el margen o la ganancia."}
         </p>
       </div>
     </div>,
