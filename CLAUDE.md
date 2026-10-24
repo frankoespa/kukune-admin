@@ -520,6 +520,49 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   - Es estado local del panel: se pierde al cerrarlo, no se guarda y no toca
     precios. La cuenta es el parámetro `cupon` de `analisisTiendaNube()`; sin
     cupón da exactamente lo de siempre.
+  - Arriba, **"Cupón de la tienda"**: elegir un cupón real (solo los vigentes)
+    llena la simulación con sus datos (`cuponDeTiendanube()`), incluido su
+    `min_price` (`cupon.minimo`: si la compra no llega, `cuponAplica: false` y no
+    se aplica). Si es para otros productos (`aQuienAplica()` = "no") no se aplica
+    y lo dice; "no se sabe" (perfume sin vincular) se simula igual. Uno de envío
+    gratis no cambia la cuenta: la app ya supone que el envío lo paga el negocio.
+- **Simular promoción por cantidad** en el mismo popup: *Llevá X pagá Y* o
+  *Progresivo* (N unidades con %). Las promociones del panel **no están en la API
+  pública** (la API de Descuentos es para apps que son el motor de promociones,
+  con un callback público en cada cambio del carrito: no sirve con la app en la
+  compu de Franco), así que solo se simulan. Es el parámetro `carrito: {unidades,
+  descuento}` de `analisisTiendaNube()`: va 2°, sobre el precio y antes del
+  cupón (ayuda "¿Cómo funcionan las promociones…?"); se cuenta el carrito entero
+  (un solo envío gratis, mínimos contra el total) y devuelve la ganancia del
+  carrito y `gananciaPorUnidad`. Se supone que la promo combina con cupón y
+  medio de pago. Con cupón o promo puestos no se edita el margen.
+- **Cupones reales** (API "Coupons" 2025-03): sección "Cupones de la tienda" en
+  la pestaña (`src/CuponesTN.jsx`). Lista con `estadoDeCupon()` (vigente /
+  desactivado / por empezar / vencido / agotado; una fecha sin hora es un día en
+  hora local —`new Date("2026-10-23")` es medianoche UTC, el 22 a la noche acá—)
+  y, por cupón vigente, el **aviso de pérdida** (`impactoDeCupon()`): cada
+  perfume con precio y costo al que le aplica, con la forma que menos deja y el
+  cupón, de peor a mejor. El resumen mira la forma que menos deja; la lista
+  desplegada muestra **una columna por forma de pago** (pedido de Franco): un
+  cupón que no combina le saca el descuento a la transferencia y no a la tarjeta,
+  así que no se mueven igual (`impactoDeCupon` devuelve `formas` y `define` por
+  fila; la que menos deja va subrayada, el `title` dice cuánto dejaba sin el
+  cupón). La grilla va con anchos fijos: con `min-w-max` cada fila arma la suya
+  y un `1fr` corría las columnas con los nombres largos. **Crear y editar** escriben en la tienda real, con
+  `Dialogo` y mostrando antes el aviso con el cupón como quedaría; **no se borran**
+  desde la app. El server (`/api/tn/cupones`, `pedidoDeCupon()` puro en
+  `vite-plugin-tn.js`) valida (código alfanumérico, % ≤ 100, productos **o**
+  categorías) y al editar manda solo lo que cambió ("10000.00" y 10000 no es
+  cambio). Las categorías de un cupón existente se conservan; desde la app se
+  elige toda la tienda o perfumes vinculados. `resumirProducto` trae
+  `categorias` para saber a quién aplica un cupón por categoría.
+- **Necesita el permiso "Coupons" (escritura)** en Datos básicos de la app y
+  tocar **"Volver a conectar"** (en la banda de conexión y al lado del aviso;
+  antes no había forma de reconectar estando conectado): los permisos nuevos
+  valen recién al reinstalar. Sin
+  él, Tiendanube responde 403 y la sección dice eso; el resto de la pestaña
+  sigue igual. Probado solo en la copia con Tiendanube falsa (POST de un cupón
+  nuevo, PUT de KUKUDEROSARIO que llevó solo `{"max_uses":2}`, y el 403).
 - **Quitar una forma de pago pide confirmación** con el `Dialogo` de `App.jsx`
   (llega como `onConfirmar` por la pestaña). Ya no existe "Volver a los
   ejemplos": pisaba de un clic las formas que Franco había cargado.

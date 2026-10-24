@@ -282,18 +282,34 @@ const aplicaTN = (forma, precio) => {
    · si NO es combinable, el medio de pago pierde su descuento: según esa misma
      ayuda, el de medio de pago "solo aplica si los anteriores son combinables".
    El mínimo de una forma se mide contra la compra ya con el cupón. Sin cupón el
-   resultado es el de siempre: el cupón no toca ningún precio. */
-export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon, formaId }) {
-  const c = Number(costo) || 0;
+   resultado es el de siempre: el cupón no toca ningún precio.
+
+   `cupon.minimo` es el `min_price` de un cupón real: si la compra no llega, el
+   cupón no aplica (`cuponAplica: false`) y todo sigue como sin cupón.
+
+   `carrito` simula una promoción por cantidad (`{ unidades, descuento }`: 2x1 =
+   2 unidades al 0,5; 3x2 = 3 al 1/3; progresivo = N al %). Va 2° en el orden de
+   la ayuda ("¿Cómo funcionan las promociones…?"), sobre el precio y antes del
+   cupón. Se cuenta el carrito ENTERO: el envío gratis se paga una vez y los
+   mínimos se miden contra el total. `ganancia` es la del carrito y
+   `gananciaPorUnidad` la parte de cada frasco; con una unidad son lo mismo. */
+export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon, formaId, carrito }) {
+  const unidades = Math.max(1, Math.floor(Number(carrito?.unidades) || 1));
+  const dCantidad = Math.min(0.99, Math.max(0, Number(carrito?.descuento) || 0));
+  const c = (Number(costo) || 0) * unidades;
   const p = Number(precio) || 0;
   const envio = Number(ajustesTN.envioGratis) || 0;
   const tn = Number(ajustesTN.comision) || 0;
+  // La promo por cantidad va primero, sobre el precio de cada unidad.
+  const subtotal = p * unidades * (1 - dCantidad);
   const cuponPct = Math.min(1, Math.max(0, Number(cupon?.porcentaje) || 0));
   const cuponMonto = Math.max(0, Number(cupon?.monto) || 0);
-  const conCupon = cuponPct > 0 || cuponMonto > 0;
+  const cuponMinimo = Math.max(0, Number(cupon?.minimo) || 0);
+  const cuponAplica = subtotal >= cuponMinimo;
+  const conCupon = cuponAplica && (cuponPct > 0 || cuponMonto > 0);
   const combinable = cupon?.combinable !== false;
-  // El cupón va primero, sobre el precio.
-  const conElCupon = Math.max(0, p * (1 - cuponPct) - cuponMonto);
+  // Después el cupón, sobre el subtotal.
+  const conElCupon = conCupon ? Math.max(0, subtotal * (1 - cuponPct) - cuponMonto) : subtotal;
 
   const formas = (ajustesTN.formas ?? []).map((forma) => {
     const descuento = Number(forma.descuento) || 0;
@@ -323,6 +339,7 @@ export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon, forma
       tasaReal: real,
       llega,
       ganancia: c > 0 && p > 0 ? llega - c - envio : null,
+      gananciaPorUnidad: c > 0 && p > 0 ? (llega - c - envio) / unidades : null,
     };
   });
 
@@ -345,7 +362,90 @@ export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon, forma
     manda,
     gananciaManda,
     margenManda: gananciaManda === null ? null : gananciaManda / c,
+    unidades,
+    gananciaPorUnidad: ganancia === null ? null : ganancia / unidades,
+    subtotal,
+    cuponAplica,
   };
+}
+
+/* ---------- Cupones reales de Tiendanube (API "Coupons" 2025-03) ---------- */
+
+/* Un cupón de la API, en lo que entiende `analisisTiendaNube`. El de envío
+   gratis no cambia la cuenta: la app ya supone que el envío lo paga el negocio.
+   -> { porcentaje, monto, combinable, minimo } */
+export function cuponDeTiendanube(c) {
+  const valor = Number(c?.value) || 0;
+  return {
+    porcentaje: c?.type === "percentage" ? Math.min(1, valor / 100) : 0,
+    monto: c?.type === "absolute" ? valor : 0,
+    combinable: c?.combines_with_other_discounts !== false,
+    minimo: Number(c?.min_price) || 0,
+  };
+}
+
+/* ¿Vale hoy? -> "vigente" | "desactivado" | "por empezar" | "vencido" | "agotado" */
+export function estadoDeCupon(c, hoy = new Date()) {
+  if (c?.valid === false || c?.deleted_at) return "desactivado";
+  const t = hoy.getTime();
+  /* Una fecha sin hora ("2026-10-23") es un día en hora local: `new Date()` la
+     leería como medianoche UTC, que en Argentina es el día anterior a la noche.
+     El inicio vale desde las 0:00 y el fin hasta las 23:59 de ese día. */
+  const fecha = (v, finDelDia) => {
+    const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return new Date(v).getTime();
+    return finDelDia ? new Date(+m[1], +m[2] - 1, +m[3], 23, 59, 59, 999).getTime() : new Date(+m[1], +m[2] - 1, +m[3]).getTime();
+  };
+  if (c?.start_date && fecha(c.start_date, false) > t) return "por empezar";
+  if (c?.end_date && fecha(c.end_date, true) < t) return "vencido";
+  if (c?.max_uses != null && Number(c.used) >= Number(c.max_uses)) return "agotado";
+  return "vigente";
+}
+
+/* ¿Le aplica el cupón a este perfume? Por producto vinculado o por sus
+   categorías. -> "si" | "no" | "no se sabe" (restringido y sin vincular, o el
+   producto no vino en la lista). */
+export function aQuienAplica(c, perfume, productosTN = []) {
+  const ids = (lista) => (lista ?? []).map((x) => String(typeof x === "object" ? x.id : x));
+  const productos = ids(c?.products);
+  const categorias = ids(c?.categories);
+  if (!productos.length && !categorias.length) return "si";
+  const pid = perfume?.publicacionTN?.productId;
+  if (pid == null) return "no se sabe";
+  if (productos.length) return productos.includes(String(pid)) ? "si" : "no";
+  const producto = productosTN.find((p) => String(p.id) === String(pid));
+  if (!producto) return "no se sabe";
+  return (producto.categorias ?? []).some((cat) => categorias.includes(String(cat))) ? "si" : "no";
+}
+
+/* Qué pasa con cada perfume si usan el cupón, pagando con la forma que menos
+   deja. Solo los que tienen precio y costo. -> { filas, pierden, peor, noSeSabe }
+   · filas: [{ perfume, ganancia, sinCupon, aplicaMinimo, formas, define }] de
+     peor a mejor; `formas` es la ganancia con y sin el cupón en cada forma de
+     pago (null si no aplica), y `define` el índice de la que menos deja. */
+export function impactoDeCupon(c, perfumes, ajustesTN, productosTN = []) {
+  const cupon = cuponDeTiendanube(c);
+  const filas = [];
+  const noSeSabe = [];
+  for (const p of perfumes ?? []) {
+    if (!(Number(p.costo) > 0) || !(Number(p.precioTN) > 0)) continue;
+    const alcance = aQuienAplica(c, p, productosTN);
+    if (alcance === "no") continue;
+    if (alcance === "no se sabe") {
+      noSeSabe.push(p);
+      continue;
+    }
+    const con = analisisTiendaNube({ costo: p.costo, precio: p.precioTN, ajustesTN, cupon });
+    const sin = analisisTiendaNube({ costo: p.costo, precio: p.precioTN, ajustesTN });
+    if (con.ganancia === null) continue;
+    // Cada forma por separado: un cupón no combinable le saca el descuento a
+    // algunas y se lo deja a otras, así que no se mueven todas igual.
+    const ganDe = (f) => (f.valida && f.aplica ? f.ganancia : null);
+    const formas = con.formas.map((f, i) => ({ nombre: f.forma.nombre, ganancia: ganDe(f), sinCupon: ganDe(sin.formas[i]) }));
+    filas.push({ perfume: p, ganancia: con.ganancia, sinCupon: sin.ganancia, aplicaMinimo: con.cuponAplica, formas, define: con.define });
+  }
+  filas.sort((a, b) => a.ganancia - b.ganancia);
+  return { filas, pierden: filas.filter((f) => f.ganancia < 0).length, peor: filas[0] ?? null, noSeSabe };
 }
 
 /* El precio que deja `margen` sobre el costo con la forma de pago más cara.

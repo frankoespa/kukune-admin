@@ -3,7 +3,17 @@ import { createPortal } from "react-dom";
 import { Plus, X, ChevronDown } from "lucide-react";
 import { CampoProtegido } from "./CampoProtegido";
 import { NumberCell } from "./NumberCell";
-import { analisisTiendaNube, comisionRealTN, indiceFormaTN, IVA, objetivoTN, precioTiendaNubeDesdeObjetivo } from "./precios";
+import {
+  analisisTiendaNube,
+  aQuienAplica,
+  comisionRealTN,
+  cuponDeTiendanube,
+  estadoDeCupon,
+  indiceFormaTN,
+  IVA,
+  objetivoTN,
+  precioTiendaNubeDesdeObjetivo,
+} from "./precios";
 import { pctSinMiles } from "./numeros";
 
 /* ============================================================
@@ -17,6 +27,22 @@ export const pesos = (n) =>
     currency: "ARS",
     maximumFractionDigits: 0,
   }).format(Number.isFinite(n) ? n : 0);
+
+/* Un cupón de Tiendanube dicho en palabras: qué descuenta, y sus condiciones. */
+export const describirCupon = (c) =>
+  c.type === "percentage" ? `−${Number(c.value)}%` : c.type === "absolute" ? `−${pesos(Number(c.value))}` : "envío gratis";
+
+export function condicionesDeCupon(c) {
+  const partes = [];
+  if (Number(c.min_price) > 0) partes.push(`desde ${pesos(Number(c.min_price))}`);
+  if (c.first_consumer_purchase) partes.push("solo primera compra");
+  if (c.max_uses != null) partes.push(`${Number(c.used) || 0} de ${c.max_uses} usos`);
+  if (c.products?.length) partes.push(`${c.products.length} producto${c.products.length === 1 ? "" : "s"}`);
+  if (c.categories?.length) partes.push(`${c.categories.length} categoría${c.categories.length === 1 ? "" : "s"}`);
+  if (c.end_date) partes.push(`hasta ${String(c.end_date).slice(0, 10).split("-").reverse().join("/")}`);
+  partes.push(c.combines_with_other_discounts === false ? "no combina" : "combina");
+  return partes.join(" · ");
+}
 
 const porcentaje = (fraccion) =>
   `${new Intl.NumberFormat("es-AR", { maximumFractionDigits: 2, useGrouping: false }).format(
@@ -257,26 +283,52 @@ function FilaForma({ forma, tn, nueva, onCambiar, onQuitar }) {
    fija el objetivo del perfume contra ESA forma (`formaTN`) y el precio se
    despeja solo. `precio` llega ya resuelto desde la lista, así que al tipear se
    ven el precio y todas las filas nuevas. */
-export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSoltar }) {
+export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSoltar, cuponesTienda = [], productosTN = [] }) {
   const [copiado, setCopiado] = useState(false);
   /* Cupón simulado: vale para todas las formas de pago y se acumula con su
      descuento. Es una prueba —vive solo mientras el panel está abierto— y no
-     toca ningún precio. Porcentaje en número entero (10 = 10%), monto en pesos. */
-  const [cupon, setCupon] = useState({ porcentaje: 0, monto: 0, combinable: true });
+     toca ningún precio. Porcentaje en número entero (10 = 10%), monto en pesos.
+     `minimo` viene de un cupón real (su `min_price`); `deLaTienda` es su id. */
+  const [cupon, setCupon] = useState({ porcentaje: 0, monto: 0, combinable: true, minimo: 0, deLaTienda: "" });
+  /* Promoción por cantidad simulada (las del panel no están en la API): llevá X
+     pagá Y, o progresivo (N unidades con %). Mismo trato que el cupón. */
+  const [promo, setPromo] = useState({ tipo: "ninguna", x: 2, y: 1, unidades: 2, pct: 10 });
+  const carrito =
+    promo.tipo === "xy" && promo.x > promo.y && promo.y >= 1
+      ? { unidades: promo.x, descuento: 1 - promo.y / promo.x }
+      : promo.tipo === "progresivo" && promo.unidades >= 1 && promo.pct > 0
+        ? { unidades: promo.unidades, descuento: Math.min(promo.pct, 99) / 100 }
+        : null;
+  const conPromo = !!carrito;
   const conCupon = cupon.porcentaje > 0 || cupon.monto > 0;
+  const cuponReal = cuponesTienda.find((c) => String(c.id) === String(cupon.deLaTienda)) ?? null;
+  const vigentes = cuponesTienda.filter((c) => estadoDeCupon(c) === "vigente");
+  const elegirCuponTienda = (id) => {
+    const c = cuponesTienda.find((x) => String(x.id) === String(id));
+    if (!c) return setCupon({ porcentaje: 0, monto: 0, combinable: true, minimo: 0, deLaTienda: "" });
+    const s = cuponDeTiendanube(c);
+    setCupon({ porcentaje: s.porcentaje * 100, monto: s.monto, combinable: s.combinable, minimo: s.minimo, deLaTienda: String(c.id) });
+  };
+  const alcance = cuponReal ? aQuienAplica(cuponReal, perfume, productosTN) : "si";
   const objetivo = objetivoTN(perfume);
   const formaId = objetivo?.formaId ?? null;
-  // Sin cupón: lo que define el precio. Con cupón: lo que te queda si lo usan.
+  // Sin cupón ni promo: lo que define el precio. Con ellos: lo que te queda si los usan.
   const base = analisisTiendaNube({ costo: perfume.costo, precio, ajustesTN: tn, formaId });
-  const r = conCupon
-    ? analisisTiendaNube({
-        costo: perfume.costo,
-        precio,
-        ajustesTN: tn,
-        formaId,
-        cupon: { porcentaje: cupon.porcentaje / 100, monto: cupon.monto, combinable: cupon.combinable },
-      })
-    : base;
+  // Un cupón de la tienda que es para otros productos no se aplica.
+  const cuponEnCuenta = conCupon && alcance !== "no";
+  const r =
+    cuponEnCuenta || conPromo
+      ? analisisTiendaNube({
+          costo: perfume.costo,
+          precio,
+          ajustesTN: tn,
+          formaId,
+          carrito,
+          cupon: cuponEnCuenta
+            ? { porcentaje: cupon.porcentaje / 100, monto: cupon.monto, combinable: cupon.combinable, minimo: cupon.minimo }
+            : undefined,
+        })
+      : base;
   const costo = Number(perfume.costo) || 0;
   const envio = Number(tn.envioGratis) || 0;
   const define = base.define >= 0 ? base.formas[base.define] : null;
@@ -285,8 +337,9 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
   const fijada = objetivo ? (indiceFija >= 0 ? indiceFija : base.define) : -1;
   // Si la fijada no aplica por mínimo con el precio que saldría, el precio no se movió.
   const despeje = objetivo ? precioTiendaNubeDesdeObjetivo({ costo, ...objetivo, ajustesTN: tn }) : null;
-  // Con un cupón puesto los números son otros: se edita sin cupón.
-  const editable = !!onFijar && !conCupon && costo > 0;
+  // Con un cupón o una promo puestos los números son otros: se edita sin ellos.
+  const editable = !!onFijar && !conCupon && !conPromo && costo > 0;
+  const simulando = (conCupon && cuponEnCuenta) || conPromo;
 
   useEffect(() => {
     const tecla = (e) => e.key === "Escape" && onCerrar();
@@ -348,13 +401,21 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
             </div>
             {r.ganancia !== null && (
               <p className="mt-1 text-[12.5px] font-semibold" style={{ color: r.ganancia >= 0 ? "var(--ambar)" : "var(--oxido)" }}>
-                {conCupon ? "Con el cupón ganás al menos " : "Vas a ganar al menos "}
-                <span className="k-num">{pesos(r.ganancia)}</span> por venta
+                {simulando
+                  ? `Con ${[conPromo && "la promo", cuponEnCuenta && r.cuponAplica && "el cupón"].filter(Boolean).join(" y ")} ganás al menos `
+                  : "Vas a ganar al menos "}
+                <span className="k-num">{pesos(r.ganancia)}</span> {r.unidades > 1 ? `por el carrito de ${r.unidades}` : "por venta"}
+                {r.unidades > 1 && (
+                  <>
+                    {" "}
+                    (<span className="k-num">{pesos(r.gananciaPorUnidad)}</span> por frasco)
+                  </>
+                )}
                 {r.margen !== null && <span className="k-num"> ({pctSinMiles(r.margen, 1)})</span>}
-                {conCupon && base.ganancia !== null && (
+                {simulando && base.ganancia !== null && (
                   <span className="font-normal" style={{ color: "var(--humo)" }}>
                     {" "}
-                    · sin cupón <span className="k-num">{pesos(base.ganancia)}</span>
+                    · sin descuentos <span className="k-num">{pesos(base.ganancia)}</span> por frasco
                     <span className="k-num"> ({pctSinMiles(base.margen, 1)})</span>
                   </span>
                 )}
@@ -419,6 +480,97 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                 )}
               </div>
             )}
+            {/* Promoción por cantidad: va antes del cupón, como en Tiendanube. */}
+            <div className="mt-3 flex flex-wrap items-end gap-2">
+              <span className="k-col pb-2" style={{ color: "var(--tinta)" }}>
+                Simular promoción por cantidad
+              </span>
+              <select
+                value={promo.tipo}
+                onChange={(e) => setPromo((p) => ({ ...p, tipo: e.target.value }))}
+                aria-label="Tipo de promoción por cantidad"
+                className="rounded-[3px] border px-2 py-[6px] text-[12.5px]"
+                style={{ borderColor: "var(--linea)", background: "var(--papel)", color: "var(--tinta)" }}
+              >
+                <option value="ninguna">Ninguna</option>
+                <option value="xy">Llevá X, pagá Y</option>
+                <option value="progresivo">Progresivo (% por unidades)</option>
+              </select>
+              {promo.tipo === "xy" && (
+                <>
+                  <span className="k-col pb-2" style={{ color: "var(--humo)" }}>
+                    llevá
+                  </span>
+                  <label className="block w-[64px]" title="Unidades que lleva">
+                    <NumberCell value={promo.x} onChange={(v) => setPromo((p) => ({ ...p, x: Math.max(2, Math.round(v)) }))} />
+                  </label>
+                  <span className="k-col pb-2" style={{ color: "var(--humo)" }}>
+                    pagá
+                  </span>
+                  <label className="block w-[64px]" title="Unidades que paga">
+                    <NumberCell value={promo.y} onChange={(v) => setPromo((p) => ({ ...p, y: Math.max(1, Math.round(v)) }))} />
+                  </label>
+                </>
+              )}
+              {promo.tipo === "progresivo" && (
+                <>
+                  <label className="block w-[64px]" title="Unidades en el carrito">
+                    <NumberCell value={promo.unidades} onChange={(v) => setPromo((p) => ({ ...p, unidades: Math.max(1, Math.round(v)) }))} suffix="u." />
+                  </label>
+                  <label className="block w-[72px]" title="Descuento por llevar esas unidades">
+                    <NumberCell value={promo.pct} onChange={(v) => setPromo((p) => ({ ...p, pct: Math.max(0, Math.min(99, v)) }))} suffix="%" />
+                  </label>
+                </>
+              )}
+              {promo.tipo === "xy" && !(promo.x > promo.y) && (
+                <span className="pb-2 text-[11.5px]" style={{ color: "var(--oxido)" }}>
+                  Tiene que llevar más de lo que paga.
+                </span>
+              )}
+              {conPromo && (
+                <span className="w-full text-[11px]" style={{ color: "var(--humo)" }}>
+                  Se cuenta el carrito entero: {carrito.unidades} frascos a {pesos(precio)} con −{pctSinMiles(carrito.descuento, 1)}, un solo envío,
+                  y después el cupón y el descuento del medio de pago (se supone que la promo se combina con ellos).
+                </span>
+              )}
+            </div>
+
+            {/* Cupones reales de la tienda: llenan la simulación con sus datos. */}
+            {cuponesTienda.length > 0 && (
+              <div className="mt-3 flex flex-wrap items-end gap-2">
+                <span className="k-col pb-2" style={{ color: "var(--tinta)" }}>
+                  Cupón de la tienda
+                </span>
+                <select
+                  value={cupon.deLaTienda}
+                  onChange={(e) => elegirCuponTienda(e.target.value)}
+                  aria-label="Cupón de la tienda"
+                  className="rounded-[3px] border px-2 py-[6px] text-[12.5px]"
+                  style={{ borderColor: "var(--linea)", background: "var(--papel)", color: "var(--tinta)" }}
+                >
+                  <option value="">A mano (abajo)</option>
+                  {vigentes.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.code} · {describirCupon(c)}
+                    </option>
+                  ))}
+                </select>
+                {cuponReal && (
+                  <span className="pb-2 text-[11.5px]" style={{ color: alcance === "no" || !r.cuponAplica ? "var(--oxido)" : "var(--humo)" }}>
+                    {cuponReal.type === "shipping"
+                      ? "Es de envío gratis: no cambia la cuenta, la app ya supone que el envío lo pagás vos."
+                      : alcance === "no"
+                        ? "Este cupón es para otros productos: a este perfume no le aplica."
+                        : alcance === "no se sabe"
+                          ? "Está limitado a productos o categorías y este perfume no está vinculado: se simula igual."
+                          : !r.cuponAplica
+                            ? `Pide una compra de al menos ${pesos(cupon.minimo)}: con esta compra no aplica.`
+                            : condicionesDeCupon(cuponReal)}
+                  </span>
+                )}
+              </div>
+            )}
+
             <div className="mt-3 flex flex-wrap items-end gap-2">
               <span className="k-col pb-2" style={{ color: "var(--tinta)" }}>
                 Simular cupón
@@ -426,7 +578,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
               <label className="block w-[80px]" title="Porcentaje del cupón">
                 <NumberCell
                   value={cupon.porcentaje}
-                  onChange={(v) => setCupon((c) => ({ ...c, porcentaje: Math.max(0, Math.min(100, v)) }))}
+                  onChange={(v) => setCupon((c) => ({ ...c, porcentaje: Math.max(0, Math.min(100, v)), deLaTienda: "", minimo: 0 }))}
                   suffix="%"
                 />
               </label>
@@ -436,14 +588,14 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
               <label className="block w-[104px]" title="Monto fijo del cupón, en pesos">
                 <NumberCell
                   value={cupon.monto}
-                  onChange={(v) => setCupon((c) => ({ ...c, monto: Math.max(0, v) }))}
+                  onChange={(v) => setCupon((c) => ({ ...c, monto: Math.max(0, v), deLaTienda: "", minimo: 0 }))}
                   suffix="$"
                 />
               </label>
               {conCupon && (
                 <button
                   type="button"
-                  onClick={() => setCupon((c) => ({ ...c, porcentaje: 0, monto: 0 }))}
+                  onClick={() => setCupon({ porcentaje: 0, monto: 0, combinable: true, minimo: 0, deLaTienda: "" })}
                   className="k-col mb-1 rounded-[3px] border px-2.5 py-[5px] transition"
                   style={{ borderColor: "var(--linea)", color: "var(--humo)", background: "var(--papel)" }}
                 >
@@ -458,7 +610,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                 <input
                   type="checkbox"
                   checked={cupon.combinable}
-                  onChange={(e) => setCupon((c) => ({ ...c, combinable: e.target.checked }))}
+                  onChange={(e) => setCupon((c) => ({ ...c, combinable: e.target.checked, deLaTienda: "" }))}
                 />
                 Se combina con el descuento del medio de pago
               </label>
@@ -485,7 +637,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
           <thead>
             <tr className="border-b" style={{ borderColor: "var(--linea)", color: "var(--humo)" }}>
               <th className={`${th} text-left`}>Si paga con</th>
-              <th className={th}>Paga el cliente</th>
+              <th className={th}>{r.unidades > 1 ? `Paga el cliente (${r.unidades} u.)` : "Paga el cliente"}</th>
               <th className={th}>Comisión</th>
               <th className={th}>IVA</th>
               <th className={th}>Total comisión</th>
@@ -519,7 +671,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                         className="k-col ml-1.5 whitespace-nowrap rounded-full px-1.5 py-px text-[9px]"
                         style={{ background: "var(--tinta)", color: "var(--papel)" }}
                       >
-                        {conCupon ? "la que menos deja" : "define el precio"}
+                        {simulando ? "la que menos deja" : "define el precio"}
                       </span>
                     )
                   )}
@@ -559,8 +711,10 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                       // Qué se descontó del precio: el de la forma y el del cupón.
                       // En el orden en que se aplican: primero el cupón.
                       const partes = [];
-                      if (conCupon && cupon.porcentaje > 0) partes.push(`−${porcentaje(cupon.porcentaje / 100)} cupón`);
-                      if (conCupon && cupon.monto > 0) partes.push(`−${pesos(cupon.monto)} cupón`);
+                      if (conPromo) partes.push(`−${pctSinMiles(carrito.descuento, 1)} promo`);
+                      const cuponVa = cuponEnCuenta && r.cuponAplica;
+                      if (cuponVa && cupon.porcentaje > 0) partes.push(`−${porcentaje(cupon.porcentaje / 100)} cupón`);
+                      if (cuponVa && cupon.monto > 0) partes.push(`−${pesos(cupon.monto)} cupón`);
                       if ((Number(f.forma.descuento) || 0) > 0)
                         partes.push(
                           f.conDescuento
@@ -600,12 +754,18 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                       f.ganancia === null ? "var(--humo-claro)" : f.ganancia >= 0 ? "var(--ambar)" : "var(--oxido)";
                     const colorMargen =
                       f.ganancia === null ? "var(--humo-claro)" : f.ganancia >= 0 ? "var(--verde)" : "var(--oxido)";
-                    const margenFila = f.ganancia === null || !(costo > 0) ? null : f.ganancia / costo;
+                    // Sobre el costo de lo que se lleva: con un carrito de N, N costos.
+                    const margenFila = f.ganancia === null || !(costo > 0) ? null : f.ganancia / (costo * r.unidades);
                     if (!editable || f.ganancia === null)
                       return (
                         <>
                           <td className={`${td} font-semibold`} style={{ color: colorGan }}>
                             {f.ganancia === null ? "—" : pesos(f.ganancia)}
+                            {r.unidades > 1 && f.ganancia !== null && (
+                              <small className="block text-[10.5px] font-normal" style={{ color: "var(--humo)" }}>
+                                {pesos(f.gananciaPorUnidad)} c/u
+                              </small>
+                            )}
                           </td>
                           {/* Ganancia sobre el costo: la misma base que la columna Margen del
                               catálogo, así los números se comparan tal cual. */}
@@ -663,7 +823,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
             ? `El precio sale de "${tn.formas[indiceFija].nombre}", la forma que fijaste. Las demás pueden dejar más o menos.`
             : "El precio sale de la forma de pago que más te cuesta: con todas las demás ganás igual o más."}
           {editable && " Escribí el margen o la ganancia en una forma de pago para fijar el precio contra esa forma."}
-          {onFijar && conCupon && " Con un cupón puesto no se edita: sacalo para cambiar el margen o la ganancia."}
+          {onFijar && (conCupon || conPromo) && " Con un cupón o una promo puestos no se edita: sacalos para cambiar el margen o la ganancia."}
         </p>
       </div>
     </div>,

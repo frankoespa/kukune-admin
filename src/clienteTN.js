@@ -43,6 +43,12 @@ export const leerProductosTN = async () => (await pedir("/productos")).productos
 export const actualizarVarianteTN = (productId, variantId, cambios) =>
   pedir(`/variantes/${productId}/${variantId}`, { method: "PUT", body: JSON.stringify(cambios) });
 
+/* Cupones (API "Coupons"): leer no escribe nada; crear y editar ESCRIBEN EN
+   TIENDANUBE, solo después de una confirmación. */
+export const leerCuponesTN = async () => (await pedir("/cupones")).cupones;
+export const crearCuponTN = (cupon) => pedir("/cupones", { method: "POST", body: JSON.stringify(cupon) });
+export const editarCuponTN = (id, cupon) => pedir(`/cupones/${id}`, { method: "PUT", body: JSON.stringify(cupon) });
+
 export const vinculoTN = (perfume) => perfume?.publicacionTN ?? null;
 
 /* Lo que paga hoy el cliente: el promocional si hay, si no el normal. */

@@ -46,6 +46,16 @@ export function BandaConexionTN({ cuenta, productos, vinculados, trayendo, onCon
         )}
         {cuenta?.conectado && (
           <>
+            {/* Para que valgan permisos nuevos de la app hay que autorizarla
+                otra vez (doc "Autenticación"): el token nuevo reemplaza al viejo. */}
+            <button
+              onClick={onConectar}
+              title="Volver a autorizar la app en Tiendanube: hace falta después de agregarle permisos en el portal de socios"
+              className={boton}
+              style={{ borderColor: "var(--linea)", color: "var(--humo)" }}
+            >
+              <PlugZap size={14} /> Volver a conectar
+            </button>
             <button onClick={onRefrescar} disabled={trayendo} title="Volver a leer los productos de Tiendanube" className={boton} style={{ borderColor: "var(--linea)", color: "var(--humo)" }}>
               <RefreshCw size={14} className={trayendo ? "animate-spin" : ""} /> Releer
             </button>

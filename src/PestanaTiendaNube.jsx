@@ -5,8 +5,9 @@ import { analisisDePrecio, analisisTiendaNube, objetivoTN, precioTiendaNubeDesde
 import { AjustesTiendaNube, DetalleTiendaNube } from "./TiendaNube";
 import { NumberCell } from "./NumberCell";
 import { buscarPerfumes, ConVistaPrevia, margenReal, pesos } from "./Catalogo";
-import { actualizarVarianteTN, cambiosParaTN, enviarCodigoTN, estadoTN, leerProductosTN, pedirAutorizacionTN, vinculoTN } from "./clienteTN";
+import { actualizarVarianteTN, cambiosParaTN, enviarCodigoTN, estadoTN, leerCuponesTN, leerProductosTN, pedirAutorizacionTN, vinculoTN } from "./clienteTN";
 import { BandaConexionTN, CeldaTN, PanelActualizarTN } from "./ConexionTN";
+import CuponesTN from "./CuponesTN";
 
 /* ============================================================
    Tiendanube en su propia pestaña.
@@ -36,6 +37,22 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
   const [errorTN, setErrorTN] = useState("");
   const [trayendo, setTrayendo] = useState(false);
   const [panel, setPanel] = useState(null); // { renglones, perdidos }
+  const [cupones, setCupones] = useState(null);
+  const [errorCupones, setErrorCupones] = useState("");
+  const [leyendoCupones, setLeyendoCupones] = useState(false);
+
+  // Solo lectura. Sin el permiso de cupones el server dice qué hacer.
+  const traerCupones = useCallback(async () => {
+    setLeyendoCupones(true);
+    setErrorCupones("");
+    try {
+      setCupones(await leerCuponesTN());
+    } catch (e) {
+      setErrorCupones(e.message);
+    } finally {
+      setLeyendoCupones(false);
+    }
+  }, []);
 
   /* Solo lectura: al entrar se pregunta si hay conexión y se traen los
      productos. Nada de esto escribe ni en Tiendanube ni en el catálogo. */
@@ -60,13 +77,16 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
       .then((c) => {
         if (!vigente) return;
         setCuenta(c);
-        if (c.conectado) traerProductos();
+        if (c.conectado) {
+          traerProductos();
+          traerCupones();
+        }
       })
       .catch((e) => vigente && setCuenta({ conectado: false, error: e.message }));
     return () => {
       vigente = false;
     };
-  }, [traerProductos]);
+  }, [traerProductos, traerCupones]);
 
   /* Como con ML: Tiendanube vuelve a kukune.com.ar con el código en la
      dirección y Franco la pega acá. La pestaña se abre en el clic, antes del
@@ -91,6 +111,7 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
           try {
             setCuenta(await enviarCodigoTN(pegado));
             traerProductos();
+            traerCupones();
           } catch (e) {
             setErrorTN(`No se pudo conectar (${e.message}).`);
           }
@@ -211,6 +232,20 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
         <PanelActualizarTN {...panel} ajustesTN={ajustes.tiendaNube} onCerrar={() => setPanel(null)} onTerminado={traerProductos} />
       )}
 
+      {cuenta?.conectado && (
+        <CuponesTN
+          cupones={cupones}
+          error={errorCupones}
+          cargando={leyendoCupones}
+          perfumes={perfumes}
+          ajustesTN={ajustes.tiendaNube}
+          productos={productos ?? []}
+          onRecargar={traerCupones}
+          onConfirmar={onConfirmar}
+          onReconectar={conectar}
+        />
+      )}
+
       <div className="mb-5">
         <AjustesTiendaNube tn={ajustes.tiendaNube} onCambiar={(tn) => onAjustes({ tiendaNube: tn })} onConfirmar={onConfirmar} />
       </div>
@@ -243,6 +278,8 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
                   onSoltarMargenTN={onSoltarMargenTN}
                   onFijarObjetivoTN={onFijarObjetivoTN}
                   conexion={{ conectado: !!cuenta?.conectado, productos, porVariante, usadas, onVincular: vincular, onStock: cambiarStock }}
+                  cuponesTienda={cupones ?? []}
+                  productosTN={productos ?? []}
                 />
               ))}
             </ul>
@@ -290,7 +327,7 @@ function Encabezado() {
 
 const colorGanancia = (g) => (g === null ? "var(--humo-claro)" : g >= 0 ? "var(--ambar)" : "var(--oxido)");
 
-function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, onFijarObjetivoTN, conexion }) {
+function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, onFijarObjetivoTN, conexion, cuponesTienda, productosTN }) {
   const r = analisisDePrecio({
     costo: perfume.costo,
     precioPublico: perfume.precioPublico,
@@ -502,6 +539,8 @@ function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, onFijarObjetivo
           onCerrar={cerrarDetalleTN}
           onFijar={onFijarObjetivoTN ? (o) => onFijarObjetivoTN([perfume.id], o) : undefined}
           onSoltar={() => onSoltarMargenTN(perfume.id, precioTN)}
+          cuponesTienda={cuponesTienda}
+          productosTN={productosTN}
         />
       )}
     </li>

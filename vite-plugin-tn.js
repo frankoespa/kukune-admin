@@ -22,6 +22,9 @@ import { loadEnv } from "vite";
    · POST /api/tn/autorizar/codigo          {pegado} → canjea el código (dura 5 min)
    · GET  /api/tn/productos                 todos los productos con sus variantes
    · PUT  /api/tn/variantes/<prod>/<var>    {price?, promotional_price?, stock?} (ESCRIBE)
+   · GET  /api/tn/cupones                   los cupones de la tienda (permiso de cupones)
+   · POST /api/tn/cupones                   crea un cupón (ESCRIBE)
+   · PUT  /api/tn/cupones/<id>              cambia un cupón, solo lo que cambió (ESCRIBE)
 
    Doc oficial: https://tiendanube.dev (la de antes era
    tiendanube.github.io/api-documentation). Versión 2025-03,
@@ -34,6 +37,7 @@ const AUTORIZAR = "https://www.tiendanube.com/apps";
 // El portal de socios pide el correo de contacto como User-Agent.
 const AGENTE = "KUKUNE (frankoespa@gmail.com)";
 const POR_PAGINA = 200;
+const POR_PAGINA_CUPONES = 100;
 
 /* Lo que se pega puede ser la dirección entera (…?code=…&state=…) o el código
    solo. Pura y exportada para probarla desde Node. -> { code, state } o null. */
@@ -69,7 +73,60 @@ export const resumirProducto = (p) => ({
   publicado: !!p.published,
   imagen: p.images?.[0]?.src ?? null,
   variantes: (p.variants ?? []).map(resumirVariante),
+  // Para saber a qué productos les aplica un cupón restringido por categoría.
+  categorias: (p.categories ?? []).map((c) => (typeof c === "object" ? c.id : c)),
 });
+
+/* Lo que se le manda a Tiendanube para crear o cambiar un cupón, revisado antes
+   (doc "Coupons" 2025-03). Con `actual` (editar) devuelve solo lo que cambió.
+   Pura y exportada para probarla desde Node. Tira Error con el motivo. */
+export function pedidoDeCupon(entrada, actual = null) {
+  const e = entrada ?? {};
+  const salida = {};
+  // Tiendanube devuelve "10000.00" y fechas con hora: se comparan normalizados.
+  const normal = (v) => {
+    if (v == null || v === "") return null;
+    if (typeof v === "boolean") return v;
+    const s = String(v).trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+    return s !== "" && !Number.isNaN(Number(s)) ? Number(s) : s;
+  };
+  const poner = (campo, valor) => {
+    if (!actual || normal(actual[campo]) !== normal(valor)) salida[campo] = valor;
+  };
+  const code = String(e.code ?? "").trim();
+  if (!/^[A-Za-z0-9]+$/.test(code)) throw new Error("El código solo puede tener letras y números, sin espacios");
+  poner("code", code);
+  if (!["percentage", "absolute", "shipping"].includes(e.type)) throw new Error("Tipo de cupón inválido");
+  poner("type", e.type);
+  if (e.type !== "shipping") {
+    const valor = Number(e.value);
+    if (!(valor > 0)) throw new Error("El valor tiene que ser mayor a cero");
+    if (e.type === "percentage" && valor > 100) throw new Error("Un porcentaje no puede pasar de 100");
+    poner("value", String(valor));
+  }
+  const minimo = e.min_price == null || e.min_price === "" ? null : Number(e.min_price);
+  if (minimo != null && !(minimo >= 0)) throw new Error("El mínimo tiene que ser cero o más");
+  poner("min_price", minimo);
+  for (const campo of ["start_date", "end_date"]) {
+    const f = e[campo] ? String(e[campo]) : null;
+    if (f && Number.isNaN(new Date(f).getTime())) throw new Error(`Fecha inválida: ${f}`);
+    poner(campo, f);
+  }
+  const usos = e.max_uses == null || e.max_uses === "" ? null : Number(e.max_uses);
+  if (usos != null && !(Number.isInteger(usos) && usos > 0)) throw new Error("La cantidad de usos tiene que ser un número entero");
+  poner("max_uses", usos);
+  for (const campo of ["first_consumer_purchase", "combines_with_other_discounts", "valid"])
+    if (e[campo] != null) poner(campo, !!e[campo]);
+  const productos = (e.products ?? []).map(Number).filter((n) => n > 0);
+  const categorias = (e.categories ?? []).map(Number).filter((n) => n > 0);
+  if (productos.length && categorias.length) throw new Error("Un cupón va por productos o por categorías, no las dos cosas");
+  // Productos y categorías: al crear, solo si hay; al editar, solo si cambiaron.
+  const ids = (lista) => (lista ?? []).map((x) => Number(typeof x === "object" ? x.id : x)).sort((a, b) => a - b).join();
+  if (actual ? ids(actual.products) !== ids(productos) : productos.length) salida.products = productos;
+  if (actual ? ids(actual.categories) !== ids(categorias) : categorias.length) salida.categories = categorias;
+  return salida;
+}
 
 export default function pluginTN() {
   let appId = "";
@@ -123,7 +180,7 @@ export default function pluginTN() {
     const productos = async () => {
       const lista = [];
       for (let pagina = 1; pagina <= 50; pagina++) {
-        const q = new URLSearchParams({ per_page: String(POR_PAGINA), page: String(pagina), fields: "id,name,published,images,variants" });
+        const q = new URLSearchParams({ per_page: String(POR_PAGINA), page: String(pagina), fields: "id,name,published,images,variants,categories" });
         let r;
         try {
           r = await tn(`/products?${q}`);
@@ -134,6 +191,28 @@ export default function pluginTN() {
         }
         lista.push(...r.map(resumirProducto));
         if (r.length < POR_PAGINA) break;
+      }
+      return lista;
+    };
+
+    /* Los cupones, todas las páginas. Sin el permiso de cupones Tiendanube
+       responde 403/401: se avisa qué hacer en vez del error crudo. */
+    const sinPermiso = (e) =>
+      e.codigo === 403 || e.codigo === 401
+        ? new ErrorTN(403, "Falta el permiso de cupones: agregá \"Coupons\" en Datos básicos de la app (portal de socios) y tocá \"Volver a conectar\": el permiso nuevo recién vale al autorizar la app otra vez")
+        : e;
+    const cupones = async () => {
+      const lista = [];
+      for (let pagina = 1; pagina <= 20; pagina++) {
+        let r;
+        try {
+          r = await tn(`/coupons?per_page=${POR_PAGINA_CUPONES}&page=${pagina}`);
+        } catch (e) {
+          if (e.codigo === 404 && pagina > 1) break;
+          throw sinPermiso(e);
+        }
+        lista.push(...r);
+        if (r.length < POR_PAGINA_CUPONES) break;
       }
       return lista;
     };
@@ -208,6 +287,44 @@ export default function pluginTN() {
         }
 
         if (req.method === "GET" && ruta === "/productos") return responder(res, { productos: await productos() });
+
+        // Cupones: leer, crear y editar. No se borran desde acá.
+        if (req.method === "GET" && ruta === "/cupones") return responder(res, { cupones: await cupones() });
+        if (req.method === "POST" && ruta === "/cupones") {
+          let cuerpoTN;
+          try {
+            cuerpoTN = pedidoDeCupon(await cuerpo(req));
+          } catch (e) {
+            throw new ErrorTN(400, e.message);
+          }
+          try {
+            return responder(res, { cupon: await tn("/coupons", { method: "POST", body: JSON.stringify(cuerpoTN) }) }, 201);
+          } catch (e) {
+            throw sinPermiso(e);
+          }
+        }
+        const mc = ruta.match(/^\/cupones\/(\d+)$/);
+        if (req.method === "PUT" && mc) {
+          const pedido = await cuerpo(req);
+          let actual;
+          try {
+            actual = await tn(`/coupons/${mc[1]}`);
+          } catch (e) {
+            throw sinPermiso(e);
+          }
+          let cambios;
+          try {
+            cambios = pedidoDeCupon(pedido, actual);
+          } catch (e) {
+            throw new ErrorTN(400, e.message);
+          }
+          if (!Object.keys(cambios).length) throw new ErrorTN(400, "No hay nada que cambiar");
+          try {
+            return responder(res, { cupon: await tn(`/coupons/${mc[1]}`, { method: "PUT", body: JSON.stringify(cambios) }) });
+          } catch (e) {
+            throw sinPermiso(e);
+          }
+        }
 
         const m = ruta.match(/^\/variantes\/(\d+)\/(\d+)$/);
         if (req.method === "PUT" && m) {
