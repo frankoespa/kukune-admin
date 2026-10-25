@@ -15,6 +15,7 @@ import {
   Check,
   Lock,
   ArrowRightToLine,
+  RotateCcw,
 } from "lucide-react";
 import {
   construirPDF,
@@ -39,6 +40,7 @@ import {
 } from "./almacenamiento";
 import Catalogo, { buscarPerfumes, ConVistaPrevia } from "./Catalogo";
 import { registrarCosto } from "./historialCostos";
+import { aplicarDolar, atarAlDolar, conCostoEnPesos, costoAlDolar, costoUSDParaPasar, desatar, estaAtado } from "./dolar";
 import MercadoLibre from "./MercadoLibre";
 import PestanaTiendaNube from "./PestanaTiendaNube";
 import { resolverPrecios, resolverPreciosDelCatalogo } from "./precios";
@@ -365,59 +367,49 @@ function FotoCell({ value, onChange, nombre }) {
   );
 }
 
-/* El par Precio Final / Margen.
-
-   Una fila se maneja por precio (como siempre) o se clava a un margen objetivo.
-   La caja blanca marca cuál de los dos manda: si la fila está clavada, el precio
-   pasa a ser un valor calculado y sale de su caja.
-
-   Margen queda siempre editable — si fuera texto suelto no habría dónde hacer
-   clic para clavar la fila. La marca ámbar a la izquierda es la que dice, de un
-   vistazo, qué filas están clavadas. */
-function ParPrecioMargen({ fila, setP, onSoltar }) {
+/* El par Precio Final / Margen. */
+function ParPrecioMargen({ fila, onPrecio, onVolverAlCatalogo }) {
   const bloqueado = useBloqueo();
-  const clavada = fila.margenObjetivo != null;
   const td = "px-2 py-1.5 border-b border-[#EFEDE7]";
+  /* El precio sale del catálogo (venta directa) salvo que lo escribas: ahí la
+     fila queda "a mano" y aparece la flecha para volver al del catálogo. Una
+     fila clavada a un margen (de antes, ya no se clava desde acá) cuenta como a
+     mano. El margen es solo lectura: lo que te deja ESTE pedido a ese precio. */
+  const aMano = fila.origenPrecio === "mano";
+  const desdeCatalogo = fila.origenPrecio === "catalogo";
 
   return (
     <>
       <td className={td}>
-        {clavada ? (
-          <CalcCell strong>{ars(fila.precioFinal)}</CalcCell>
-        ) : (
-          <NumberCell
-            value={fila.precioFinal}
-            onChange={(v) => setP(fila.id, "precioFinal", v)}
-            suffix="ARS"
-            className="font-semibold"
-          />
-        )}
-      </td>
-      <td className={td}>
         <div className="relative">
           <NumberCell
-            value={+((clavada ? fila.margenObjetivo : fila.margen) * 100).toFixed(1)}
-            onChange={(v) => setP(fila.id, "margenObjetivo", v / 100)}
-            suffix="%"
-            className={clavada ? "font-semibold" : ""}
-            style={
-              clavada
-                ? { borderLeft: "3px solid var(--ambar)", background: "#FFFDF7" }
-                : undefined
-            }
+            value={fila.precioFinal}
+            onChange={(v) => onPrecio(fila.id, v)}
+            suffix="ARS"
+            className="font-semibold"
+            style={desdeCatalogo ? { color: "var(--humo)", fontWeight: 500 } : undefined}
           />
-          {clavada && !bloqueado && (
+          {aMano && !bloqueado && (
             <button
               type="button"
-              onClick={() => onSoltar(fila.id, fila.precioFinal)}
-              title="Soltar el margen y volver a poner el precio a mano"
+              onClick={() => onVolverAlCatalogo(fila.id)}
+              title="Volver al precio de venta directa del catálogo"
+              aria-label="Volver al precio del catálogo"
               className="absolute -right-1.5 -top-1.5 rounded-full bg-white p-0.5 transition"
               style={{ color: "var(--humo)", boxShadow: "0 0 0 1px var(--linea)" }}
             >
-              <X size={10} />
+              <RotateCcw size={10} />
             </button>
           )}
         </div>
+        <span className="mt-0.5 block text-right text-[10px]" style={{ color: "var(--humo-claro)" }}>
+          {desdeCatalogo ? "del catálogo" : aMano ? "a mano" : bloqueado ? "sin precio" : "sin precio en el catálogo"}
+        </span>
+      </td>
+      <td className={td}>
+        <CalcCell tone={(fila.precioFinal || 0) > 0 ? (fila.margen >= 0 ? "pos" : "neg") : undefined}>
+          {(fila.precioFinal || 0) > 0 ? pct(fila.margen, 1) : "—"}
+        </CalcCell>
       </td>
     </>
   );
@@ -747,26 +739,47 @@ function Dialogo({ dialogo, onCerrar }) {
    cambiaría; quién la llama decide con qué filas (las incluidas, o una sola).
    Si el mismo perfume está en dos filas, se promedia **por unidad** (ponderado
    por cantidad): el costo del catálogo es por unidad, no por fila. */
-function costosParaElCatalogo(filas, perfumePorId) {
+function costosParaElCatalogo(filas, perfumePorId, monedaPedido = "USD", dolarCatalogo = 0) {
   const porPerfume = new Map();
   for (const f of filas) {
     if (!f.perfumeId || !(f.precioSinGanPesos > 0)) continue;
     const perfume = perfumePorId.get(f.perfumeId);
     if (!perfume) continue; // fila huérfana: el perfume ya no está en el catálogo
     const unidades = Math.max(1, Number(f.cantidad) || 1);
-    const acum = porPerfume.get(f.perfumeId) ?? { perfume, pesos: 0, unidades: 0 };
+    const acum = porPerfume.get(f.perfumeId) ?? { perfume, pesos: 0, usd: 0, unidades: 0 };
     acum.pesos += f.precioSinGanPesos * unidades;
+    // En dólares, para atarlo: el "s/Gan. USD" si el pedido es en dólares, o
+    // sus pesos al dólar del catálogo si es en pesos.
+    acum.usd += costoUSDParaPasar(f, monedaPedido, dolarCatalogo) * unidades;
     acum.unidades += unidades;
     porPerfume.set(f.perfumeId, acum);
   }
   return [...porPerfume.values()]
-    .map(({ perfume, pesos, unidades }) => ({
+    .map(({ perfume, pesos, usd, unidades }) => ({
       id: perfume.id,
       nombre: perfume.nombre,
       actual: Number(perfume.costo) || 0,
       nuevo: Math.round(pesos / unidades),
+      nuevoUSD: usd / unidades,
+      actualUSD: Number(perfume.costoUSD) || 0,
+      atado: estaAtado(perfume),
     }))
     .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+}
+
+/* Las cifras de un renglón del pase según se ate o no al dólar. Atado: el
+   costo sale de los dólares al dólar del catálogo, y el promedio se hace en
+   dólares (contra el USD guardado, o el costo de hoy pasado a dólares). */
+function cifrasDelPase(p, atar, dolar) {
+  if (!atar) return { nuevo: p.nuevo, promedio: p.actual > 0 ? promediado(p) : null };
+  const actualUSD = p.actualUSD > 0 ? p.actualUSD : p.actual > 0 ? p.actual / dolar : 0;
+  const promedioUSD = actualUSD > 0 ? (actualUSD + p.nuevoUSD) / 2 : null;
+  return {
+    nuevo: costoAlDolar(p.nuevoUSD, dolar),
+    promedio: promedioUSD === null ? null : costoAlDolar(promedioUSD, dolar),
+    nuevoUSD: p.nuevoUSD,
+    promedioUSD,
+  };
 }
 
 /* El promedio contra lo que ya había: la cuenta que se hacía a mano cuando el
@@ -776,6 +789,153 @@ export const promediado = (p) => Math.round((p.actual + p.nuevo) / 2);
 /* Encabezado y filas del diálogo de costos comparten esta grilla: si se
    escribieran por separado, se desalinean al primer cambio de ancho. */
 const COLUMNAS_COSTO = "grid grid-cols-[minmax(0,1fr)_96px_96px_96px] gap-x-3 items-baseline";
+
+/* El cuerpo del diálogo de "pasar costos al catálogo". Es un componente y no
+   JSX suelto porque la casilla "Atar al dólar" cambia las cifras al tildarla:
+   atado, el costo sale de los dólares al dólar del catálogo. La casilla le
+   avisa a App por `onAtar`, que es lo que lee `aplicarAlCatalogo` al confirmar. */
+function CuerpoDelPase({ lista, uno, dolar, enDolares, atarInicial, onAtar }) {
+  const [atar, setAtar] = useState(atarInicial);
+  const atando = atar && dolar > 0;
+  const yaConCosto = lista.filter((p) => p.actual > 0);
+  const seDesatan = !atando ? lista.filter((p) => p.atado).length : 0;
+  return (
+    <>
+      <span className="block mb-2">
+        El <b>Precio sin Ganancia</b> {uno ? "de esta fila" : `de ${lista.length} perfumes incluidos`} pasa a
+        ser su <b>costo</b> en el catálogo. Cada botón deja la columna que lleva su nombre.
+      </span>
+      <label
+        className={`mb-2 flex items-start gap-2 rounded-[3px] border px-2.5 py-2 text-[12px] ${dolar > 0 ? "cursor-pointer" : "opacity-60"}`}
+        style={{ borderColor: "var(--linea)", color: "var(--tinta)" }}
+      >
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          disabled={!(dolar > 0)}
+          checked={atando}
+          onChange={(e) => {
+            setAtar(e.target.checked);
+            onAtar(e.target.checked);
+          }}
+        />
+        <span>
+          <b>Atar al dólar</b>
+          {dolar > 0 ? (
+            <>
+              {" "}
+              — el costo se guarda en dólares ({enDolares ? "el s/Gan. USD del pedido" : "estos pesos al dólar del catálogo"}) y en
+              pesos sale del dólar del catálogo (${new Intl.NumberFormat("es-AR").format(dolar)}): si sube el dólar, sube el costo.
+              {enDolares ? "" : " El pedido es en pesos: tildalo si tu proveedor ajusta por dólar."}
+            </>
+          ) : (
+            <> — primero cargá el dólar del catálogo (en el catálogo, al lado de Venta directa).</>
+          )}
+        </span>
+      </label>
+      {/* Las tres cifras en columnas, no una frase con flechas: lo que se
+          compara es una contra otra, y en renglones envueltos no se sabe
+          cuál es de cuál. La lista va entera, con scroll propio — recortada
+          a unos pocos obliga a aceptar a ciegas. */}
+      <span
+        data-scroll
+        className="block max-h-[42vh] overflow-y-auto rounded-[3px] border px-2.5 pb-2"
+        style={{ borderColor: "var(--linea)" }}
+      >
+        {/* El encabezado va adentro de la caja que scrollea: afuera, la barra
+            de scroll le corre las columnas a las filas y dejan de alinear.
+            Sticky para que no se pierda al bajar. */}
+        <span
+          className={`${COLUMNAS_COSTO} k-col sticky top-0 pt-2 pb-1`}
+          style={{ color: "var(--humo)", background: "var(--papel)" }}
+        >
+          <span />
+          <span className="text-right">En el catálogo</span>
+          <span className="text-right">Este pedido</span>
+          <span className="text-right">Promedio</span>
+        </span>
+        {lista.map((p) => {
+          const c = cifrasDelPase(p, atando, dolar);
+          /* El color contesta "¿cambia algo?" de un vistazo: verde si este
+             pedido salió más barato que lo que hay guardado, óxido si salió
+             más caro, gris si es el mismo número. Sin costo previo no hay
+             con qué comparar y queda en tinta. Ámbar no: está reservado
+             para la ganancia. */
+          const dif = p.actual > 0 ? c.nuevo - p.actual : null;
+          const color =
+            dif === null ? "var(--tinta)" : dif === 0 ? "var(--humo)" : dif < 0 ? "var(--verde)" : "var(--oxido)";
+          return (
+            <span
+              key={p.id}
+              className={`${COLUMNAS_COSTO} text-[11.5px] leading-[1.75]`}
+              title={
+                dif === null || dif === 0
+                  ? p.nombre
+                  : `${p.nombre} · ${dif > 0 ? "más caro" : "más barato"} que el catálogo: ${ars(Math.abs(dif))} (${pct(Math.abs(dif) / p.actual, 1)})`
+              }
+            >
+              <span className="truncate" style={{ color: "var(--humo)" }}>
+                {p.nombre}
+                {atando && (
+                  <span className="ml-1 k-num" style={{ color: "var(--humo-claro)" }}>
+                    US$ {c.nuevoUSD.toFixed(2).replace(".", ",")}
+                  </span>
+                )}
+                {!atando && p.atado && (
+                  <span className="ml-1" style={{ color: "var(--oxido)" }}>
+                    (se desata del dólar)
+                  </span>
+                )}
+              </span>
+              <span className="k-num text-right" style={{ color: "var(--humo)" }}>
+                {p.actual > 0 ? ars(p.actual) : "—"}
+              </span>
+              <span className="k-num text-right font-medium" style={{ color }}>
+                {ars(c.nuevo)}
+              </span>
+              <span className="k-num text-right" style={{ color: "var(--humo)" }}>
+                {c.promedio !== null ? ars(c.promedio) : "—"}
+              </span>
+            </span>
+          );
+        })}
+      </span>
+      {yaConCosto.length > 0 && (
+        <span className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5 text-[11px]">
+          <span style={{ color: "var(--verde)" }}>● más barato que el catálogo</span>
+          <span style={{ color: "var(--oxido)" }}>● más caro</span>
+          <span style={{ color: "var(--humo)" }}>● igual</span>
+        </span>
+      )}
+      <span className="block mt-2">
+        {yaConCosto.length > 0 ? (
+          <>
+            {uno ? (
+              <>Ya tenía un costo cargado.</>
+            ) : (
+              <>
+                {yaConCosto.length} {yaConCosto.length === 1 ? "ya tenía" : "ya tenían"} un costo cargado.
+              </>
+            )}{" "}
+            <b>Promediar</b> {uno ? "lo deja" : "los deja"} en la mitad entre ese valor y el de
+            este pedido{atando ? " (en dólares)" : ""}, para cuando compraste el mismo perfume a dos proveedores
+            {uno ? "" : "; a los demás les pone el de este pedido"}.
+          </>
+        ) : (
+          <>
+            {uno ? "No tenía" : "Ninguno tenía"} un costo cargado todavía, así que no hay nada que promediar.
+          </>
+        )}
+        {seDesatan > 0 && (
+          <span className="block mt-1" style={{ color: "var(--oxido)" }}>
+            {seDesatan === 1 ? "Uno estaba atado al dólar y queda" : `${seDesatan} estaban atados al dólar y quedan`} con el
+            costo fijo en pesos.
+          </span>
+        )}
+      </span>
+    </>
+  );
+}
 
 /* Precio sin Ganancia con el atajo para mandarlo al catálogo. El botón aparece
    al pasar el mouse por la fila (`group-hover`) y no ocupa lugar cuando no está:
@@ -846,6 +1006,9 @@ const ALTO_BARRA = 12;
    encadenar estos valores con los de la barra espejo: viven en sistemas de
    coordenadas distintos. */
 const ALTO_GRUPOS = 32;
+// Columnas de la tabla del pedido: 4 + 5 + 2 + 2 de los grupos, más acciones.
+// La usan el estado vacío y el pie; si se agrega una columna, se cambia acá.
+const COLUMNAS_PEDIDO = 14;
 
 function GroupHead({ label, span, accent }) {
   return (
@@ -1049,9 +1212,36 @@ export default function App() {
     });
     return cambio ? conNombre : conPrecio;
   }, [globals, productos, perfumePorId]);
+
+  /* Lo que se VE y se CALCULA, que no es lo que se guarda.
+     · Mercado Libre salió de la mesa (tiene su pestaña): toda fila se cuenta como
+       venta directa (`vendeML: false`). Las fórmulas del Excel no cambian: es el
+       camino que ya seguían los pedidos cerrados, todos sin ML.
+     · Precio Final: una fila sin precio propio (0, y sin margen clavado) toma el
+       precio de venta directa del catálogo, en vivo. Escribirle un precio la deja
+       "a mano"; volver a 0 la devuelve al catálogo.
+     Esto NO entra en lo que se guarda (`productosResueltos`): si entrara, abrir
+     un pedido lo reescribiría cada vez que el catálogo tenga otro precio. Al
+     CERRAR el pedido se escriben (`congelarPrecios`), para que el registro no
+     cambie si después se toca el catálogo. Un cerrado no sigue al catálogo. */
+  const productosVista = useMemo(
+    () =>
+      productosResueltos.map((p) => {
+        const conPrecioPropio = (p.precioFinal || 0) > 0 || p.margenObjetivo != null;
+        const delCatalogo = perfumePorId.get(p.perfumeId)?.precioPublico || 0;
+        if (estadoPedido !== "cerrado" && !conPrecioPropio && delCatalogo > 0)
+          return { ...p, vendeML: false, precioFinal: delCatalogo, origenPrecio: "catalogo" };
+        return {
+          ...p,
+          vendeML: false,
+          origenPrecio: p.precioDelCatalogo ? "catalogo" : conPrecioPropio ? "mano" : null,
+        };
+      }),
+    [productosResueltos, perfumePorId, estadoPedido]
+  );
   const R = useMemo(
-    () => calcular(globals, productosResueltos),
-    [globals, productosResueltos]
+    () => calcular(globals, productosVista),
+    [globals, productosVista]
   );
   const D = useMemo(() => descomponerIngreso(R.filas), [R.filas]);
 
@@ -1113,7 +1303,6 @@ export default function App() {
   const [importError, setImportError] = useState("");
   const [copiado, setCopiado] = useState(false);
   const [errorGuardado, setErrorGuardado] = useState("");
-  const [margenMasivo, setMargenMasivo] = useState(30);
   const [pasadosAlCatalogo, setPasadosAlCatalogo] = useState("");
   const [pasadoEnFila, setPasadoEnFila] = useState("");
   const cerrado = estadoPedido === "cerrado";
@@ -1262,11 +1451,13 @@ export default function App() {
     // Al duplicar se lleva los perfumes, cantidades y costos, pero no los
     // precios: son de ese pedido, no del proveedor.
     const filas = duplicando
-      ? productosResueltos.map((p) => ({
+      ? productosResueltos.map(({ precioDelCatalogo, ...p }) => ({
           ...p,
           id: crypto.randomUUID(),
+          // Sin precio propio: el pedido nuevo sigue al catálogo.
           precioFinal: 0,
           margenObjetivo: null,
+          vendeML: false,
         }))
       : [];
     const creado = await crearPedido({ nombre, globals, productos: filas });
@@ -1302,15 +1493,42 @@ export default function App() {
   const cambiarEstadoPedido = (nuevo) => {
     forzarGuardado.current = true; // es la única escritura que un cerrado acepta
     yaGuarda.current = true;
+    // En el mismo movimiento que el estado, así viajan juntos en la escritura.
+    if (nuevo === "cerrado") congelarPrecios();
+    else soltarPreciosCongelados();
     setEstadoPedido(nuevo);
   };
+
+  /* Al cerrar, las filas que seguían al catálogo se quedan con el precio de ese
+     momento, marcadas `precioDelCatalogo`: el pedido cerrado es un registro y no
+     puede cambiar porque después se toque el catálogo. Todas quedan sin ML. */
+  const congelarPrecios = () =>
+    setProductos((ps) =>
+      ps.map((p) => {
+        const conPrecioPropio = (p.precioFinal || 0) > 0 || p.margenObjetivo != null;
+        const delCatalogo = perfumePorId.get(p.perfumeId)?.precioPublico || 0;
+        if (!conPrecioPropio && delCatalogo > 0) return { ...p, vendeML: false, precioFinal: delCatalogo, precioDelCatalogo: true };
+        return p.vendeML ? { ...p, vendeML: false } : p;
+      })
+    );
+
+  // Al reabrir, esas filas vuelven a seguir al catálogo; las puestas a mano quedan.
+  const soltarPreciosCongelados = () =>
+    setProductos((ps) =>
+      ps.map((p) => {
+        if (!p.precioDelCatalogo) return p;
+        const { precioDelCatalogo, ...resto } = p;
+        return { ...resto, precioFinal: 0 };
+      })
+    );
 
   const cerrarPedido = () =>
     setDialogo({
       titulo: `¿Cerrar "${nombrePedido}"?`,
       texto:
-        "Queda congelado: no vas a poder cambiar celdas, agregar o borrar filas, aplicar margen, " +
-        "renombrarlo ni borrarlo hasta que lo reabras. Podés seguir exportando, sacando el PDF del " +
+        "Queda congelado: no vas a poder cambiar celdas, agregar o borrar filas, " +
+        "renombrarlo ni borrarlo hasta que lo reabras. Los precios que hoy salen del catálogo quedan " +
+        "fijos en el pedido, aunque después cambies el catálogo. Podés seguir exportando, sacando el PDF del " +
         "proveedor y pasando los costos al catálogo.",
       etiquetaOk: "Cerrar pedido",
       onAceptar: () => cambiarEstadoPedido("cerrado"),
@@ -1320,7 +1538,8 @@ export default function App() {
     setDialogo({
       titulo: `¿Reabrir "${nombrePedido}"?`,
       texto:
-        "Vuelve a ser editable y sus números pueden cambiar. Si era un pedido terminado, " +
+        "Vuelve a ser editable y sus números pueden cambiar: los precios que se habían tomado del catálogo " +
+        "vuelven a seguirlo. Si era un pedido terminado, " +
         "conviene reabrirlo solo para corregir algo puntual y volver a cerrarlo.",
       etiquetaOk: "Reabrir",
       onAceptar: () => cambiarEstadoPedido("abierto"),
@@ -1448,7 +1667,29 @@ export default function App() {
           : g.precioUsdt,
     }));
   const setP = (id, k, v) =>
-    setProductos((ps) => ps.map((p) => (p.id === id ? { ...p, [k]: v } : p)));
+    setProductos((ps) =>
+      ps.map((p) => {
+        if (p.id !== id) return p;
+        // Un precio escrito a mano ya no es "el del catálogo congelado".
+        if (k === "precioFinal" && p.precioDelCatalogo) {
+          const { precioDelCatalogo, ...resto } = p;
+          return { ...resto, precioFinal: v };
+        }
+        return { ...p, [k]: v };
+      })
+    );
+  // Escribir un precio deja la fila a mano (y suelta un margen clavado de antes).
+  const ponerPrecio = (id, v) =>
+    setProductos((ps) =>
+      ps.map((p) => {
+        if (p.id !== id) return p;
+        const { precioDelCatalogo, ...resto } = p;
+        return { ...resto, precioFinal: v, margenObjetivo: null };
+      })
+    );
+  // Volver al precio del catálogo: sin precio propio ni margen clavado.
+  const volverAlCatalogo = (id) =>
+    setProductos((ps) => ps.map((p) => (p.id === id ? { ...p, precioFinal: 0, margenObjetivo: null } : p)));
   const addP = () => setProductos((ps) => [...ps, nuevoProducto()]);
   const dupP = (id) =>
     setProductos((ps) => {
@@ -1573,9 +1814,20 @@ export default function App() {
       ps.map((p) => {
         if (p.id !== id) return p;
         const conCampos = { ...p, ...campos };
-        return costo === undefined ? conCampos : registrarCosto(conCampos, costo);
+        // Un atado al dólar sigue atado: su costo en USD se mueve con el de pesos.
+        return costo === undefined ? conCampos : conCostoEnPesos(conCampos, costo, ajustes.dolar?.valor);
       })
     );
+
+  /* Dólar del catálogo: el nuevo valor y, en el mismo movimiento, el costo de
+     los atados (con su historial). Los precios clavados se mueven solos porque
+     cuelgan del costo. */
+  const cambiarDolar = (valor, casa) => {
+    setAjustes((a) => ({ ...a, dolar: { valor, casa, fecha: new Date().toISOString() } }));
+    setPerfumes((ps) => aplicarDolar(ps, valor));
+  };
+  const atarPerfume = (id) => setPerfumes((ps) => ps.map((p) => (p.id === id ? atarAlDolar(p, ajustes.dolar?.valor) : p)));
+  const desatarPerfume = (id) => setPerfumes((ps) => ps.map((p) => (p.id === id ? desatar(p) : p)));
 
   const borrarPerfume = (perfume) => {
     const u = usosPorPerfume[perfume.id] ?? { total: 0, enPantalla: 0, enOtros: 0, pedidos: [] };
@@ -1689,41 +1941,35 @@ export default function App() {
       )
     );
 
-  // Soltar el margen deja el precio donde había quedado. El precio resuelto
-  // vive en la lista derivada, no en el estado, así que hay que devolvérselo en
-  // el mismo movimiento: si no, la fila vuelve al precio viejo (normalmente 0).
-  const soltarMargen = (id, precioResuelto) =>
-    setProductos((ps) =>
-      ps.map((p) =>
-        p.id === id ? { ...p, margenObjetivo: null, precioFinal: precioResuelto } : p
-      )
-    );
-
-  // Clava al mismo margen las filas incluidas, salteando las que ya tienen un
-  // precio puesto a mano: ese precio es una decisión tomada y pisarla en silencio
-  // sería destructivo. Las que ya estaban clavadas sí se recalculan, así que
-  // volver a aplicar con otro margen funciona como uno espera.
-  const conPrecioPropio = (p) => p.margenObjetivo == null && (p.precioFinal || 0) > 0;
-  const alcanzadasPorMasivo = productos.filter((p) => p.incluir && !conPrecioPropio(p));
-  const clavarIncluidas = () =>
-    setProductos((ps) =>
-      ps.map((p) =>
-        p.incluir && !conPrecioPropio(p) ? { ...p, margenObjetivo: margenMasivo / 100 } : p
-      )
-    );
-
+  const dolarCatalogo = Number(ajustes.dolar?.valor) || 0;
   const paraElCatalogo = useMemo(
-    () => costosParaElCatalogo(R.filas.filter((f) => f.incluir), perfumePorId),
-    [R.filas, perfumePorId]
+    () => costosParaElCatalogo(R.filas.filter((f) => f.incluir), perfumePorId, globals.monedaPedido, dolarCatalogo),
+    [R.filas, perfumePorId, globals.monedaPedido, dolarCatalogo]
   );
+  // La casilla del diálogo; la lee `aplicarAlCatalogo` al confirmar.
+  const atarAlPasar = useRef(false);
 
   /* Tanto el botón de la banda (todas las incluidas) como el de cada fila pasan
-     por acá: la lista es el parámetro, y el diálogo es el mismo. */
+     por acá: la lista es el parámetro, y el diálogo es el mismo. Atado al dólar,
+     el costo sale de sus dólares; sin atar, en pesos como siempre (y si estaba
+     atado, se desata: el costo nuevo es en pesos fijos). */
   const aplicarAlCatalogo = (lista, promediando) => {
+    const atar = atarAlPasar.current && dolarCatalogo > 0;
     const nuevos = new Map(
-      lista.map((p) => [p.id, promediando && p.actual > 0 ? promediado(p) : p.nuevo])
+      lista.map((p) => {
+        const c = cifrasDelPase(p, atar, dolarCatalogo);
+        const usarPromedio = promediando && c.promedio !== null;
+        return [p.id, { costo: usarPromedio ? c.promedio : c.nuevo, usd: atar ? (usarPromedio ? c.promedioUSD : c.nuevoUSD) : null }];
+      })
     );
-    setPerfumes((ps) => ps.map((p) => (nuevos.has(p.id) ? registrarCosto(p, nuevos.get(p.id)) : p)));
+    setPerfumes((ps) =>
+      ps.map((p) => {
+        if (!nuevos.has(p.id)) return p;
+        const { costo, usd } = nuevos.get(p.id);
+        const conCosto = registrarCosto(p, costo);
+        return usd ? { ...conCosto, costoUSD: usd } : desatar(conCosto);
+      })
+    );
     if (nuevos.size === 1) {
       // El aviso va donde estaba el ojo: en la propia fila, no en la banda.
       setPasadoEnFila(lista[0].id);
@@ -1739,101 +1985,21 @@ export default function App() {
   const pasarAlCatalogo = (lista = paraElCatalogo) => {
     const yaConCosto = lista.filter((p) => p.actual > 0);
     const uno = lista.length === 1;
+    // La casilla arranca tildada en pedidos en dólares y destildada en pesos.
+    const atarInicial = globals.monedaPedido === "USD" && dolarCatalogo > 0;
+    atarAlPasar.current = atarInicial;
     setDialogo({
       titulo: uno ? `Pasar el costo de ${lista[0].nombre}` : "Pasar los costos al catálogo",
       ancho: uno ? "max-w-lg" : "max-w-2xl",
       texto: (
-        <>
-          <span className="block mb-2">
-            El <b>Precio sin Ganancia</b> {uno ? "de esta fila" : `de ${lista.length} perfumes incluidos`} pasa a
-            ser su <b>costo</b> en el catálogo. Cada botón deja la columna que lleva su nombre.
-          </span>
-          {/* Las tres cifras en columnas, no una frase con flechas: lo que se
-              compara es una contra otra, y en renglones envueltos no se sabe
-              cuál es de cuál. La lista va entera, con scroll propio — recortada
-              a unos pocos obliga a aceptar a ciegas. */}
-          <span
-            data-scroll
-            className="block max-h-[42vh] overflow-y-auto rounded-[3px] border px-2.5 pb-2"
-            style={{ borderColor: "var(--linea)" }}
-          >
-            {/* El encabezado va adentro de la caja que scrollea: afuera, la barra
-                de scroll le corre las columnas a las filas y dejan de alinear.
-                Sticky para que no se pierda al bajar. */}
-            <span
-              className={`${COLUMNAS_COSTO} k-col sticky top-0 pt-2 pb-1`}
-              style={{ color: "var(--humo)", background: "var(--papel)" }}
-            >
-              <span />
-              <span className="text-right">En el catálogo</span>
-              <span className="text-right">Este pedido</span>
-              <span className="text-right">Promedio</span>
-            </span>
-            {lista.map((p) => {
-              /* El color contesta "¿cambia algo?" de un vistazo: verde si este
-                 pedido salió más barato que lo que hay guardado, óxido si salió
-                 más caro, gris si es el mismo número. Sin costo previo no hay
-                 con qué comparar y queda en tinta. Ámbar no: está reservado
-                 para la ganancia. */
-              const dif = p.actual > 0 ? p.nuevo - p.actual : null;
-              const color =
-                dif === null ? "var(--tinta)" : dif === 0 ? "var(--humo)" : dif < 0 ? "var(--verde)" : "var(--oxido)";
-              return (
-                <span
-                  key={p.id}
-                  className={`${COLUMNAS_COSTO} text-[11.5px] leading-[1.75]`}
-                  title={
-                    dif === null || dif === 0
-                      ? p.nombre
-                      : `${p.nombre} · ${dif > 0 ? "más caro" : "más barato"} que el catálogo: ${ars(Math.abs(dif))} (${pct(Math.abs(dif) / p.actual, 1)})`
-                  }
-                >
-                  <span className="truncate" style={{ color: "var(--humo)" }}>
-                    {p.nombre}
-                  </span>
-                  <span className="k-num text-right" style={{ color: "var(--humo)" }}>
-                    {p.actual > 0 ? ars(p.actual) : "—"}
-                  </span>
-                  <span className="k-num text-right font-medium" style={{ color }}>
-                    {ars(p.nuevo)}
-                  </span>
-                  <span className="k-num text-right" style={{ color: "var(--humo)" }}>
-                    {p.actual > 0 ? ars(promediado(p)) : "—"}
-                  </span>
-                </span>
-              );
-            })}
-          </span>
-          {yaConCosto.length > 0 && (
-            <span className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5 text-[11px]">
-              <span style={{ color: "var(--verde)" }}>● más barato que el catálogo</span>
-              <span style={{ color: "var(--oxido)" }}>● más caro</span>
-              <span style={{ color: "var(--humo)" }}>● igual</span>
-            </span>
-          )}
-          <span className="block mt-2">
-            {yaConCosto.length > 0 ? (
-              <>
-                {uno ? (
-                  <>Ya tenía un costo cargado.</>
-                ) : (
-                  <>
-                    {yaConCosto.length}{" "}
-                    {yaConCosto.length === 1 ? "ya tenía" : "ya tenían"} un costo cargado.
-                  </>
-                )}{" "}
-                <b>Promediar</b> {uno ? "lo deja" : "los deja"} en la mitad entre ese valor y el de
-                este pedido, para cuando compraste el mismo perfume a dos proveedores
-                {uno ? "" : "; a los demás les pone el de este pedido"}.
-              </>
-            ) : (
-              <>
-                {uno ? "No tenía" : "Ninguno tenía"} un costo cargado todavía, así que no hay nada
-                que promediar.
-              </>
-            )}
-          </span>
-        </>
+        <CuerpoDelPase
+          lista={lista}
+          uno={uno}
+          dolar={dolarCatalogo}
+          enDolares={globals.monedaPedido === "USD"}
+          atarInicial={atarInicial}
+          onAtar={(v) => (atarAlPasar.current = v)}
+        />
       ),
       etiquetaOk: "Reemplazar",
       onAceptar: () => aplicarAlCatalogo(lista, false),
@@ -1979,7 +2145,7 @@ export default function App() {
         <div className="mx-auto max-w-[1400px] px-6 pt-4">
           <div className="rounded-lg border border-[#E4E1DA] bg-white p-4 text-[13px] leading-relaxed text-[#4A463E]">
             <p className="mb-1"><b>Celdas blancas</b> = las editás vos. <b>Celdas grises</b> = se calculan solas.</p>
-            <p className="mb-1"><b>Precio en la mano (Ganancia Bruta):</b> lo que te queda tras las comisiones de venta. <b>Ganancia Neta:</b> lo que ganás de verdad, ya descontado tu costo.</p>
+            <p className="mb-1"><b>Precio Final:</b> sale del precio de venta directa del catálogo; si escribís otro, esa fila queda a mano (la flecha la devuelve al del catálogo). <b>Ganancia:</b> lo que ganás de verdad por frasco, ya descontado tu costo con su parte de los costos extras. Mercado Libre y Tiendanube tienen sus pestañas.</p>
             <p className="mb-1"><b>Costos Extras</b> (envío del correo + comisión de red) se reparten entre los productos según su costo en dólares, con el <b>Factor de Gasto</b>. Solo las filas con <b>Incluir</b> tildado suman a los totales de arriba.</p>
             <p><b>PDF proveedor:</b> descarga un catálogo con la foto, el nombre y la cantidad de cada perfume — sin precios ni márgenes. Incluye únicamente las filas con <b>Incluir</b> en <b>SÍ</b>.</p>
           </div>
@@ -2002,6 +2168,9 @@ export default function App() {
           onCrear={crearPerfume}
           onBorrar={borrarPerfume}
           onFoto={ponerFoto}
+          onCambiarDolar={cambiarDolar}
+          onAtar={atarPerfume}
+          onDesatar={desatarPerfume}
         />
       )}
 
@@ -2148,13 +2317,6 @@ export default function App() {
               <Field label="Envío correo" hint="fijo del pedido">
                 <NumberCell value={globals.envioCorreo} onChange={setG("envioCorreo")} suffix="ARS" />
               </Field>
-              <Field label="Comisión ML">
-                <NumberCell
-                  value={+(globals.comisionML * 100).toFixed(2)}
-                  onChange={(v) => setG("comisionML")(v / 100)}
-                  suffix="%"
-                />
-              </Field>
             </div>
           </div>
           <div>
@@ -2205,26 +2367,6 @@ export default function App() {
           </span>
         </h2>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <div className="w-[74px]">
-              <NumberCell value={margenMasivo} onChange={setMargenMasivo} suffix="%" />
-            </div>
-            <button
-              onClick={clavarIncluidas}
-              disabled={cerrado || alcanzadasPorMasivo.length === 0}
-              title={
-                cerrado
-                  ? "El pedido está cerrado: reabrilo para esto"
-                  : alcanzadasPorMasivo.length === 0
-                  ? "Todas las filas incluidas ya tienen un precio puesto a mano"
-                  : `Calcula el precio de ${alcanzadasPorMasivo.length} fila(s) incluida(s) para ese margen. No toca las que ya tienen un precio puesto a mano.`
-              }
-              className="k-col rounded-[3px] border px-3 py-[7px] transition disabled:cursor-not-allowed disabled:opacity-40"
-              style={{ borderColor: "var(--ambar)", color: "var(--ambar)" }}
-            >
-              Aplicar margen
-            </button>
-          </div>
           <button
             onClick={() => pasarAlCatalogo()}
             disabled={paraElCatalogo.length === 0}
@@ -2273,8 +2415,8 @@ export default function App() {
                     arriba: costo, lo que se lleva ML, y en ámbar lo que queda. */}
                 <GroupHead label="Producto" span={4} accent="var(--tinta)" />
                 <GroupHead label="Costo" span={5} accent="#4A4F45" />
-                <GroupHead label="Venta · Mercado Libre" span={7} accent="#5A5F55" />
-                <GroupHead label="Resultado" span={4} accent={AMBER} />
+                <GroupHead label="Venta directa" span={2} accent="#5A5F55" />
+                <GroupHead label="Resultado" span={2} accent={AMBER} />
                 <th className="sticky top-0 z-20" style={{ background: "var(--tinta)" }} />
               </tr>
               <tr>
@@ -2287,17 +2429,10 @@ export default function App() {
                 <ColHead w={100}>Costos Extra</ColHead>
                 <ColHead w={120}>Precio s/Ganancia</ColHead>
                 <ColHead w={90}>s/Gan. {monedaCosto}</ColHead>
-                <ColHead w={70}>Vende ML</ColHead>
-                <ColHead w={100}>Comisión ML</ColHead>
-                <ColHead w={80}>Otras %</ColHead>
-                <ColHead w={120}>Envío ML</ColHead>
-                <ColHead w={110}>Costo Venta ML</ColHead>
-                <ColHead w={120}>Precio Final</ColHead>
+                <ColHead w={130}>Precio Final</ColHead>
                 <ColHead w={90}>Margen</ColHead>
-                <ColHead w={110}>Gan. Bruta</ColHead>
-                <ColHead w={120}>Gan. Bruta Tot.</ColHead>
-                <ColHead w={110}>Gan. Neta</ColHead>
-                <ColHead w={120}>Gan. Neta Tot.</ColHead>
+                <ColHead w={120}>Ganancia</ColHead>
+                <ColHead w={130}>Ganancia total</ColHead>
                 <ColHead w={70}></ColHead>
               </tr>
             </thead>
@@ -2351,30 +2486,16 @@ export default function App() {
                   <td className="px-2 py-1.5 border-b border-[#EFEDE7]">
                     <CostoConPase
                       valor={f.precioSinGanPesos}
-                      candidato={costosParaElCatalogo([f], perfumePorId)[0]}
+                      candidato={costosParaElCatalogo([f], perfumePorId, globals.monedaPedido, dolarCatalogo)[0]}
                       recienPasado={pasadoEnFila === f.perfumeId}
                       onPasar={pasarAlCatalogo}
                     />
                   </td>
                   <td className="px-2 py-1.5 border-b border-[#EFEDE7]"><CalcCell>{montoCosto(f.precioSinGanUsdt)}</CalcCell></td>
-                  {/* Venta ML */}
-                  <td className="px-2 py-1.5 border-b border-[#EFEDE7]"><CheckCell value={f.vendeML} onChange={(v) => setP(f.id, "vendeML", v)} /></td>
-                  <td className="px-2 py-1.5 border-b border-[#EFEDE7]"><CalcCell>{f.vendeML ? ars(f.comisionMLval) : "—"}</CalcCell></td>
-                  <td className="px-2 py-1.5 border-b border-[#EFEDE7]">
-                    <NumberCell value={+(f.otrasComis * 100).toFixed(2)} onChange={(v) => setP(f.id, "otrasComis", v / 100)} suffix="%" />
-                  </td>
-                  <td className="px-2 py-1.5 border-b border-[#EFEDE7]">
-                    <NumberCell value={f.envioML} onChange={(v) => setP(f.id, "envioML", v)} suffix="ARS" />
-                  </td>
-                  <td className="px-2 py-1.5 border-b border-[#EFEDE7]"><CalcCell>{f.vendeML ? ars(f.costoVentaML) : "—"}</CalcCell></td>
-                  <ParPrecioMargen fila={f} setP={setP} onSoltar={soltarMargen} />
-                  {/* Resultado */}
-                  <td className="px-2 py-1.5 border-b border-[#EFEDE7]">
-                    <CalcCell tone={f.gananciaBruta >= 0 ? "pos" : "neg"} strong>{ars(f.gananciaBruta)}</CalcCell>
-                  </td>
-                  <td className="px-2 py-1.5 border-b border-[#EFEDE7]">
-                    <CalcCell tone={f.gananciaBrutaTotal >= 0 ? "pos" : "neg"}>{ars(f.gananciaBrutaTotal)}</CalcCell>
-                  </td>
+                  {/* Venta directa: el precio del catálogo, o el que escribas */}
+                  <ParPrecioMargen fila={f} onPrecio={ponerPrecio} onVolverAlCatalogo={volverAlCatalogo} />
+                  {/* Resultado: sin ML, la ganancia bruta es el mismo Precio
+                      Final, así que quedan solo las netas. */}
                   <td className="px-2 py-1.5 border-b border-[#EFEDE7]">
                     <CalcCell tone={f.gananciaNeta >= 0 ? "pos" : "neg"} strong>{ars(f.gananciaNeta)}</CalcCell>
                   </td>
@@ -2406,7 +2527,7 @@ export default function App() {
               ))}
               {R.filas.length === 0 && (
                 <tr>
-                  <td colSpan={21} className="px-6 py-12 text-center text-[#A39E93] text-[13px]">
+                  <td colSpan={COLUMNAS_PEDIDO} className="px-6 py-12 text-center text-[#A39E93] text-[13px]">
                     No hay perfumes cargados. Tocá <b>Agregar perfume</b> para empezar.
                   </td>
                 </tr>
@@ -2414,7 +2535,7 @@ export default function App() {
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={21} className="border-t border-[#E4E1DA] bg-[#FBFAF7] px-3 py-2">
+                <td colSpan={COLUMNAS_PEDIDO} className="border-t border-[#E4E1DA] bg-[#FBFAF7] px-3 py-2">
                   <button
                     onClick={addP}
                     disabled={cerrado}
@@ -2429,8 +2550,8 @@ export default function App() {
         </div>
         <p className="mt-3 text-[11.5px] text-[#A39E93]">
           <IndicadorGuardado modo={modoGuardado} ruta={rutaArchivo} guardando={guardando} />{" "}
-          El "Precio Final" es lo que ponés a la venta;
-          mirá la columna <b>Gan. Bruta</b> para saber qué te queda en la mano y el <b>Margen</b> para decidir el precio.
+          El "Precio Final" es el de venta directa del catálogo (o el que escribas en la fila);
+          el <b>Margen</b> dice cuánto te deja este pedido, con lo que le pagaste a este proveedor, a ese precio.
         </p>
       </section>
         </ContextoBloqueo.Provider>
@@ -2473,8 +2594,8 @@ function BarraDelPedido({ d }) {
   if (!d.cotizadas) {
     return (
       <p className="text-[13px]" style={{ color: "var(--humo-claro)" }}>
-        Ninguno de los {d.incluidas} perfumes incluidos tiene Precio Final todavía. Poné el precio
-        de venta de alguno y acá vas a ver cuánto te queda.
+        Ninguno de los {d.incluidas} perfumes incluidos tiene precio todavía. Cargá su precio de venta
+        directa en el catálogo (o escribilo en la fila) y acá vas a ver cuánto te queda.
       </p>
     );
   }
@@ -2523,8 +2644,8 @@ function BarraDelPedido({ d }) {
 
       {d.sinPrecio > 0 && (
         <p className="mt-3 text-[11.5px]" style={{ color: "#8E938A" }}>
-          Calculado sobre {d.cotizadas} de los {d.incluidas} perfumes incluidos: a los otros{" "}
-          {d.sinPrecio} todavía no les pusiste Precio Final.
+          Calculado sobre {d.cotizadas} de los {d.incluidas} perfumes incluidos: los otros{" "}
+          {d.sinPrecio} no tienen precio de venta directa en el catálogo ni uno puesto a mano.
         </p>
       )}
 

@@ -326,6 +326,23 @@ export default function pluginDatos() {
       }
     });
 
+    /* --- Cotización del dólar ---
+       Solo lectura, desde dolarapi.com (pública). La usa el catálogo para
+       PROPONER el dólar del catálogo: nunca se aplica sola. */
+    server.middlewares.use("/api/dolar", async (req, res) => {
+      try {
+        if (req.method !== "GET") return responder(res, { error: "Método no permitido" }, 405);
+        const casa = new URL(req.url, "http://x").searchParams.get("casa") || "cripto";
+        if (!/^[a-z]+$/.test(casa)) return responder(res, { error: "Casa inválida" }, 400);
+        const r = await fetch(`https://dolarapi.com/v1/dolares/${casa}`);
+        if (!r.ok) return responder(res, { error: `dolarapi respondió ${r.status}` }, 502);
+        const d = await r.json();
+        responder(res, { casa: d.casa, nombre: d.nombre, compra: d.compra, venta: d.venta, fecha: d.fechaActualizacion });
+      } catch (e) {
+        responder(res, { error: `No se pudo traer la cotización (${e?.message ?? e})` }, 502);
+      }
+    });
+
     server.middlewares.use("/api/perfumes", async (req, res) => {
       try {
         await migrar();

@@ -243,6 +243,36 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   antes de que lo veas.
 - El candado es de pantalla: **"pasar costos al catálogo" escribe igual**, porque
   es una acción explícita y con su propio diálogo. Verificado.
+- **Costo atado al dólar** (pedido de Franco: si sube el dólar, el costo en pesos
+  quedaba viejo y la ganancia no alcanzaba al reponer). `ajustes.dolar = {valor,
+  casa, fecha}` es el **dólar del catálogo**; un perfume con `costoUSD` está
+  atado y su `costo = round(costoUSD × dólar)`. Puras en `src/dolar.js`
+  (probadas desde Node). El `costo` en pesos se sigue guardando y es lo que usa
+  todo lo demás; **cada movimiento pasa por `registrarCosto()`** (historial).
+  - El dólar se cambia en la caja "Dólar del catálogo" con **"Aplicar"**, que
+    confirma con `Dialogo` si hay atados (cuántos cambian y en qué %).
+    `cambiarDolar` en `App.jsx` guarda el dólar y corre `aplicarDolar()` en el
+    mismo movimiento; los clavados de los tres canales se reprecian solos
+    porque cuelgan del costo, los de precio a mano no. **No va con
+    `CampoProtegido`**: ese escribe en cada tecla y cada tecla repreciaría todo.
+  - "Traer cotización" pide `GET /api/dolar?casa=` (en `vite-plugin-datos.js`,
+    desde dolarapi.com, pública) y deja la venta en el campo: nunca se aplica
+    sola. Casa por defecto `cripto` (lo más parecido a pagar en USDT).
+  - Se ata y desata **uno por uno** (botón al pasar el mouse en la celda Costo,
+    "US$ X" debajo). Atar toma el costo de hoy como el de este dólar
+    (`atarAlDolar`); editar el costo en pesos de un atado mueve su `costoUSD`
+    (`conCostoEnPesos`).
+  - **Pasar costos al catálogo** tiene la casilla "Atar al dólar": tildada si el
+    pedido es en dólares (guarda el s/Gan. USD de la fila, ponderado por
+    unidad), destildada si es en pesos (tildada, convierte con el dólar del
+    catálogo). Destildada, un perfume que estaba atado se desata. Promediar
+    atado promedia en dólares (`cifrasDelPase`). El cuerpo del diálogo es un
+    componente (`CuerpoDelPase`) porque la casilla cambia las cifras; avisa a
+    App por un ref (`atarAlPasar`) que lee `aplicarAlCatalogo`.
+  - Abrir la app no escribe: el dólar arranca vacío y nada está atado hasta
+    que Franco lo decide. Probado en la copia: subir de $1.600 a $1.645,32
+    (cripto real) movió el costo del Yara +2,8%, su precio clavado y el de
+    Tiendanube; el Turathi (precio directo a mano) no cambió de precio.
 - **Precio y Margen de la venta directa son un par**, igual que en los pedidos:
   escribís el precio y el margen sale solo, o clavás el margen (`margenObjetivo`,
   fracción o `null`) y el precio se despeja. Con el margen clavado el precio pasa
@@ -942,8 +972,9 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   `k/precioSinGanancia`, así que con costos base muy chicos redondear a peso
   entero desviaba el margen hasta 2 pp (pedías 30% y veías 32%). Cuando el
   desvío superaría 0,05 pp se guardan centavos.
-- El botón masivo **no pisa las filas con precio puesto a mano** (`margenObjetivo
-  == null && precioFinal > 0`); sí recalcula las ya clavadas.
+- En la mesa ya no se clava margen ni hay botón masivo (ver "Al tocar la
+  tabla"): `resolverPrecios()` sigue resolviendo las filas clavadas de antes,
+  que cuentan como precio a mano.
 - El **Factor de Gasto** se muestra como porcentaje (`costosExtras /
   inversionPesos`) con el valor crudo debajo en chico. El crudo (ARS por unidad
   de costo) es ilegible en pedidos en pesos, donde da "$ 0,01"; el porcentaje se
@@ -978,13 +1009,37 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   Tailwind real las arbitrarias funcionan, pero el `CheckCell` usa inline por historia.
 
 ## Al tocar la tabla
-- Tiene 21 columnas, en este orden: **Incluir**, Producto, Foto, Cantidad, y
-  después los grupos. **Margen va pegado a Precio Final** (dentro del grupo
-  "Venta · Mercado Libre", no en "Resultado"): son un par que se maneja junto y
-  el componente `ParPrecioMargen` renderiza las dos celdas. Si agregás o sacás
-  una columna hay que actualizar, además del `<ColHead>` y el `<td>`: los
-  `colSpan` de `<GroupHead>` (4 + 5 + 7 + 4 + 1),
-  el `colSpan={21}` del estado vacío y el del `<tfoot>`.
+- Tiene **14 columnas**: Producto (Incluir, Producto, Foto, Cantidad), Costo (5),
+  **Venta directa** (Precio Final, Margen), Resultado (Ganancia, Ganancia total)
+  y acciones. `ParPrecioMargen` renderiza el par de Venta directa. Si agregás o
+  sacás una columna hay que actualizar, además del `<ColHead>` y el `<td>`, los
+  `span` de `<GroupHead>` (4 + 5 + 2 + 2) y `COLUMNAS_PEDIDO` (el `colSpan` del
+  estado vacío y del pie).
+- **Mercado Libre salió de la mesa** (pedido de Franco: tiene su pestaña). Se
+  fueron Vende ML, Comisión ML, Otras %, Envío ML, Costo Venta ML, el campo
+  global "Comisión ML" y, como sin ML la ganancia bruta es el mismo Precio
+  Final, también Gan. Bruta y Gan. Bruta Tot. **`calcular()` no cambió**: la
+  lista que entra al motor (`productosVista`) trae `vendeML: false` en todas las
+  filas, el camino que ya seguían los pedidos cerrados (todos estaban sin ML al
+  hacer esto, así que ningún número cambió). Los campos `vendeML`, `envioML`,
+  `otrasComis` y `comisionML` siguen en los datos, sin usarse.
+- **Precio Final sale del catálogo** (venta directa, `precioPublico`), en vivo:
+  una fila sin precio propio (`precioFinal` 0 y sin `margenObjetivo`) toma el
+  del catálogo y dice "del catálogo"; escribir un precio la deja "a mano" (con
+  una flecha para volver: `volverAlCatalogo` la pone en 0). El Margen es solo
+  lectura: lo que deja ESTE pedido, con su costo, a ese precio.
+  - **Eso vive en `productosVista`, no en lo que se guarda** (`productosResueltos`):
+    si entrara, abrir un pedido lo reescribiría cada vez que el catálogo tenga
+    otro precio. Verificado en la copia: abrir Fraganti no cambió su md5.
+  - **Al cerrar**, `congelarPrecios()` escribe en las filas el precio del
+    catálogo de ese momento, marcado `precioDelCatalogo: true`, y apaga ML: el
+    cerrado es un registro y no sigue al catálogo. **Al reabrir**,
+    `soltarPreciosCongelados()` devuelve esas filas a 0 (vuelven a seguirlo); las
+    puestas a mano quedan. Las dos van en el mismo movimiento que el estado.
+  - Ya **no se clava margen** en la mesa ni existe "Aplicar margen" (el margen se
+    fija en el catálogo, donde vive el precio). Una fila clavada de antes cuenta
+    como "a mano"; escribirle un precio suelta el margen.
+  - Duplicar deja las filas en 0: el pedido nuevo sigue al catálogo.
 - El encabezado es sticky en dos niveles: `GroupHead` en `top: 0` y `ColHead`
   pegado a `ALTO_GRUPOS`. Esa constante **impone** el alto de la fila de grupos
   (`height`) y a la vez es el offset del `ColHead`, así que no pueden

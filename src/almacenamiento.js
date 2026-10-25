@@ -88,6 +88,15 @@ export async function leerUsos() {
   }
 }
 
+/* La cotización del día para proponer el dólar del catálogo (dolarapi.com, por
+   el server). -> { casa, nombre, compra, venta, fecha }. Solo lectura. */
+export async function leerCotizacion(casa = "cripto") {
+  const r = await fetch(`/api/dolar?casa=${encodeURIComponent(casa)}`);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+  return d;
+}
+
 /* ---------- Catálogo de perfumes ----------
    El nombre y la foto de cada perfume viven una sola vez acá; las filas de los
    pedidos apuntan por id. Las fotos son archivos servidos desde /datos/fotos/,

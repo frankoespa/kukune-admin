@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Plus, Trash2, ImagePlus, Search, X, FileDown } from "lucide-react";
-import { urlFoto } from "./almacenamiento";
+import { leerCotizacion, urlFoto } from "./almacenamiento";
 import { analisisDePrecio } from "./precios";
+import { estaAtado, resumenDeCambio } from "./dolar";
 import { SelectorRedondeo } from "./TiendaNube";
 import { NumberCell } from "./NumberCell";
 import { CampoProtegido } from "./CampoProtegido";
@@ -32,6 +33,126 @@ const COLUMNAS_CATALOGO =
     "72px 32px",
   ].join(" ");
 
+
+const usd2 = (n) => new Intl.NumberFormat("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(n) || 0);
+
+const CASAS = [
+  ["cripto", "Cripto (USDT)"],
+  ["blue", "Blue"],
+  ["bolsa", "MEP"],
+  ["contadoconliqui", "Contado con liqui"],
+  ["oficial", "Oficial"],
+  ["mayorista", "Mayorista"],
+  ["tarjeta", "Tarjeta"],
+];
+const nombreCasa = (casa) => CASAS.find(([c]) => c === casa)?.[1] ?? casa;
+const fechaCorta = (iso) => (iso ? new Date(iso).toLocaleString("es-AR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "");
+
+/* El dólar del catálogo: de él sale el costo en pesos de los perfumes atados.
+   Se cambia escribiéndolo (o trayendo la cotización del día) y tocando
+   "Aplicar", que confirma si hay atados: cambia sus costos y, con ellos, los
+   precios clavados de los tres canales. No va con el candado de doble clic
+   porque ese escribe en cada tecla, y acá cada tecla repreciaría el catálogo. */
+function CajaDolar({ perfumes, dolar, onCambiarDolar, onConfirmar }) {
+  const actual = Number(dolar?.valor) || 0;
+  const [casa, setCasa] = useState(dolar?.casa || "cripto");
+  const [nuevo, setNuevo] = useState(actual || 0);
+  const [cotizacion, setCotizacion] = useState(null);
+  const [error, setError] = useState("");
+  const [trayendo, setTrayendo] = useState(false);
+  const atados = perfumes.filter(estaAtado).length;
+
+  useEffect(() => setNuevo(actual || 0), [actual]);
+
+  const traer = async () => {
+    setTrayendo(true);
+    setError("");
+    try {
+      const c = await leerCotizacion(casa);
+      setCotizacion(c);
+      setNuevo(Number(c.venta) || 0);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setTrayendo(false);
+    }
+  };
+
+  const aplicar = () => {
+    const valor = Number(nuevo) || 0;
+    if (!(valor > 0) || valor === actual) return;
+    const guardar = () => onCambiarDolar(valor, cotizacion?.casa === casa ? casa : dolar?.casa || casa);
+    const r = resumenDeCambio(perfumes, actual, valor);
+    if (!r.atados) return guardar();
+    onConfirmar({
+      titulo: `Dólar del catálogo: ${actual ? `$${usd2(actual)} → ` : ""}$${usd2(valor)}`,
+      texto:
+        `Cambia el costo de ${r.cambian} perfume${r.cambian === 1 ? "" : "s"} atado${r.cambian === 1 ? "" : "s"} al dólar` +
+        (r.variacion != null ? ` (${r.variacion >= 0 ? "+" : ""}${pctCorto(r.variacion, 1)})` : "") +
+        " y, con ellos, el precio de los que tienen el margen clavado en venta directa, Mercado Libre y Tiendanube. " +
+        "Los precios puestos a mano no se tocan. En ML y Tiendanube se mandan después, con \"Actualizar precios\".",
+      etiquetaOk: "Aplicar",
+      onAceptar: guardar,
+    });
+  };
+
+  return (
+    <div className="rounded-[4px] border px-3 py-2.5" style={{ background: "var(--papel)", borderColor: "var(--linea)" }}>
+      <span className="k-col mb-2 block" style={{ color: "var(--tinta)" }}>
+        Dólar del catálogo
+      </span>
+      <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
+        <label className="block">
+          <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
+            {actual ? `Hoy $${usd2(actual)}` : "Sin cargar"}
+          </span>
+          <div className="w-[112px]">
+            <NumberCell value={nuevo} onChange={(v) => setNuevo(Math.max(0, v))} suffix="ARS" />
+          </div>
+        </label>
+        <button
+          type="button"
+          onClick={aplicar}
+          disabled={!(Number(nuevo) > 0) || Number(nuevo) === actual}
+          className="rounded-[3px] px-3 py-[6px] text-[12.5px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+          style={{ background: "var(--tinta)" }}
+        >
+          Aplicar
+        </button>
+        <label className="block">
+          <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
+            Cotización
+          </span>
+          <select value={casa} onChange={(e) => setCasa(e.target.value)} className="rounded-[3px] border px-2 py-[6px] text-[12.5px]" style={{ borderColor: "var(--linea)", background: "var(--papel)", color: "var(--tinta)" }}>
+            {CASAS.map(([c, n]) => (
+              <option key={c} value={c}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          onClick={traer}
+          disabled={trayendo}
+          className="k-col rounded-[3px] border px-2.5 py-[6px] disabled:opacity-40"
+          style={{ borderColor: "var(--linea)", color: "var(--humo)" }}
+        >
+          {trayendo ? "Trayendo…" : "Traer cotización"}
+        </button>
+      </div>
+      <p className="mt-1.5 max-w-[420px] text-[11px]" style={{ color: error ? "var(--oxido)" : "var(--humo)" }}>
+        {error
+          ? error
+          : cotizacion
+            ? `${cotizacion.nombre}: venta $${usd2(cotizacion.venta)} (actualizado ${fechaCorta(cotizacion.fecha)}). Tocá Aplicar para usarlo.`
+            : actual
+              ? `${nombreCasa(dolar?.casa)} · rige desde ${fechaCorta(dolar?.fecha)} · ${atados} perfume${atados === 1 ? "" : "s"} atado${atados === 1 ? "" : "s"} al dólar.`
+              : "Cargalo para poder atar costos al dólar: el costo en pesos de los atados sale de acá."}
+      </p>
+    </div>
+  );
+}
 
 /* Lo que ve una fila de un perfume que no está en ningún pedido. Constante y no
    un literal nuevo por render: si no, cada fila recibe un objeto distinto. */
@@ -153,6 +274,9 @@ export default function Catalogo({
   onConfirmar,
   onExportarPrecios,
   exportando,
+  onCambiarDolar,
+  onAtar,
+  onDesatar,
 }) {
   const [consulta, setConsulta] = useState("");
   const [soloSinFoto, setSoloSinFoto] = useState(false);
@@ -336,6 +460,7 @@ export default function Catalogo({
             Se le suma al precio cuando hay entrega. No toca la ganancia.
           </p>
         </div>
+        <CajaDolar perfumes={perfumes} dolar={ajustes.dolar} onCambiarDolar={onCambiarDolar} onConfirmar={onConfirmar} />
       </div>
 
       {visibles.length === 0 ? (
@@ -373,6 +498,8 @@ export default function Catalogo({
                   onSoltarMargen={onSoltarMargen}
                   onBorrar={onBorrar}
                   onFoto={onFoto}
+                  onAtar={onAtar}
+                  onDesatar={onDesatar}
                 />
               ))}
             </ul>
@@ -436,7 +563,7 @@ function EncabezadoCatalogo({ columnas }) {
 
    El envío de Rosario NO entra en ninguna cuenta: aparece como "con envío", el
    precio que se le cotiza al cliente cuando hay que llevárselo. */
-function Precios({ perfume, ajustes, onCambiar, onSoltarMargen }) {
+function Precios({ perfume, ajustes, onCambiar, onSoltarMargen, onAtar, onDesatar }) {
   // Sin planes: los de ML se miran en su pestaña.
   const r = analisisDePrecio({
     costo: perfume.costo,
@@ -477,6 +604,43 @@ function Precios({ perfume, ajustes, onCambiar, onSoltarMargen }) {
           mostrar={(v) => (v > 0 ? pesos(v) : "—")}
           etiqueta="el costo"
         />
+        {/* Atado al dólar: el costo en pesos sale de su costo en USD por el dólar
+            del catálogo. El botón aparece al pasar el mouse, como los atajos. */}
+        <div className="mt-0.5 flex items-center justify-end gap-1 text-[10.5px]">
+          {estaAtado(perfume) && (
+            <span className="k-num" style={{ color: "var(--humo)" }} title="Costo en dólares: se mueve con el dólar del catálogo">
+              US$ {usd2(perfume.costoUSD)}
+            </span>
+          )}
+          {estaAtado(perfume) ? (
+            <button
+              type="button"
+              onClick={() => onDesatar?.(perfume.id)}
+              className="k-col rounded-[2px] px-1 opacity-0 transition group-hover:opacity-100 focus:opacity-100"
+              style={{ color: "var(--humo)" }}
+              title="Dejar el costo fijo en pesos (deja de seguir al dólar)"
+            >
+              desatar
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onAtar?.(perfume.id)}
+              disabled={!(Number(ajustes.dolar?.valor) > 0) || !(Number(perfume.costo) > 0)}
+              className="k-col rounded-[2px] px-1 opacity-0 transition group-hover:opacity-100 focus:opacity-100 disabled:cursor-not-allowed"
+              style={{ color: "var(--humo)" }}
+              title={
+                !(Number(ajustes.dolar?.valor) > 0)
+                  ? "Primero cargá el dólar del catálogo"
+                  : !(Number(perfume.costo) > 0)
+                    ? "Cargá el costo para poder atarlo"
+                    : `Atar al dólar: el costo de hoy se toma como US$ ${usd2(perfume.costo / ajustes.dolar.valor)} y sube o baja con el dólar`
+              }
+            >
+              $ atar al dólar
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ---- Venta directa: precio y margen son un par ----
@@ -587,6 +751,8 @@ function FilaPerfume({
   onSoltarMargen,
   onBorrar,
   onFoto,
+  onAtar,
+  onDesatar,
 }) {
   const inputRef = useRef(null);
   const [cargando, setCargando] = useState(false);
@@ -668,6 +834,8 @@ function FilaPerfume({
         ajustes={ajustes}
         onCambiar={onCambiar}
         onSoltarMargen={onSoltarMargen}
+        onAtar={onAtar}
+        onDesatar={onDesatar}
       />
 
       {/* Cuenta TODOS los pedidos, no solo el que está en pantalla: es el aviso
