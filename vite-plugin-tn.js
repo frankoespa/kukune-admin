@@ -349,8 +349,24 @@ export default function pluginTN() {
           }
           if (!Object.keys(cambios).length && stock == null) throw new ErrorTN(400, "No hay nada que cambiar");
           let r = null;
-          if (Object.keys(cambios).length)
-            r = await tn(`/products/${producto}/variants/${variante}`, { method: "PUT", body: JSON.stringify(cambios) });
+          if (Object.keys(cambios).length) {
+            const ruta = `/products/${producto}/variants/${variante}`;
+            r = await tn(ruta, { method: "PUT", body: JSON.stringify(cambios) });
+            /* Sacar la promoción: Tiendanube acepta `promotional_price: null` sin
+               error pero puede dejar el promocional viejo, y con el precio normal
+               bajado al mismo valor la tienda muestra "0% OFF" (le pasó a Franco).
+               La doc no dice cómo se borra, así que se mira la respuesta: si
+               quedó, se reintenta con texto vacío, y si sigue, se avisa en vez
+               de dar por bueno algo que no lo es. */
+            if (cambios.promotional_price === null && numero(r?.promotional_price) != null) {
+              r = await tn(ruta, { method: "PUT", body: JSON.stringify({ promotional_price: "" }) });
+              if (numero(r?.promotional_price) != null)
+                throw new ErrorTN(
+                  502,
+                  `Tiendanube no sacó el precio promocional (quedó en $${numero(r.promotional_price)}). Sacalo a mano en el panel de Tiendanube.`
+                );
+            }
+          }
           if (stock != null) r = await cambiarStock(producto, variante, stock);
           return responder(res, { variante: resumirVariante(r) });
         }

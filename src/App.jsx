@@ -1775,37 +1775,64 @@ export default function App() {
     setPerfumes((ps) =>
       ps.map((p) => {
         if (p.id !== id) return p;
-        const { gananciaTN, formaTN, ...resto } = p;
+        const { gananciaTN, formaTN, igualarDirectoTN, ...resto } = p;
         return { ...resto, margenTN: null, precioTN: precioResuelto };
       })
     );
 
   /* Fijar el objetivo de Tiendanube en uno o varios perfumes, en un solo
-     `setPerfumes`: margen (fracción) o ganancia en pesos, uno borra al otro, y
-     la forma de pago contra la que se mide (`formaId` null = la que menos deja;
-     `undefined` = la que ya tenía). Lo usan el popup y "Aplicar a todos". */
-  const fijarObjetivoTN = (ids, { margen, ganancia, formaId }) => {
+     `setPerfumes`: margen (fracción), ganancia en pesos, o igualar lo que paga
+     una forma al precio de venta directa. Los tres se excluyen —fijar uno borra
+     los otros dos— y va la forma de pago contra la que se mide (`formaId` null =
+     la que menos deja; `undefined` = la que ya tenía). Igualar necesita forma sí
+     o sí: sin ella `objetivoTN` no lo lee y el precio quedaría a mano.
+     Lo usan el popup y "Aplicar a todos". */
+  const fijarObjetivoTN = (ids, { margen, ganancia, igualarDirecto, formaId }) => {
     const cuales = new Set(ids);
     setPerfumes((ps) =>
       ps.map((p) => {
         if (!cuales.has(p.id)) return p;
-        const { gananciaTN, formaTN, ...resto } = p;
+        const { gananciaTN, formaTN, igualarDirectoTN, ...resto } = p;
         const forma = formaId === undefined ? formaTN : formaId;
         return {
           ...resto,
-          ...(ganancia != null ? { margenTN: null, gananciaTN: ganancia } : { margenTN: margen }),
+          ...(igualarDirecto
+            ? { margenTN: null, igualarDirectoTN: true }
+            : ganancia != null
+              ? { margenTN: null, gananciaTN: ganancia }
+              : { margenTN: margen }),
           ...(forma != null ? { formaTN: forma } : {}),
         };
       })
     );
   };
 
+  /* Soltar el objetivo de la venta directa (margen o ganancia fija): el precio
+     resuelto va en el mismo movimiento, o el perfume vuelve al precio viejo. */
   const soltarMargenDelCatalogo = (id, precioResuelto) =>
     setPerfumes((ps) =>
-      ps.map((p) =>
-        p.id === id ? { ...p, margenObjetivo: null, precioPublico: precioResuelto } : p
-      )
+      ps.map((p) => {
+        if (p.id !== id) return p;
+        const { gananciaObjetivo, ...resto } = p;
+        return { ...resto, margenObjetivo: null, precioPublico: precioResuelto };
+      })
     );
+
+  /* Fijar el objetivo de la venta directa en uno o varios perfumes, en un solo
+     `setPerfumes`: margen (fracción) o ganancia en pesos, uno borra al otro. Lo
+     usan las celdas del catálogo y "Aplicar a todos". Gemelo de `fijarObjetivoTN`. */
+  const fijarObjetivoDirecto = (ids, { margen, ganancia }) => {
+    const cuales = new Set(ids);
+    setPerfumes((ps) =>
+      ps.map((p) => {
+        if (!cuales.has(p.id)) return p;
+        const { gananciaObjetivo, ...resto } = p;
+        return ganancia != null
+          ? { ...resto, margenObjetivo: null, gananciaObjetivo: ganancia }
+          : { ...resto, margenObjetivo: margen };
+      })
+    );
+  };
 
   /* El costo pasa por `registrarCosto`: deja asentado desde cuándo rige, para
      que las ventas de ML se midan contra el costo de su momento. */
@@ -2165,6 +2192,7 @@ export default function App() {
           exportando={armandoPrecios}
           onCambiar={cambiarPerfume}
           onSoltarMargen={soltarMargenDelCatalogo}
+          onFijarObjetivo={fijarObjetivoDirecto}
           onCrear={crearPerfume}
           onBorrar={borrarPerfume}
           onFoto={ponerFoto}

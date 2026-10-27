@@ -278,6 +278,19 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   fracción o `null`) y el precio se despeja. Con el margen clavado el precio pasa
   a ser calculado y se muestra sin caja; la celda del margen lleva borde ámbar y
   una `X` para soltarlo. Van pegadas en la tabla: son un par que se maneja junto.
+- **También se fija una ganancia en pesos** (`gananciaObjetivo`, pedido de
+  Franco): la celda Ganancia de venta directa es editable igual que el Margen, y
+  escribir en una fija esa y suelta la otra (`fijarObjetivoDirecto` en
+  `App.jsx`, un solo `setPerfumes` para uno o muchos). Precio = `costo +
+  ganancia` (`precioPublicoDesdeGanancia`), así que la ganancia queda fija
+  aunque cambie el costo o el dólar. `objetivoDirecto(p)` en `precios.js` dice
+  cuál manda (la ganancia, si aparecieran las dos). Soltar con la `X` borra las
+  dos y escribe el precio resuelto. Sin la clave = como antes, sin migración.
+- **"Aplicar a todos"** del catálogo: la misma banda que Tiendanube
+  (`src/AplicarATodos.jsx`, compartida; solo Tiendanube le pasa `formas` y
+  muestra "Medido contra"). Fija margen o ganancia en los que se ven con costo
+  (búsqueda y filtro "sin foto" incluidos), pisando los de precio a mano, con
+  confirmación. **Solo venta directa**: ML y Tiendanube no se tocan.
 - El despeje es `precioPublicoDesdeMargen(costo, margen) = costo × (1 + margen)`.
   Acá no hace falta el de los pedidos porque vender directo no tiene comisión ni
   envío a cargo del negocio. El redondeo es el de `redondearPrecio()` (ver abajo).
@@ -494,17 +507,50 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   borrada vuelve sola a "la que menos deja", sin reescribir nada.
   `analisisTiendaNube({formaId})` agrega `manda` / `gananciaManda` /
   `margenManda` (la forma fijada); `define` sigue siendo la que menos deja.
+- **El tercer objetivo: igualar lo que paga una forma a la venta directa**
+  (`igualarDirectoTN`, pedido de Franco). El precio de Tiendanube se publica
+  inflado para absorber la comisión y el envío gratis, así que el que mira la
+  tienda y elige transferencia ve un número **más alto** que el precio directo,
+  pregunta por fuera y compra directo: la tienda queda como la opción cara. Con
+  este objetivo el precio sale de `precioPublico ÷ (1 − descuento de la forma)`
+  (`precioTNParaIgualarPago` en `precios.js`), y se mueve solo cuando se mueve el
+  precio directo.
+  - **La comisión NO entra en el despeje**: no la paga el cliente, sale de lo que
+    llega. Por eso la ganancia baja, y bastante — en los 47 reales, el Yara pasa
+    de dejar $19.296 a $13.847 (directo deja $25.094). Eso es lo que se está
+    decidiendo, así que el popup lo dice al lado: "Te quedan X · vendiendo
+    directo Y". No esconderlo nunca.
+  - Redondea **hacia arriba** como todo el resto (decidido con Franco), así que
+    esa forma paga lo mismo o unos pesos más que directo, nunca menos. La
+    diferencia real se muestra en la celda ("directo $68.700 · +$250").
+  - **Necesita la forma sí o sí**: igualar "la que menos deja" no significa nada.
+    Sin `formaTN`, o si esa forma se borró, `objetivoTN` no lo lee y el precio
+    queda a mano — al revés que margen y ganancia, que vuelven solas a la que
+    menos deja.
+  - `precioTiendaNubeDesdeObjetivo` delega en él (sigue siendo la única puerta) y
+    por eso ahora recibe `precioDirecto`. En `resolverPreciosDelCatalogo` ese
+    precio sale de `salida.precioPublico`, **no de `p`**: el objetivo de la venta
+    directa se resuelve unas líneas antes en el mismo `map` y hay que encadenar
+    con el precio ya resuelto.
+  - El gesto es "igualar a directo" en la celda **Paga el cliente** de cada forma
+    del popup, al pasar el mouse: ahí está el número que se iguala. Va debajo del
+    número (la columna es angosta y encima lo taparía) y con `opacity-0`, que
+    sigue ocupando lugar, así las filas no se corren al recorrerlas.
 - **El popup del precio (`DetalleTiendaNube`) es editable**: en cada forma,
   Margen y Ganás son `NumberCell` y escribir en una fija el objetivo contra esa
   forma; el precio llega resuelto, así que precio y filas cambian al tipear. La
   fijada lleva la marca ámbar y "fijada"; si otra deja menos, ésa dice "deja
   menos" (óxido) y el texto de arriba lo avisa. Botones "Medir contra la que
   menos deja" (borra `formaTN`) y "Soltar". Con un cupón simulado no se edita.
-- **"Aplicar a todos"** (banda arriba de la tabla, `AplicarATodos` en
-  `PestanaTiendaNube.jsx`): margen o ganancia fija + "medido contra", a todos los
+- **"Aplicar a todos"** (banda arriba de la tabla, `src/AplicarATodos.jsx`,
+  compartida con el catálogo): margen o ganancia fija + "medido contra", o
+  "Igualar a venta directa" + la forma que tiene que pagar igual (ese tercer modo
+  aparece **solo donde hay `formas`**, o sea solo en Tiendanube), a todos los
   que se ven **con costo**, **pisando también los de precio a mano** (decisión de
-  Franco). Confirma con `Dialogo` diciendo cuántos tenían precio a mano y cuántos
-  sin costo no se tocan. Escribe en el catálogo, no en Tiendanube.
+  Franco). Igualando quedan afuera los que no tienen precio de venta directa: sin
+  él no hay nada que igualar, y guardarles el objetivo sería dejarlo sin
+  resolver. Confirma con `Dialogo` diciendo cuántos tenían precio a mano y
+  cuántos no se tocan. Escribe en el catálogo, no en Tiendanube.
 - Ajustes en `ajustes.tiendaNube`: `envioGratis` (uno para todo el catálogo; lo
   paga el negocio, **sí entra en la cuenta**, al revés del envío de Rosario),
   `comision` (la de Tiendanube, se suma a la de cada forma), `redondeo` y
@@ -635,7 +681,15 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - **Precio promocional, decidido al mandar** (pedido de Franco, no se guarda en
   el catálogo): el precio de la app es lo que **paga el cliente**. Con promoción
   va en `promotional_price` y `price` se infla para mostrarse tachado; sin
-  promoción va en `price` con `promotional_price: null` (si tenía, se saca). La
+  promoción va en `price` con `promotional_price: null` (si tenía, se saca).
+  **Tiendanube puede ignorar ese `null`** sin dar error: le pasó a Franco, quedó
+  el promocional viejo con el precio normal bajado al mismo valor y la tienda
+  mostraba "0% OFF". La doc no dice cómo se borra, así que el server mira la
+  respuesta del PUT: si el promocional sigue, reintenta con `""`, y si aun así
+  queda, responde error ("sacalo a mano") en vez de "ok". Una variante con
+  promocional ≥ precio (`promoRota` en `cambiosParaTN`) no cuenta como
+  "coincide": sale tildada en el panel, con "se ve 0% OFF". El reintento con
+  `""` se probó solo contra la Tiendanube falsa; falta confirmarlo con la real. La
   ganancia no cambia: el descuento por medio de pago de Tiendanube se combina con
   el promocional por defecto (Centro de Ayuda), así que las cuentas de siempre
   valen sobre `precioTN`.

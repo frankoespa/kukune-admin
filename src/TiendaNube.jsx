@@ -13,6 +13,7 @@ import {
   IVA,
   objetivoTN,
   precioTiendaNubeDesdeObjetivo,
+  resultadoDeCanal,
 } from "./precios";
 import { pctSinMiles } from "./numeros";
 
@@ -331,12 +332,20 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
       : base;
   const costo = Number(perfume.costo) || 0;
   const envio = Number(tn.envioGratis) || 0;
+  /* Igualar lo que paga una forma al precio de venta directa. El objetivo no es
+     un margen ni una ganancia, así que la marca ámbar va en "Paga el cliente",
+     que es el número que se iguala, y al lado se muestra contra qué. */
+  const igualando = objetivo?.igualarDirecto === true;
+  const precioDirecto = Number(perfume.precioPublico) || 0;
+  const gananciaDirecta = resultadoDeCanal({ costo, precio: precioDirecto }).ganancia;
   const define = base.define >= 0 ? base.formas[base.define] : null;
   // La forma contra la que se mide el objetivo: la fijada, o la que menos deja.
   const indiceFija = indiceFormaTN(formaId, tn);
   const fijada = objetivo ? (indiceFija >= 0 ? indiceFija : base.define) : -1;
   // Si la fijada no aplica por mínimo con el precio que saldría, el precio no se movió.
-  const despeje = objetivo ? precioTiendaNubeDesdeObjetivo({ costo, ...objetivo, ajustesTN: tn }) : null;
+  const despeje = objetivo
+    ? precioTiendaNubeDesdeObjetivo({ costo, precioDirecto, ...objetivo, ajustesTN: tn })
+    : null;
   // Con un cupón o una promo puestos los números son otros: se edita sin ellos.
   const editable = !!onFijar && !conCupon && !conPromo && costo > 0;
   const simulando = (conCupon && cuponEnCuenta) || conPromo;
@@ -444,15 +453,72 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 {objetivo ? (
                   <>
-                    <span className="text-[12px]" style={{ color: "var(--tinta)" }}>
-                      Fijado:{" "}
-                      <b className="k-num">
-                        {objetivo.ganancia != null ? pesos(objetivo.ganancia) : pctSinMiles(objetivo.margen, 1)}
-                      </b>{" "}
-                      con {fijada >= 0 ? `"${tn.formas[fijada].nombre}"` : "la que menos deja"}
-                      {indiceFija < 0 ? " (la que menos deja)" : ""}
-                    </span>
-                    {indiceFija >= 0 && (
+                    {igualando ? (
+                      <span className="max-w-[640px] text-[12px]" style={{ color: "var(--tinta)" }}>
+                        Fijado: que {indiceFija >= 0 ? `"${tn.formas[indiceFija].nombre}"` : "esa forma de pago"} pague lo mismo
+                        que la venta directa
+                        {precioDirecto > 0 ? (
+                          <>
+                            {" "}
+                            (<span className="k-num">{pesos(precioDirecto)}</span>)
+                          </>
+                        ) : (
+                          ""
+                        )}
+                        {indiceFija >= 0 &&
+                          base.formas[indiceFija].aplica &&
+                          base.formas[indiceFija].valida &&
+                          precioDirecto > 0 && (
+                            <>
+                              . Con este precio paga <span className="k-num">{pesos(base.formas[indiceFija].paga)}</span>
+                              {(() => {
+                                const dif = base.formas[indiceFija].paga - precioDirecto;
+                                return Math.round(dif) === 0 ? (
+                                  " (igual que directo)"
+                                ) : (
+                                  <>
+                                    {" "}
+                                    (<span className="k-num">
+                                      {dif > 0 ? "+" : "−"}
+                                      {pesos(Math.abs(dif))}
+                                    </span>
+                                    )
+                                  </>
+                                );
+                              })()}
+                              {base.formas[indiceFija].ganancia !== null && (
+                                <>
+                                  . Te quedan{" "}
+                                  <b className="k-num" style={{ color: base.formas[indiceFija].ganancia >= 0 ? "var(--ambar)" : "var(--oxido)" }}>
+                                    {pesos(base.formas[indiceFija].ganancia)}
+                                  </b>
+                                  {gananciaDirecta !== null && (
+                                    <span style={{ color: "var(--humo)" }}>
+                                      {" "}
+                                      · vendiendo directo <span className="k-num">{pesos(gananciaDirecta)}</span>
+                                    </span>
+                                  )}
+                                </>
+                              )}
+                            </>
+                          )}
+                        {precioDirecto <= 0 && (
+                          <span style={{ color: "var(--oxido)" }}>
+                            : no hay precio de venta directa en el catálogo, así que el precio quedó como estaba.
+                          </span>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="text-[12px]" style={{ color: "var(--tinta)" }}>
+                        Fijado:{" "}
+                        <b className="k-num">
+                          {objetivo.ganancia != null ? pesos(objetivo.ganancia) : pctSinMiles(objetivo.margen, 1)}
+                        </b>{" "}
+                        con {fijada >= 0 ? `"${tn.formas[fijada].nombre}"` : "la que menos deja"}
+                        {indiceFija < 0 ? " (la que menos deja)" : ""}
+                      </span>
+                    )}
+                    {indiceFija >= 0 && !igualando && (
                       <button
                         type="button"
                         onClick={() => onFijar({ ...objetivo, formaId: null })}
@@ -475,7 +541,8 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                   </>
                 ) : (
                   <span className="text-[12px]" style={{ color: "var(--humo)" }}>
-                    Escribí el margen o la ganancia en una forma de pago y el precio se calcula para que esa forma deje eso.
+                    Escribí el margen o la ganancia en una forma de pago y el precio se calcula para que esa forma deje eso. O
+                    usá "igualar a directo" para que esa forma le cobre al cliente lo mismo que la venta directa.
                   </span>
                 )}
               </div>
@@ -698,14 +765,20 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
               return (
                 <tr
                   key={f.forma.id}
-                  className="border-b"
+                  className="group border-b"
                   style={{
                     borderColor: "var(--linea)",
                     background: i === r.define ? "var(--zona-tn)" : undefined,
                   }}
                 >
                   {nombre}
-                  <td className={td} style={{ color: "var(--tinta)" }}>
+                  <td
+                    className={td}
+                    style={{
+                      color: "var(--tinta)",
+                      ...(igualando && i === indiceFija ? { borderLeft: "3px solid var(--ambar)", background: "#FFFDF7" } : null),
+                    }}
+                  >
                     {pesos(f.paga)}
                     {(() => {
                       // Qué se descontó del precio: el de la forma y el del cupón.
@@ -727,6 +800,35 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                         </small>
                       ) : null;
                     })()}
+                    {/* Contra qué se está igualando, en la celda del número que se
+                        iguala. Con un cupón o una promo simulados la comparación
+                        no diría nada: el cliente ya no paga esto. */}
+                    {igualando && i === indiceFija && precioDirecto > 0 && !simulando && (
+                      <small className="block text-[10.5px]" style={{ color: "var(--humo)" }}>
+                        directo {pesos(precioDirecto)}
+                        {(() => {
+                          const dif = f.paga - precioDirecto;
+                          return Math.round(dif) === 0 ? " · igual" : ` · ${dif > 0 ? "+" : "−"}${pesos(Math.abs(dif))}`;
+                        })()}
+                      </small>
+                    )}
+                    {/* El gesto para fijarlo va acá —en la celda del número que
+                        se iguala— y aparece al pasar el mouse, como el atajo de
+                        "pasar costo al catálogo" en la mesa del pedido. Debajo
+                        del número y no encima: en una columna tan angosta lo
+                        taparía. Con `opacity-0` sigue ocupando su lugar, así que
+                        las filas no se corren al recorrerlas con el mouse. */}
+                    {editable && precioDirecto > 0 && !(igualando && i === indiceFija) && (
+                      <button
+                        type="button"
+                        onClick={() => onFijar({ igualarDirecto: true, formaId: f.forma.id })}
+                        className="k-col mt-1 block w-full rounded-[3px] border px-1.5 py-[3px] text-center opacity-0 transition group-hover:opacity-100"
+                        style={{ borderColor: "var(--linea)", color: "var(--humo)", background: "var(--papel)" }}
+                        title={`Fijar el precio para que "${f.forma.nombre}" pague lo mismo que la venta directa (${pesos(precioDirecto)})`}
+                      >
+                        igualar a directo
+                      </button>
+                    )}
                   </td>
                   <td className={td} style={{ color: "var(--humo)" }}>
                     −{pesos(f.comision)}
@@ -819,9 +921,11 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
           </tbody>
         </table>
         <p className="px-5 py-3 text-[11.5px]" style={{ color: "var(--humo)" }}>
-          {indiceFija >= 0
-            ? `El precio sale de "${tn.formas[indiceFija].nombre}", la forma que fijaste. Las demás pueden dejar más o menos.`
-            : "El precio sale de la forma de pago que más te cuesta: con todas las demás ganás igual o más."}
+          {igualando && indiceFija >= 0
+            ? `El precio sale de igualar lo que paga "${tn.formas[indiceFija].nombre}" al precio de venta directa: si cambia ese precio, este se mueve solo.`
+            : indiceFija >= 0
+              ? `El precio sale de "${tn.formas[indiceFija].nombre}", la forma que fijaste. Las demás pueden dejar más o menos.`
+              : "El precio sale de la forma de pago que más te cuesta: con todas las demás ganás igual o más."}
           {editable && " Escribí el margen o la ganancia en una forma de pago para fijar el precio contra esa forma."}
           {onFijar && (conCupon || conPromo) && " Con un cupón o una promo puestos no se edita: sacalos para cambiar el margen o la ganancia."}
         </p>

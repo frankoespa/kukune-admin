@@ -90,6 +90,9 @@ export function cambiosParaTN(perfumes, productos) {
     const precioApp = Number(p.precioTN) || 0;
     if (!(precioApp > 0)) continue;
     const conPromoHoy = variante.promocional != null && variante.promocional < (variante.precio ?? 0);
+    // Un promocional igual o mayor al precio normal se ve "0% OFF" en la tienda:
+    // no coincide aunque el cliente pague lo de la app, y se manda sin promoción.
+    const promoRota = variante.promocional != null && !conPromoHoy;
     renglones.push({
       perfumeId: p.id,
       nombre: p.nombre,
@@ -100,7 +103,8 @@ export function cambiosParaTN(perfumes, productos) {
       actual: { precio: variante.precio, promocional: variante.promocional },
       conPromoHoy,
       descuentoHoy: conPromoHoy ? descuentoVisto(variante.promocional, variante.precio) : null,
-      coincide: pagaHoy(variante) === precioApp,
+      promoRota,
+      coincide: pagaHoy(variante) === precioApp && !promoRota,
     });
   }
   return { renglones, perdidos };

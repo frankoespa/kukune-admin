@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Plus, Trash2, ImagePlus, Search, X, FileDown } from "lucide-react";
 import { leerCotizacion, urlFoto } from "./almacenamiento";
-import { analisisDePrecio } from "./precios";
+import { analisisDePrecio, objetivoDirecto } from "./precios";
+import AplicarATodos from "./AplicarATodos";
 import { estaAtado, resumenDeCambio } from "./dolar";
 import { SelectorRedondeo } from "./TiendaNube";
 import { NumberCell } from "./NumberCell";
@@ -267,6 +268,7 @@ export default function Catalogo({
   ajustes,
   onCambiar,
   onSoltarMargen,
+  onFijarObjetivo,
   onCrear,
   onBorrar,
   onFoto,
@@ -463,6 +465,17 @@ export default function Catalogo({
         <CajaDolar perfumes={perfumes} dolar={ajustes.dolar} onCambiarDolar={onCambiarDolar} onConfirmar={onConfirmar} />
       </div>
 
+      {/* Solo la venta directa: ML y Tiendanube fijan lo suyo en sus pestañas. */}
+      <AplicarATodos
+        perfumes={visibles}
+        filtrado={!!consulta.trim() || soloSinFoto}
+        onFijar={onFijarObjetivo}
+        onConfirmar={onConfirmar}
+        esAMano={(p) => objetivoDirecto(p) === null}
+        zona="var(--zona-directa)"
+        avisoFinal="Cambia el precio de venta directa del catálogo; Mercado Libre y Tiendanube no se tocan."
+      />
+
       {visibles.length === 0 ? (
         <div className="py-12 text-center">
           <p className="text-[13px]" style={{ color: "var(--humo-claro)" }}>
@@ -496,6 +509,7 @@ export default function Catalogo({
                   columnas={columnas}
                   onCambiar={onCambiar}
                   onSoltarMargen={onSoltarMargen}
+                  onFijarObjetivo={onFijarObjetivo}
                   onBorrar={onBorrar}
                   onFoto={onFoto}
                   onAtar={onAtar}
@@ -563,7 +577,7 @@ function EncabezadoCatalogo({ columnas }) {
 
    El envío de Rosario NO entra en ninguna cuenta: aparece como "con envío", el
    precio que se le cotiza al cliente cuando hay que llevárselo. */
-function Precios({ perfume, ajustes, onCambiar, onSoltarMargen, onAtar, onDesatar }) {
+function Precios({ perfume, ajustes, onCambiar, onSoltarMargen, onFijarObjetivo, onAtar, onDesatar }) {
   // Sin planes: los de ML se miran en su pestaña.
   const r = analisisDePrecio({
     costo: perfume.costo,
@@ -590,8 +604,48 @@ function Precios({ perfume, ajustes, onCambiar, onSoltarMargen, onAtar, onDesata
     m === null ? "var(--humo-claro)" : m >= 0 ? "var(--verde)" : "var(--oxido)";
 
   const envio = Number(ajustes.envioLocal) || 0;
-  const clavado = perfume.margenObjetivo != null;
+  // Margen o ganancia fija: con cualquiera de los dos el precio es calculado.
+  const objetivo = objetivoDirecto(perfume);
+  const clavado = objetivo != null;
   const sinCosto = !(Number(perfume.costo) > 0);
+
+  /* Margen y Ganancia son las dos formas de fijar el precio: escribir en una la
+     fija (y suelta la otra). La fijada lleva el borde ámbar y la X para
+     soltarla; la otra muestra lo que sale del precio. Sin costo no hay cuenta. */
+  const celdaObjetivo = ({ fijado, valor, onChange, suffix, titulo, que, color }) => (
+    <div className="relative px-1.5" style={{ background: "var(--zona-directa)" }} title={sinCosto ? undefined : titulo}>
+      {sinCosto ? (
+        <div className="px-0.5 text-right" title={`Cargá el costo para poder fijar ${que}`}>
+          <span className="k-num text-[13px]" style={{ color: "var(--humo-claro)" }}>
+            —
+          </span>
+        </div>
+      ) : (
+        <NumberCell
+          value={valor}
+          onChange={onChange}
+          suffix={suffix}
+          className={fijado ? "font-semibold" : ""}
+          style={{
+            ...(color ? { color } : null),
+            ...(fijado ? { borderLeft: "3px solid var(--ambar)", background: "#FFFDF7" } : null),
+          }}
+        />
+      )}
+      {fijado && (
+        <button
+          type="button"
+          onClick={() => onSoltarMargen(perfume.id, perfume.precioPublico)}
+          title={`Soltar ${que} y volver a poner el precio a mano`}
+          aria-label={`Soltar ${que} de ${perfume.nombre}`}
+          className="absolute -right-0.5 -top-1.5 rounded-full bg-white p-0.5 transition"
+          style={{ color: "var(--humo)", boxShadow: "0 0 0 1px var(--linea)" }}
+        >
+          <X size={10} />
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <>
@@ -662,44 +716,19 @@ function Precios({ perfume, ajustes, onCambiar, onSoltarMargen, onAtar, onDesata
           />
         )}
       </div>
-      <div
-        className="relative px-1.5"
-        style={{ background: "var(--zona-directa)" }}
-        title={clavado ? margenReal(perfume.margenObjetivo, r.directo.margen) : undefined}
-      >
-        {sinCosto ? (
-          <div
-            className="px-0.5 text-right"
-            title="Cargá el costo para poder fijar un margen"
-          >
-            <span className="k-num text-[13px]" style={{ color: "var(--humo-claro)" }}>
-              —
-            </span>
-          </div>
-        ) : (
-          <NumberCell
-            value={+((clavado ? perfume.margenObjetivo : r.directo.margen ?? 0) * 100).toFixed(1)}
-            onChange={(v) => onCambiar(perfume.id, { margenObjetivo: v / 100 })}
-            suffix="%"
-            className={clavado ? "font-semibold" : ""}
-            style={
-              clavado ? { borderLeft: "3px solid var(--ambar)", background: "#FFFDF7" } : undefined
-            }
-          />
-        )}
-        {clavado && (
-          <button
-            type="button"
-            onClick={() => onSoltarMargen(perfume.id, perfume.precioPublico)}
-            title="Soltar el margen y volver a poner el precio a mano"
-            aria-label={`Soltar el margen de ${perfume.nombre}`}
-            className="absolute -right-0.5 -top-1.5 rounded-full bg-white p-0.5 transition"
-            style={{ color: "var(--humo)", boxShadow: "0 0 0 1px var(--linea)" }}
-          >
-            <X size={10} />
-          </button>
-        )}
-      </div>
+      {celdaObjetivo({
+        fijado: objetivo?.margen != null,
+        valor: +((objetivo?.margen ?? r.directo.margen ?? 0) * 100).toFixed(1),
+        onChange: (v) => onFijarObjetivo([perfume.id], { margen: v / 100 }),
+        suffix: "%",
+        titulo:
+          objetivo?.margen != null
+            ? margenReal(objetivo.margen, r.directo.margen)
+            : objetivo?.ganancia != null
+              ? `Ganancia fija de ${pesos(objetivo.ganancia)}: el margen sale de ahí. Escribir acá fija el margen.`
+              : "Escribir acá fija el margen: el precio sale de él",
+        que: "el margen",
+      })}
       {cifra(r.directo.precioConEnvio === null ? "—" : pesos(r.directo.precioConEnvio), {
         fondo: "var(--zona-directa)",
         color: r.directo.precioConEnvio === null ? "var(--humo-claro)" : "var(--tinta)",
@@ -710,16 +739,25 @@ function Precios({ perfume, ajustes, onCambiar, onSoltarMargen, onAtar, onDesata
               : "Cargá el envío de Rosario arriba para ver este precio"
             : `${pesos(perfume.precioPublico)} + ${pesos(envio)} de envío. Es lo que le cotizás al cliente con entrega; tu ganancia no cambia.`,
       })}
-      {cifra(r.directo.ganancia === null ? "—" : pesos(r.directo.ganancia), {
-        fondo: "var(--zona-directa)",
+      {/* La ganancia también fija el precio: en pesos, queda igual aunque cambie
+          el costo. Mantiene su ámbar (u óxido si es pérdida). */}
+      {celdaObjetivo({
+        fijado: objetivo?.ganancia != null,
+        valor: Math.round(objetivo?.ganancia ?? r.directo.ganancia ?? 0),
+        onChange: (v) => onFijarObjetivo([perfume.id], { ganancia: v }),
+        suffix: "$",
         color: colorGanancia(r.directo.ganancia),
-        fuerte: true,
         titulo:
-          r.directo.ganancia === null
-            ? "Poné costo y precio de venta para ver cuánto te queda"
-            : `Vendiendo directo a ${pesos(perfume.precioPublico)} te quedan ${pesos(
-                r.directo.ganancia
-              )} por unidad, sobre un costo de ${pesos(perfume.costo)}. El envío no entra: se cobra aparte.`,
+          objetivo?.ganancia != null
+            ? r.directo.ganancia != null && Math.round(r.directo.ganancia) !== Math.round(objetivo.ganancia)
+              ? `Pediste ${pesos(objetivo.ganancia)} · con el precio redondeado quedan ${pesos(r.directo.ganancia)}`
+              : `Ganancia fija de ${pesos(objetivo.ganancia)}: el precio es el costo más esto, y sigue al costo si cambia`
+            : r.directo.ganancia === null
+              ? "Escribí una ganancia en pesos para fijar el precio, o poné el precio a mano"
+              : `Vendiendo directo a ${pesos(perfume.precioPublico)} te quedan ${pesos(
+                  r.directo.ganancia
+                )} por unidad, sobre un costo de ${pesos(perfume.costo)}. El envío no entra: se cobra aparte. Escribir acá fija la ganancia.`,
+        que: "la ganancia",
       })}
 
     </>
@@ -749,6 +787,7 @@ function FilaPerfume({
   columnas,
   onCambiar,
   onSoltarMargen,
+  onFijarObjetivo,
   onBorrar,
   onFoto,
   onAtar,
@@ -834,6 +873,7 @@ function FilaPerfume({
         ajustes={ajustes}
         onCambiar={onCambiar}
         onSoltarMargen={onSoltarMargen}
+        onFijarObjetivo={onFijarObjetivo}
         onAtar={onAtar}
         onDesatar={onDesatar}
       />

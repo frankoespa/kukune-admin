@@ -405,6 +405,7 @@ export function PanelActualizarTN({ renglones, perdidos, ajustesTN, onCerrar, on
                     <span className="block truncate text-[11px]" style={{ color: "var(--humo)" }}>
                       {r.titulo}
                       {r.conPromoHoy && !d.conPromo ? " · se saca la promoción" : ""}
+                      {r.promoRota && !d.conPromo ? " · se ve 0% OFF: se saca el promocional" : ""}
                     </span>
                   </span>
                   <span className="flex items-center gap-1.5 px-2">

@@ -163,6 +163,26 @@ export function precioPublicoDesdeMargen(costo, margen, redondeo = 1) {
   return Math.max(0, redondearPrecio(c * (1 + m), { redondeo, k: 1, costo: c }));
 }
 
+/* Lo mismo con una ganancia fija en pesos: `costo + ganancia`. La ganancia
+   queda fija aunque cambie el costo (también si lo mueve el dólar): sube el
+   costo, sube el precio. Mismo redondeo que el margen. */
+export function precioPublicoDesdeGanancia(costo, ganancia, redondeo = 1) {
+  const c = Number(costo) || 0;
+  if (ganancia == null) return null;
+  const g = Number(ganancia);
+  if (!(c > 0) || !Number.isFinite(g)) return null;
+  return Math.max(0, redondearPrecio(c + g, { redondeo, k: 1, costo: c }));
+}
+
+/* El objetivo de la venta directa: ganancia fija en pesos (`gananciaObjetivo`)
+   o margen (`margenObjetivo`). Si aparecieran los dos, manda la ganancia, igual
+   que al resolver. `null` = precio a mano. Gemelo de `objetivoTN`. */
+export function objetivoDirecto(perfume) {
+  if (perfume?.gananciaObjetivo != null) return { ganancia: Number(perfume.gananciaObjetivo) };
+  if (perfume?.margenObjetivo != null) return { margen: Number(perfume.margenObjetivo) };
+  return null;
+}
+
 /* Qué precio hay que publicar en un canal para que quede ESE margen sobre el
    costo, después de la comisión y el envío. Es `precioParaIgualar` con la
    ganancia objetivo escrita como fracción del costo — la misma cuenta que
@@ -192,9 +212,13 @@ export function resolverPreciosDelCatalogo(perfumes, ajustes = {}) {
   const resueltos = (perfumes ?? []).map((p) => {
     let salida = p;
 
-    // Venta directa
-    if (p.margenObjetivo != null) {
-      const precio = precioPublicoDesdeMargen(p.costo, p.margenObjetivo, redondeoDirecto);
+    // Venta directa: margen o ganancia fija
+    const directo = objetivoDirecto(p);
+    if (directo) {
+      const precio =
+        directo.ganancia != null
+          ? precioPublicoDesdeGanancia(p.costo, directo.ganancia, redondeoDirecto)
+          : precioPublicoDesdeMargen(p.costo, directo.margen, redondeoDirecto);
       if (precio !== null && precio !== p.precioPublico) salida = { ...salida, precioPublico: precio };
     }
 
@@ -221,11 +245,20 @@ export function resolverPreciosDelCatalogo(perfumes, ajustes = {}) {
       if (nuevos) salida = { ...salida, preciosML: nuevos };
     }
 
-    // Tiendanube: un solo precio, que deja el objetivo con la forma fijada o, sin
-    // ella, con la más cara. Si la fijada no aplica por mínimo, el precio queda.
+    /* Tiendanube: un solo precio, que deja el objetivo con la forma fijada o, sin
+       ella, con la más cara. Si la fijada no aplica por mínimo, el precio queda.
+
+       `precioDirecto` sale de `salida`, no de `p`: el objetivo de la venta directa
+       se resolvió unas líneas arriba en este mismo `map`, y el precio que iguala
+       tiene que encadenarse con ese, no con el que quedó en el estado crudo. */
     const objetivo = objetivoTN(p);
     if (objetivo && ajustes.tiendaNube) {
-      const r = precioTiendaNubeDesdeObjetivo({ costo: p.costo, ...objetivo, ajustesTN: ajustes.tiendaNube });
+      const r = precioTiendaNubeDesdeObjetivo({
+        costo: p.costo,
+        precioDirecto: salida.precioPublico,
+        ...objetivo,
+        ajustesTN: ajustes.tiendaNube,
+      });
       if (r && !r.noAplica && r.precio !== (Number(p.precioTN) || 0)) salida = { ...salida, precioTN: r.precio };
     }
 
@@ -460,10 +493,17 @@ export function precioTiendaNubeDesdeMargen({ costo, margen, ajustesTN = {} }) {
   return precioTiendaNubeDesdeObjetivo({ costo, margen, ajustesTN });
 }
 
-/* El objetivo de un perfume en Tiendanube: margen (fracción del costo) o
-   ganancia fija en pesos, medido contra una forma de pago (`formaTN`) o, sin
-   ella, contra la que menos deja. `null` si el perfume tiene el precio a mano. */
+/* El objetivo de un perfume en Tiendanube: margen (fracción del costo), ganancia
+   fija en pesos, o igualar lo que paga una forma al precio de venta directa,
+   medido contra una forma de pago (`formaTN`) o, sin ella, contra la que menos
+   deja. `null` si el perfume tiene el precio a mano.
+
+   Igualar va primero porque los tres se excluyen: al fijar uno se borran los
+   otros. Necesita la forma sí o sí —igualar "la que menos deja" no significa
+   nada—, así que sin `formaTN` no hay objetivo y el precio queda a mano. */
 export function objetivoTN(perfume) {
+  if (perfume?.igualarDirectoTN && perfume?.formaTN != null)
+    return { igualarDirecto: true, formaId: perfume.formaTN };
   if (perfume?.gananciaTN != null) return { ganancia: Number(perfume.gananciaTN), formaId: perfume.formaTN ?? null };
   if (perfume?.margenTN != null) return { margen: Number(perfume.margenTN), formaId: perfume.formaTN ?? null };
   return null;
@@ -473,6 +513,40 @@ export function objetivoTN(perfume) {
    medir contra la que menos deja. -> índice o -1. */
 export const indiceFormaTN = (formaId, ajustesTN = {}) =>
   formaId == null ? -1 : (ajustesTN.formas ?? []).findIndex((f) => f.id === formaId);
+
+/* El precio a publicar para que UNA forma de pago le cobre al cliente lo mismo
+   que la venta directa.
+
+   Nace de un problema concreto: el precio de Tiendanube se publica inflado para
+   absorber la comisión y el envío gratis, así que el que mira la tienda y elige
+   transferencia ve un número más alto que el precio directo, pregunta por fuera
+   y compra directo. La tienda queda como la opción cara.
+
+     precio = precioPublico ÷ (1 − descuento de la forma)
+
+   La comisión NO entra en el despeje: no la paga el cliente, sale de lo que
+   llega. Por eso este precio es más bajo que el del margen clavado y la ganancia
+   también: la comisión y el envío gratis se comen la diferencia. Es la decisión
+   que se está tomando, y la pantalla la muestra al lado de la ganancia directa.
+
+   Redondea HACIA ARRIBA como todo el resto de la app, así que el cliente de esa
+   forma paga lo mismo o unos pesos más que comprando directo — nunca menos.
+   Devuelve `{ precio, define }`, `{ ..., noAplica: true }` si la forma tiene
+   monto mínimo y el precio no llega, o null si no hay cuenta posible (sin precio
+   directo, forma inexistente, o descuento/comisión al 100%). */
+export function precioTNParaIgualarPago({ precioDirecto, costo, formaId, ajustesTN = {} }) {
+  const objetivo = Number(precioDirecto) || 0;
+  const i = indiceFormaTN(formaId, ajustesTN);
+  if (!(objetivo > 0) || i < 0) return null;
+  const forma = (ajustesTN.formas ?? [])[i];
+  const d = Number(forma.descuento) || 0;
+  const real = comisionRealTN(forma, ajustesTN);
+  if (!(d < 1) || !(real < 1)) return null;
+  const redondeo = Number(ajustesTN.redondeo) > 0 ? Number(ajustesTN.redondeo) : 1;
+  const base = Number(costo) > 0 ? Number(costo) : objetivo;
+  const precio = redondearPrecio(objetivo / (1 - d), { redondeo, k: (1 - d) * (1 - real), costo: base });
+  return aplicaTN(forma, precio) ? { precio, define: i } : { precio, define: i, noAplica: true };
+}
 
 /* Como `precioTiendaNubeDesdeMargen`, con la ganancia en pesos como alternativa
    al margen y una forma de pago opcional contra la que medir:
@@ -484,8 +558,20 @@ export const indiceFormaTN = (formaId, ajustesTN = {}) =>
    · Con forma: `precio = objetivo ÷ k` de ESA forma, mismo redondeo hacia
      arriba. Si tiene mínimo y el precio no llega, esa forma no aplica: devuelve
      `{ precio, define, noAplica: true }` y el precio no se usa.
+   · Con `igualarDirecto`: no hay margen ni ganancia que despejar, el objetivo es
+     lo que paga el cliente. Delega en `precioTNParaIgualarPago`, así el resolver
+     y el popup siguen entrando por una sola puerta.
    Devuelve `{ precio, define }` o null si no hay cuenta posible. */
-export function precioTiendaNubeDesdeObjetivo({ costo, margen, ganancia, formaId, ajustesTN = {} }) {
+export function precioTiendaNubeDesdeObjetivo({
+  costo,
+  margen,
+  ganancia,
+  igualarDirecto,
+  precioDirecto,
+  formaId,
+  ajustesTN = {},
+}) {
+  if (igualarDirecto) return precioTNParaIgualarPago({ precioDirecto, costo, formaId, ajustesTN });
   const c = Number(costo) || 0;
   const extra = ganancia != null ? Number(ganancia) : margen != null ? c * Number(margen) : NaN;
   if (!(c > 0) || !Number.isFinite(extra)) return null;
