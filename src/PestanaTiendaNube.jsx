@@ -10,6 +10,7 @@ import { BandaConexionTN, CeldaTN, PanelActualizarTN } from "./ConexionTN";
 import CuponesTN from "./CuponesTN";
 import AplicarATodos from "./AplicarATodos";
 import EnvioGratisTN from "./EnvioGratisTN";
+import { zonaEnvioTN } from "./umbralEnvioTN";
 
 /* ============================================================
    Tiendanube en su propia pestaña.
@@ -36,6 +37,7 @@ const ANCHO_MINIMO = 52 + 200 + 200 + 312 + 132;
 
 export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCambiar, onSoltarMargenTN, onFijarObjetivoTN, onConfirmar }) {
   const [consulta, setConsulta] = useState("");
+  const [soloEnvioGratis, setSoloEnvioGratis] = useState(false);
   const [cuenta, setCuenta] = useState(null); // null = preguntando
   const [productos, setProductos] = useState(null);
   const [errorTN, setErrorTN] = useState("");
@@ -191,6 +193,20 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
     return orden.current.ids.map((id) => porId.get(id)).filter(Boolean);
   }, [perfumes, consulta]);
 
+  /* Los que alcanzan el monto del envío gratis VENDIDOS SOLOS: ahí el envío lo
+     paga el negocio. Sale del catálogo entero, no de los visibles, para que el
+     contador diga cuántos hay y no cuántos quedaron después de buscar. */
+  const conEnvioGratis = useMemo(() => {
+    const tnAjustes = ajustes.tiendaNube ?? {};
+    const m = new Map();
+    for (const p of perfumes) {
+      const z = zonaEnvioTN(p, tnAjustes);
+      if (z) m.set(p.id, z);
+    }
+    return m;
+  }, [perfumes, ajustes.tiendaNube]);
+  const alaVista = soloEnvioGratis ? visibles.filter((p) => conEnvioGratis.has(p.id)) : visibles;
+
   return (
     <section className="mx-auto max-w-[1480px] px-6 py-8">
       <div className="mb-6">
@@ -216,6 +232,29 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
             style={{ background: "var(--papel)", borderColor: "var(--linea)", color: "var(--tinta)" }}
           />
         </div>
+        {/* Los que alcanzan el monto vendidos solos: ahí el envío lo pagás vos.
+            Mismo molde que "N sin foto" y "N fuera de banda" del catálogo, con
+            su misma regla: no desaparece mientras el filtro esté puesto aunque
+            el contador llegue a cero, porque si no el filtro queda activo sin
+            forma de apagarlo. Óxido y no ámbar: es un "esto te está costando",
+            el ámbar sigue siendo sólo la ganancia. */}
+        {Number(ajustes.tiendaNube?.envioGratisDesde) > 0 && (conEnvioGratis.size > 0 || soloEnvioGratis) && (
+          <button
+            onClick={() => setSoloEnvioGratis((v) => !v)}
+            aria-pressed={soloEnvioGratis}
+            title={`Vendidos solos llegan a ${pesos(
+              Number(ajustes.tiendaNube.envioGratisDesde)
+            )}, así que el envío gratis lo pagás vos: son los que conviene revisar de precio.`}
+            className="k-col rounded-[3px] border px-3 py-[7px] transition"
+            style={{
+              borderColor: soloEnvioGratis ? "var(--oxido)" : "var(--linea)",
+              color: soloEnvioGratis ? "var(--oxido)" : "var(--humo)",
+              background: soloEnvioGratis ? "#FDF6F4" : "transparent",
+            }}
+          >
+            {soloEnvioGratis && conEnvioGratis.size === 0 ? "Ver todos" : `${conEnvioGratis.size} con envío gratis`}
+          </button>
+        )}
       </div>
 
       <BandaConexionTN
@@ -263,8 +302,8 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
       />
 
       <AplicarATodos
-        perfumes={visibles}
-        filtrado={!!consulta.trim()}
+        perfumes={alaVista}
+        filtrado={!!consulta.trim() || soloEnvioGratis}
         formas={ajustes.tiendaNube?.formas ?? []}
         onFijar={onFijarObjetivoTN}
         onConfirmar={onConfirmar}
@@ -273,18 +312,20 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
         avisoFinal={'No se manda nada a Tiendanube: después usá "Actualizar precios en Tiendanube".'}
       />
 
-      {visibles.length === 0 ? (
+      {alaVista.length === 0 ? (
         <p className="py-12 text-center text-[13px]" style={{ color: "var(--humo-claro)" }}>
           {perfumes.length === 0
             ? "El catálogo está vacío. Los perfumes se agregan en la pestaña Catálogo."
-            : "Ningún perfume coincide con la búsqueda."}
+            : soloEnvioGratis
+              ? "Ninguno de los que se ven llega al monto del envío gratis vendido solo."
+              : "Ningún perfume coincide con la búsqueda."}
         </p>
       ) : (
         <div className="overflow-x-auto pb-2">
           <div style={{ minWidth: ANCHO_MINIMO }}>
             <Encabezado />
             <ul className="grid gap-1.5">
-              {visibles.map((p) => (
+              {alaVista.map((p) => (
                 <FilaTN
                   key={p.id}
                   perfume={p}
@@ -372,6 +413,9 @@ function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, onFijarObjetivo
   /* Lo que se le descontó a ESTE precio: con monto mínimo, un perfume que no
      llega al monto no paga envío porque lo paga el cliente. */
   const envioTN = tn.envioAplicado;
+  /* Si vendido solo llega al monto del envío gratis, y si en esa posición está
+     bien parado o le conviene bajar. `null` en la mayoría: no se marca. */
+  const zonaEnvio = zonaEnvioTN(perfume, ajustes.tiendaNube ?? {});
   // Margen y ganancia de la forma que manda: la fijada, o la que menos deja.
   const formaManda = tn.manda >= 0 ? tn.formas[tn.manda].forma.nombre : null;
   const otraDejaMenos = tn.manda >= 0 && tn.define >= 0 && tn.manda !== tn.define;
@@ -436,8 +480,23 @@ function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, onFijarObjetivo
            El mismo par precio + margen. El margen que se muestra es el de la
            forma de pago que MENOS deja: con las demás se gana igual o más. Clic
            en el precio (o en el icono, si está a mano) abre el detalle. */}
-      <div className="flex items-center gap-1 px-1.5" style={{ background: "var(--zona-tn)" }}>
-        {tnClavado ? (
+      <div
+        className="flex flex-col justify-center px-1.5"
+        style={{ background: "var(--zona-tn)" }}
+        title={
+          zonaEnvio
+            ? `Vendido solo llega a ${pesos(Number(ajustes.tiendaNube.envioGratisDesde))}, así que el envío gratis lo pagás vos y te quedan ${pesos(
+                zonaEnvio.ganancia
+              )}. A ${pesos(zonaEnvio.bajarA)} no llega y lo paga el cliente: te quedarían ${pesos(zonaEnvio.gananciaAbajo)}.${
+                zonaEnvio.subirA
+                  ? ` Para que el precio absorba el envío tendría que salir ${pesos(zonaEnvio.subirA)}.`
+                  : " A este precio ya lo absorbe."
+              }`
+            : undefined
+        }
+      >
+        <div className="flex items-center gap-1">
+          {tnClavado ? (
           <button
             type="button"
             onClick={() => setDetalleTN(true)}
@@ -482,6 +541,27 @@ function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, onFijarObjetivo
               )}
             </div>
           </>
+        )}
+        </div>
+        {/* La marca. Óxido cuando cruzó el monto por poco: ahí paga el envío
+            entero sin haber cobrado casi nada más por eso, y conviene BAJARLO
+            justo debajo del monto —el envío pasa al cliente y queda más
+            ganancia con el producto más barato—. Humo cuando el precio ya lo
+            absorbe: no hay nada que hacer, es informativo. El número va escrito
+            y no sólo en el `title`: es la acción. */}
+        {zonaEnvio && (
+          <small
+            className="block pb-0.5 text-right text-[10.5px] leading-tight"
+            style={{ color: zonaEnvio.zona === "floja" ? "var(--oxido)" : "var(--humo)" }}
+          >
+            {zonaEnvio.zona === "floja" ? (
+              <>
+                envío gratis · bajá a <span className="k-num">{pesos(zonaEnvio.bajarA)}</span>
+              </>
+            ) : (
+              "envío gratis"
+            )}
+          </small>
         )}
       </div>
       <div

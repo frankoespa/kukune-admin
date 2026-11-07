@@ -207,3 +207,61 @@ export function analisisDelUmbral(
     },
   };
 }
+
+/* En qué zona está un perfume respecto del envío gratis, VENDIDO SOLO.
+   `null` = no hay monto mínimo, o el precio no lo alcanza y el envío lo paga el
+   cliente: la mayoría, y por eso no se marca.
+
+   Cuando sí lo alcanza hay dos situaciones opuestas, y verlas iguales sería
+   pedir la misma acción para decisiones contrarias:
+
+   · "absorbido": el precio está lo bastante arriba como para que lo que cobra
+     de más cubra el envío. No hay nada que hacer.
+   · "floja": cruzó el monto por poco, así que paga el envío entero sin haber
+     cobrado casi nada más por eso. Ahí conviene BAJARLO justo debajo del monto:
+     el envío pasa al cliente y queda más ganancia con el producto más barato.
+
+   La frontera **se mide, no se deriva**: la zona es "floja" si a `bajarA`
+   —el escalón justo debajo del monto— la ganancia es mayor que la de hoy. Sale
+   de `analisisTiendaNube`, así que vale con cualquier redondeo, comisión,
+   descuento y forma de pago sin tener que rehacer la cuenta a mano.
+
+   `subirA` es la otra salida: el precio al que, pagando el envío, queda la
+   misma ganancia que estando debajo del monto. Es el despeje de siempre con esa
+   ganancia como objetivo, pero **con el monto apagado**: el despeje a tramos
+   devuelve el precio MÁS BARATO que cumple el objetivo, que es precisamente
+   quedarse debajo del monto, así que sin apagarlo devolvería `bajarA` otra vez.
+   -> null | {zona, ganancia, gananciaAbajo, bajarA, subirA} */
+export function zonaEnvioTN(perfume, ajustesTN = {}) {
+  const precio = Number(perfume?.precioTN) || 0;
+  const costo = Number(perfume?.costo) || 0;
+  const desde = Number(ajustesTN.envioGratisDesde) || 0;
+  const envio = Number(ajustesTN.envioGratis) || 0;
+  if (!(precio > 0) || !(costo > 0) || !(desde > 0) || !(envio > 0) || precio < desde) return null;
+
+  const formaId = objetivoTN(perfume)?.formaId ?? null;
+  const ganancia = analisisTiendaNube({ costo, precio, ajustesTN, formaId }).gananciaManda;
+  if (ganancia === null) return null;
+
+  const paso = Number(ajustesTN.redondeo) > 0 ? Number(ajustesTN.redondeo) : 1;
+  const bajarA = desde - paso;
+  const gananciaAbajo = analisisTiendaNube({ costo, precio: bajarA, ajustesTN, formaId }).gananciaManda;
+  const floja = gananciaAbajo !== null && gananciaAbajo > ganancia;
+
+  const arriba = floja
+    ? precioTiendaNubeDesdeObjetivo({
+        costo,
+        ganancia: gananciaAbajo,
+        formaId,
+        ajustesTN: { ...ajustesTN, envioGratisDesde: 0 },
+      })
+    : null;
+
+  return {
+    zona: floja ? "floja" : "absorbido",
+    ganancia,
+    gananciaAbajo,
+    bajarA,
+    subirA: arriba && !arriba.noAplica ? arriba.precio : null,
+  };
+}

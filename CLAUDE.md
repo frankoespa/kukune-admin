@@ -809,6 +809,35 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   que pasa en el otro caso. Un "% de retiros" no se agregó a propósito: con una
   venta no hay con qué estimarlo, y el dato sale solo de las órdenes de
   Tiendanube cuando haya unas cuantas.
+- **Los que alcanzan el monto vendidos solos se marcan**, porque son los que hay
+  que revisar de precio y en una tabla de 49 filas no se ven. Botón-contador
+  "N con envío gratis" al lado del buscador, que filtra —molde y regla de los de
+  `Catalogo.jsx`: no desaparece con el filtro puesto, ahí dice "Ver todos"— y un
+  renglón en la celda Precio de cada uno. Va en **óxido**, no en ámbar.
+- **La marca distingue dos zonas, porque piden acciones opuestas**
+  (`zonaEnvioTN()` en `umbralEnvioTN.js`):
+  - **"absorbido"**: el precio está lo bastante arriba como para que lo que
+    cobra de más cubra el envío. Renglón gris, informativo.
+  - **"floja"**: cruzó el monto por poco, así que paga el envío entero sin haber
+    cobrado casi nada más por eso. Ahí **conviene BAJARLO** justo debajo del
+    monto: el envío pasa al cliente y queda más ganancia con el producto más
+    barato. Renglón en óxido con el precio escrito ("bajá a $119.900").
+  - El caso real que lo motivó: con el monto en $120.000, el Rasasi Hawas Verde
+    salía $120.000 —cruzaba por **$0**— y dejaba $18.409 cuando sus vecinos de
+    abajo dejaban $28.500. Bajarlo $100 le suma ~$10.000.
+  - **La frontera se mide, no se deriva**: es "floja" si a `bajarA` (el escalón
+    justo debajo del monto) `analisisTiendaNube` da más ganancia que hoy. Así
+    vale con cualquier redondeo, comisión, descuento y forma de pago sin rehacer
+    la cuenta a mano. Con los números de hoy cae en $133.600.
+  - `subirA` —la otra salida— se despeja con **el monto apagado**
+    (`envioGratisDesde: 0`): el despeje a tramos devuelve el precio MÁS BARATO
+    que cumple el objetivo, que es justamente quedarse debajo del monto, así que
+    sin apagarlo devolvería `bajarA` otra vez.
+  - **La marca no toca el precio**: con `igualarDirectoTN` el precio de
+    Tiendanube cuelga del de venta directa, así que el número que se mueve es el
+    del catálogo. La marca dice qué pasa y cuál es el objetivo.
+  - No se avisa a los que están cerca por abajo (decisión de Franco): cuando
+    cruzan, la marca aparece sola y la ganancia baja a la vista.
 - Lo que la app **no** hace: escribir el monto en Tiendanube. La promoción de
   envío gratis se configura en el panel; la app dice qué número poner.
   **Franco ya lo puso en $120.000** (06/11/2026, promoción 813555), así que
