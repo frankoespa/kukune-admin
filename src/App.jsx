@@ -40,6 +40,7 @@ import {
 } from "./almacenamiento";
 import Catalogo, { buscarPerfumes, ConVistaPrevia } from "./Catalogo";
 import { registrarCosto } from "./historialCostos";
+import { aportesPendientes, conStockAsignado, sumarAportes } from "./stock";
 import { aplicarDolar, atarAlDolar, conCostoEnPesos, costoAlDolar, costoUSDParaPasar, desatar, estaAtado } from "./dolar";
 import MercadoLibre from "./MercadoLibre";
 import PestanaTiendaNube from "./PestanaTiendaNube";
@@ -420,11 +421,13 @@ function ParPrecioMargen({ fila, onPrecio, onVolverAlCatalogo }) {
    El nombre no se tipea libre — sale del catálogo. Si lo que escribiste no está,
    la última opción de la lista lo da de alta con ese nombre y engancha la fila.
    Ese alta va sin foto: la foto se carga solo en la pantalla del catálogo. */
-function BuscadorPerfume({ fila, perfumes, huerfana, onElegir, onCrear }) {
+function BuscadorPerfume({ fila, perfumes, huerfana, yaUsados, onElegir, onCrear }) {
   const bloqueado = useBloqueo();
   const [consulta, setConsulta] = useState(null); // null = mostrando el nombre guardado
   const [abierto, setAbierto] = useState(false);
   const [resaltado, setResaltado] = useState(0);
+  // Los que ya están en otra fila del pedido se muestran a pedido (ver abajo).
+  const [verUsados, setVerUsados] = useState(false);
   const contenedor = useRef(null);
   const campo = useRef(null);
   // Posición de la lista en coordenadas de pantalla. La lista se dibuja en un
@@ -433,10 +436,18 @@ function BuscadorPerfume({ fila, perfumes, huerfana, onElegir, onCrear }) {
   const [caja, setCaja] = useState(null);
 
   const texto = consulta ?? fila.producto ?? "";
-  const coincidencias = useMemo(
-    () => (consulta === null ? [] : buscarPerfumes(perfumes, consulta).slice(0, 8)),
-    [perfumes, consulta]
-  );
+  /* Un perfume va una sola vez por pedido: los que ya están en otra fila no se
+     ofrecen. Se pueden mostrar a pedido —igual que las publicaciones ya
+     vinculadas en el buscador de ML— porque el caso legítimo existe: el mismo
+     perfume comprado a dos proveedores en la misma compra, con dos costos. Solo
+     se esconden, no se prohíben. */
+  const { coincidencias, ocultos } = useMemo(() => {
+    if (consulta === null) return { coincidencias: [], ocultos: 0 };
+    const todas = buscarPerfumes(perfumes, consulta);
+    const libres = todas.filter((p) => p.id === fila.perfumeId || !yaUsados?.has(p.id));
+    const lista = verUsados ? todas : libres;
+    return { coincidencias: lista.slice(0, 8), ocultos: todas.length - libres.length };
+  }, [perfumes, consulta, yaUsados, verUsados, fila.perfumeId]);
   const puedeCrear =
     consulta !== null &&
     consulta.trim().length > 0 &&
@@ -461,6 +472,7 @@ function BuscadorPerfume({ fila, perfumes, huerfana, onElegir, onCrear }) {
     setConsulta(null);
     setResaltado(0);
     setCaja(null);
+    setVerUsados(false);
   };
 
   // La tabla scrollea por dentro: si se mueve, la lista tiene que seguir al campo.
@@ -527,7 +539,7 @@ function BuscadorPerfume({ fila, perfumes, huerfana, onElegir, onCrear }) {
           cursor: bloqueado ? "not-allowed" : undefined,
         }}
       />
-      {abierto && opciones.length > 0 && caja && createPortal(
+      {abierto && (opciones.length > 0 || ocultos > 0) && caja && createPortal(
         <ul
           className="fixed z-[80] max-h-[280px] overflow-auto rounded-[4px] border py-1 shadow-xl"
           style={{
@@ -541,6 +553,16 @@ function BuscadorPerfume({ fila, perfumes, huerfana, onElegir, onCrear }) {
               : { top: caja.bottom + 4 }),
           }}
         >
+          {/* Va contra `coincidencias`, no contra `opciones`: con "Crear …" en la
+              lista, opciones nunca llega a cero y el aviso no aparecía justo
+              cuando más hace falta — sin él, lo único visible es "Crear", que
+              invita a duplicar en el catálogo un perfume que ya existe. */}
+          {coincidencias.length === 0 && ocultos > 0 && (
+            <li className="k-col px-2 py-1.5" style={{ color: "var(--humo-claro)" }}>
+              {ocultos === 1 ? "El que coincide ya está cargado" : "Los que coinciden ya están cargados"} en
+              este pedido.
+            </li>
+          )}
           {opciones.map((o, i) => (
             <li key={o.crear ? "crear" : o.id}>
               <button
@@ -569,16 +591,37 @@ function BuscadorPerfume({ fila, perfumes, huerfana, onElegir, onCrear }) {
                       )}
                     </span>
                     <span style={{ color: "var(--tinta)" }}>{o.nombre}</span>
-                    {!o.foto && (
-                      <span className="k-col ml-auto" style={{ color: "var(--humo-claro)" }}>
-                        sin foto
+                    {yaUsados?.has(o.id) && o.id !== fila.perfumeId ? (
+                      <span className="k-col ml-auto" style={{ color: "var(--oxido)" }}>
+                        ya en este pedido
                       </span>
+                    ) : (
+                      !o.foto && (
+                        <span className="k-col ml-auto" style={{ color: "var(--humo-claro)" }}>
+                          sin foto
+                        </span>
+                      )
                     )}
                   </>
                 )}
               </button>
             </li>
           ))}
+          {ocultos > 0 && (
+            <li>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => setVerUsados((v) => !v)}
+                className="k-col w-full border-t px-2 py-2 text-left transition hover:bg-[#F4F6F2]"
+                style={{ borderColor: "var(--linea)", color: "var(--humo)" }}
+              >
+                {verUsados
+                  ? "Ocultar los ya cargados"
+                  : `Mostrar ${ocultos === 1 ? "el ya cargado" : `los ${ocultos} ya cargados`}`}
+              </button>
+            </li>
+          )}
         </ul>,
         document.body
       )}
@@ -1118,6 +1161,13 @@ export default function App() {
     [perfumesResueltos]
   );
 
+  /* Qué perfumes ya están cargados en este pedido. Lo lee el buscador de la celda
+     Producto para no volver a ofrecerlos: un perfume va una sola vez por pedido. */
+  const perfumesDelPedido = useMemo(
+    () => new Set(productos.map((p) => p.perfumeId).filter(Boolean)),
+    [productos]
+  );
+
   // Foto del estado tal como se cargó, para saber si el usuario cambió algo.
   const jsonInicial = useRef(null);
   const sinNombresInicial = useRef(null);
@@ -1494,10 +1544,24 @@ export default function App() {
     forzarGuardado.current = true; // es la única escritura que un cerrado acepta
     yaGuarda.current = true;
     // En el mismo movimiento que el estado, así viajan juntos en la escritura.
-    if (nuevo === "cerrado") congelarPrecios();
-    else soltarPreciosCongelados();
+    if (nuevo === "cerrado") {
+      congelarPrecios();
+      /* Cerrar es cuando la mercadería llegó, así que acá entra al stock. Va al
+         CATÁLOGO y no al archivo del pedido: un cerrado acepta exactamente dos
+         escrituras, y marcarlo sería una tercera. El candado contra sumar dos
+         veces es `aportesStock`, en el perfume. */
+      setPerfumes((ps) => sumarAportes(ps, productos, perfumePorId, pedidoId));
+    } else soltarPreciosCongelados();
     setEstadoPedido(nuevo);
   };
+
+  /* Lo que este pedido todavía no le aportó al stock. Lo dice el diálogo de
+     cerrar: el stock no se mueve en silencio. Reabrir no resta, así que volver a
+     cerrar no vuelve a sumar y esto queda vacío. */
+  const aportesAlCerrar = useMemo(
+    () => aportesPendientes(productos, perfumePorId, pedidoId),
+    [productos, perfumePorId, pedidoId]
+  );
 
   /* Al cerrar, las filas que seguían al catálogo se quedan con el precio de ese
      momento, marcadas `precioDelCatalogo`: el pedido cerrado es un registro y no
@@ -1522,24 +1586,36 @@ export default function App() {
       })
     );
 
-  const cerrarPedido = () =>
+  const cerrarPedido = () => {
+    const unidades = aportesAlCerrar.reduce((s, a) => s + a.unidades, 0);
     setDialogo({
       titulo: `¿Cerrar "${nombrePedido}"?`,
       texto:
         "Queda congelado: no vas a poder cambiar celdas, agregar o borrar filas, " +
         "renombrarlo ni borrarlo hasta que lo reabras. Los precios que hoy salen del catálogo quedan " +
         "fijos en el pedido, aunque después cambies el catálogo. Podés seguir exportando, sacando el PDF del " +
-        "proveedor y pasando los costos al catálogo.",
+        "proveedor y pasando los costos al catálogo." +
+        (unidades > 0
+          ? ` Además se suman al stock del catálogo ${unidades} ${
+              unidades === 1 ? "unidad" : "unidades"
+            } en ${aportesAlCerrar.length} ${
+              aportesAlCerrar.length === 1 ? "perfume" : "perfumes"
+            }: cerrar es cuando la mercadería llegó. Si lo reabrís y lo volvés a cerrar, no se suman de nuevo.`
+          : perfumesDelPedido.size > 0
+          ? " Las unidades de este pedido ya están sumadas al stock del catálogo, así que el stock no cambia."
+          : ""),
       etiquetaOk: "Cerrar pedido",
       onAceptar: () => cambiarEstadoPedido("cerrado"),
     });
+  };
 
   const reabrirPedido = () =>
     setDialogo({
       titulo: `¿Reabrir "${nombrePedido}"?`,
       texto:
         "Vuelve a ser editable y sus números pueden cambiar: los precios que se habían tomado del catálogo " +
-        "vuelven a seguirlo. Si era un pedido terminado, " +
+        "vuelven a seguirlo. El stock que sumó al cerrarse NO se devuelve: la mercadería ya llegó. " +
+        "Si era un pedido terminado, " +
         "conviene reabrirlo solo para corregir algo puntual y volver a cerrarlo.",
       etiquetaOk: "Reabrir",
       onAceptar: () => cambiarEstadoPedido("abierto"),
@@ -1691,10 +1767,14 @@ export default function App() {
   const volverAlCatalogo = (id) =>
     setProductos((ps) => ps.map((p) => (p.id === id ? { ...p, precioFinal: 0, margenObjetivo: null } : p)));
   const addP = () => setProductos((ps) => [...ps, nuevoProducto()]);
+  /* Duplicar copia los costos y las cantidades, pero NO el perfume: un perfume va
+     una sola vez por pedido, y duplicar era la vía más fácil de repetirlo. La
+     copia nace sin elegir, con el borde ámbar que pide elegir uno. */
   const dupP = (id) =>
     setProductos((ps) => {
       const i = ps.findIndex((p) => p.id === id);
-      const clone = { ...ps[i], id: crypto.randomUUID(), producto: ps[i].producto + " (copia)" };
+      const { perfumeId, ...resto } = ps[i];
+      const clone = { ...resto, id: crypto.randomUUID(), producto: "" };
       const next = [...ps];
       next.splice(i + 1, 0, clone);
       return next;
@@ -1858,6 +1938,16 @@ export default function App() {
         return costo === undefined ? conCampos : conCostoEnPesos(conCampos, costo, ajustes.dolar?.valor);
       })
     );
+
+  /* Asignarle unidades a ML o a Tiendanube las saca del stock base: son las que
+     dejaste de tener sin publicar. El `anterior` lo lee quien llama de la
+     publicación o la variante justo antes de escribir, así que si el canal vendió
+     en el medio el delta sigue siendo correcto.
+
+     Lo llaman las dos pestañas DESPUÉS de que el canal aceptó el cambio: si la
+     escritura en ML o Tiendanube falla, la base no se mueve. */
+  const asignarStockACanal = (perfumeId, anterior, nuevo) =>
+    setPerfumes((ps) => ps.map((p) => (p.id === perfumeId ? conStockAsignado(p, anterior, nuevo) : p)));
 
   /* Dólar del catálogo: el nuevo valor y, en el mismo movimiento, el costo de
      los atados (con su historial). Los precios clavados se mueven solos porque
@@ -2222,6 +2312,7 @@ export default function App() {
           onAjustes={(campos) => setAjustes((a) => ({ ...a, ...campos }))}
           onCambiar={cambiarPerfume}
           onSoltarMargenML={soltarMargenMLDelCatalogo}
+          onStockBase={asignarStockACanal}
           onConfirmar={setDialogo}
         />
       )}
@@ -2234,6 +2325,7 @@ export default function App() {
           onCambiar={cambiarPerfume}
           onSoltarMargenTN={soltarMargenTNDelCatalogo}
           onFijarObjetivoTN={fijarObjetivoTN}
+          onStockBase={asignarStockACanal}
           onConfirmar={setDialogo}
         />
       )}
@@ -2505,6 +2597,7 @@ export default function App() {
                       fila={f}
                       perfumes={perfumesResueltos}
                       huerfana={!!f.perfumeId && !perfumePorId.has(f.perfumeId)}
+                      yaUsados={perfumesDelPedido}
                       onElegir={(perfume) => asignarPerfume(f.id, perfume)}
                       onCrear={crearPerfume}
                     />

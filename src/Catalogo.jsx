@@ -9,6 +9,9 @@ import { SelectorRedondeo } from "./TiendaNube";
 import { NumberCell } from "./NumberCell";
 import { CampoProtegido } from "./CampoProtegido";
 import { pctSinMiles as pctCorto } from "./numeros";
+import { stockPorPerfume, totalEnMano } from "./stock";
+import { estadoML, leerPublicacionesML } from "./clienteML";
+import { estadoTN, leerProductosTN } from "./clienteTN";
 
 /* Una sola fuente para las columnas del encabezado y de las filas. Si se
    escribieran por separado se desalinean al primer cambio de ancho, que es
@@ -20,7 +23,7 @@ import { pctSinMiles as pctCorto } from "./numeros";
    existiría en el CSS.
 
    Columnas: foto · nombre · costo ‖ precio · margen · con envío · ganancia ‖
-             usos · borrar
+             sin publicar · en ML · en TN ‖ usos · borrar
    Mercado Libre y Tiendanube tienen su propia pestaña (`MercadoLibre.jsx`,
    `PestanaTiendaNube.jsx`): acá no entraban.
    Sin `gap` horizontal a propósito: el aire lo pone cada celda con su padding,
@@ -31,6 +34,11 @@ const COLUMNAS_CATALOGO =
     // Precio y Margen pegados: son un par que se maneja junto, igual que en la
     // tabla del pedido. Con envío y Ganancia salen de ellos.
     "104px 88px 96px 100px",
+    // Stock: la base (sin publicar, editable) y lo que hay en cada canal, en
+    // vivo. Va acá y no al lado del Costo porque Costo sale de `Precios` junto
+    // con las cuatro de venta directa. Pegado a Usos, que dice lo mismo desde
+    // otro lado: dónde está este perfume.
+    "72px 64px 64px",
     "72px 32px",
   ].join(" ");
 
@@ -54,6 +62,41 @@ const fechaCorta = (iso) => (iso ? new Date(iso).toLocaleString("es-AR", { day: 
    "Aplicar", que confirma si hay atados: cambia sus costos y, con ellos, los
    precios clavados de los tres canales. No va con el candado de doble clic
    porque ese escribe en cada tecla, y acá cada tecla repreciaría el catálogo. */
+/* Cuánto hay de cada perfume en ML y en Tiendanube, leído en vivo al entrar.
+
+   NO se guarda nada: un espejo en `perfumes.json` habría que refrescarlo con
+   cada lectura, o sea escribir por entrar a la pantalla, que es justo lo que la
+   app evita en todos lados. El precio de esto es que las dos columnas aparecen
+   con "?" hasta que vuelven las respuestas.
+
+   Solo lectura, y si un canal no está conectado o falla, su columna queda en "no
+   se sabe" y el resto del catálogo sigue andando igual: estas dos columnas son
+   información al costado, no algo de lo que dependa la pantalla. */
+function useStockDeCanales(perfumes) {
+  const [publicaciones, setPublicaciones] = useState(null);
+  const [productosTN, setProductosTN] = useState(null);
+
+  useEffect(() => {
+    let vigente = true;
+    estadoML()
+      .then((c) => c?.conectado && leerPublicacionesML())
+      .then((pubs) => vigente && pubs && setPublicaciones(pubs))
+      .catch(() => {}); // sin conexión: las columnas quedan en "?"
+    estadoTN()
+      .then((c) => c?.conectado && leerProductosTN())
+      .then((ps) => vigente && ps && setProductosTN(ps))
+      .catch(() => {});
+    return () => {
+      vigente = false;
+    };
+  }, []);
+
+  return useMemo(
+    () => stockPorPerfume(perfumes, publicaciones, productosTN),
+    [perfumes, publicaciones, productosTN]
+  );
+}
+
 function CajaDolar({ perfumes, dolar, onCambiarDolar, onConfirmar }) {
   const actual = Number(dolar?.valor) || 0;
   const [casa, setCasa] = useState(dolar?.casa || "cripto");
@@ -283,11 +326,24 @@ export default function Catalogo({
   const [consulta, setConsulta] = useState("");
   const [soloSinFoto, setSoloSinFoto] = useState(false);
   const [soloFueraDeBanda, setSoloFueraDeBanda] = useState(false);
+  const [soloSinStock, setSoloSinStock] = useState(false);
   const [porMargen, setPorMargen] = useState(false);
   const [nuevo, setNuevo] = useState("");
   const columnas = COLUMNAS_CATALOGO;
 
   const sinFoto = perfumes.filter((p) => !p.foto).length;
+
+  // Cuánto hay en cada canal. No se guarda: se lee en vivo (ver el hook).
+  const enCanales = useStockDeCanales(perfumes);
+
+  /* Los que no tienen stock sin publicar cargado, o que lo tienen en cero. No
+     mira los canales: lo que este contador busca es el stock que la app posee y
+     que todavía nadie cargó. Un perfume agotado de verdad también cae acá, que
+     es útil: son los dos casos en que hay que mirar la fila. */
+  const sinStock = useMemo(
+    () => new Set(perfumes.filter((p) => !((Number(p.stock) || 0) > 0)).map((p) => p.id)),
+    [perfumes]
+  );
 
   /* Los que se salieron de la banda que se aplicó la última vez — porque les
      cambió el costo, casi siempre por el dólar. Solo se miran los que tienen
@@ -318,7 +374,8 @@ export default function Catalogo({
 
   const visibles = useMemo(() => {
     const conFiltro = soloFueraDeBanda ? perfumes.filter((p) => fueraDeBanda.has(p.id)) : perfumes;
-    const base = soloSinFoto ? conFiltro.filter((p) => !p.foto) : conFiltro;
+    const conStock = soloSinStock ? conFiltro.filter((p) => sinStock.has(p.id)) : conFiltro;
+    const base = soloSinFoto ? conStock.filter((p) => !p.foto) : conStock;
     const filtrados = buscarPerfumes(base, consulta);
     const porId = new Map(filtrados.map((p) => [p.id, p]));
 
@@ -346,7 +403,7 @@ export default function Catalogo({
       };
     }
     return orden.current.ids.map((id) => porId.get(id)).filter(Boolean);
-  }, [perfumes, consulta, soloSinFoto, porMargen, soloFueraDeBanda, fueraDeBanda]);
+  }, [perfumes, consulta, soloSinFoto, porMargen, soloFueraDeBanda, fueraDeBanda, soloSinStock, sinStock]);
 
   const crear = () => {
     const nombre = nuevo.trim();
@@ -444,6 +501,27 @@ export default function Catalogo({
           </button>
         )}
 
+        {/* Los que no tienen stock sin publicar: o nunca se cargó, o se agotó.
+            Misma regla que los dos de arriba: no desaparece mientras el filtro
+            esté puesto, porque si no quedaría activo sin forma de apagarlo.
+            Humo y no óxido: no tener stock cargado no es un error, y al principio
+            van a ser todos. */}
+        {(sinStock.size > 0 || soloSinStock) && (
+          <button
+            onClick={() => setSoloSinStock((v) => !v)}
+            aria-pressed={soloSinStock}
+            title="No tienen stock sin publicar cargado, o está en cero. Las unidades entran solas al cerrar un pedido; el stock inicial se carga a mano."
+            className="k-col rounded-[3px] border px-3 py-[7px] transition"
+            style={{
+              borderColor: soloSinStock ? "var(--tinta)" : "var(--linea)",
+              color: soloSinStock ? "var(--tinta)" : "var(--humo)",
+              background: soloSinStock ? "var(--vidrio-hondo)" : "transparent",
+            }}
+          >
+            {soloSinStock && sinStock.size === 0 ? "Ver todos" : `${sinStock.size} sin stock`}
+          </button>
+        )}
+
         <button
           onClick={() => setPorMargen((v) => !v)}
           aria-pressed={porMargen}
@@ -514,7 +592,7 @@ export default function Catalogo({
         banda={banda}
         redondeo={ajustes?.redondeoDirecto ?? 1}
         ajustesTN={ajustes?.tiendaNube}
-        filtrado={!!consulta.trim() || soloSinFoto || soloFueraDeBanda}
+        filtrado={!!consulta.trim() || soloSinFoto || soloFueraDeBanda || soloSinStock}
         onFijar={onFijarObjetivo}
         onConfirmar={onConfirmar}
         esAMano={(p) => objetivoDirecto(p) === null}
@@ -529,11 +607,16 @@ export default function Catalogo({
               ? "El catálogo está vacío. Agregá el primer perfume arriba."
               : soloSinFoto
               ? "Ya no queda ningún perfume sin foto."
+              : soloSinStock
+              ? "Todos los que se ven tienen stock cargado."
               : "Ningún perfume coincide con la búsqueda."}
           </p>
-          {soloSinFoto && perfumes.length > 0 && (
+          {(soloSinFoto || soloSinStock) && perfumes.length > 0 && (
             <button
-              onClick={() => setSoloSinFoto(false)}
+              onClick={() => {
+                setSoloSinFoto(false);
+                setSoloSinStock(false);
+              }}
               className="k-col mt-3 rounded-[3px] border px-3 py-[7px] transition"
               style={{ borderColor: "var(--linea)", color: "var(--humo)" }}
             >
@@ -543,7 +626,7 @@ export default function Catalogo({
         </div>
       ) : (
         <div className="overflow-x-auto pb-2">
-          <div style={{ minWidth: 824 }}>
+          <div style={{ minWidth: 1024 }}>
             <EncabezadoCatalogo columnas={columnas} />
             <ul className="grid gap-1.5">
               {visibles.map((p) => (
@@ -553,6 +636,7 @@ export default function Catalogo({
                   usos={usos[p.id] ?? SIN_USOS}
                   ajustes={ajustes}
                   columnas={columnas}
+                  enCanales={enCanales.get(p.id)}
                   onCambiar={onCambiar}
                   onSoltarMargen={onSoltarMargen}
                   onFijarObjetivo={onFijarObjetivo}
@@ -598,6 +682,7 @@ function EncabezadoCatalogo({ columnas }) {
           Perfume
         </span>
         {grupo("Venta directa", "var(--zona-directa-honda)", 4)}
+        {grupo("Stock", "transparent", 3)}
         <span className="col-span-2" />
       </div>
       <div className="grid items-center border border-transparent" style={{ gridTemplateColumns: columnas }}>
@@ -608,6 +693,9 @@ function EncabezadoCatalogo({ columnas }) {
         {col("Margen", "var(--zona-directa)")}
         {col("Con envio", "var(--zona-directa)")}
         {col("Ganancia", "var(--zona-directa)")}
+        {col("Sin publicar", "transparent")}
+        {col("En ML", "var(--zona-ml)")}
+        {col("En TN", "var(--zona-tn)")}
         {col("Usos", "transparent")}
         <span />
       </div>
@@ -826,11 +914,68 @@ export const pesos = (n) =>
 
 
 
+/* Las tres celdas de stock: la base (sin publicar, lo único que esta app posee y
+   lo único editable) y lo que hay en cada canal, leído en vivo.
+
+   Un perfume sin stock cargado muestra "—" y no 0: la clave `stock` aparece en
+   `perfumes.json` recién cuando se carga, así que abrir la app no escribe nada.
+
+   El total en mano va en el `title` y no en una columna: es una suma de cosas
+   que ya están a la vista, y con Tiendanube en infinito no existe. */
+function CeldasDeStock({ perfume, enCanales, onCambiar }) {
+  const base = Number(perfume.stock) || 0;
+  const cargado = perfume.stock != null && perfume.stock !== "";
+  const { ml, tn } = enCanales ?? { ml: null, tn: null };
+  const { total, parcial, infinito } = totalEnMano(base, ml, tn);
+
+  const deCanal = (valor, fondo, nombre) => (
+    <div className="px-2 text-right" style={{ background: fondo }}>
+      <span
+        className="k-num text-[12px]"
+        style={{ color: valor == null ? "var(--humo-claro)" : "var(--humo)" }}
+        title={
+          valor == null
+            ? `No se sabe cuánto hay en ${nombre}: sin vincular, sin conexión o todavía leyendo. No es cero.`
+            : valor === "inf"
+              ? `En ${nombre} la variante no lleva la cuenta del stock (gestión de stock apagada).`
+              : `${valor} en ${nombre}. Se cambia desde la pestaña de ${nombre}, y sale del stock sin publicar.`
+        }
+      >
+        {valor == null ? "?" : valor === "inf" ? "∞" : valor}
+      </span>
+    </div>
+  );
+
+  return (
+    <>
+      <div
+        className="px-1.5"
+        title={
+          infinito
+            ? "No se puede calcular el total: un canal no lleva la cuenta del stock."
+            : parcial
+              ? `${base} sin publicar. Falta leer algún canal, así que todavía no hay total en mano.`
+              : `${total} en mano: ${base} sin publicar + ${ml} en Mercado Libre + ${tn} en Tiendanube.`
+        }
+      >
+        <NumberCell
+          value={base}
+          onChange={(v) => onCambiar(perfume.id, { stock: v })}
+          className={cargado ? "" : "opacity-60"}
+        />
+      </div>
+      {deCanal(ml, "var(--zona-ml)", "Mercado Libre")}
+      {deCanal(tn, "var(--zona-tn)", "Tiendanube")}
+    </>
+  );
+}
+
 function FilaPerfume({
   perfume,
   usos,
   ajustes,
   columnas,
+  enCanales,
   onCambiar,
   onSoltarMargen,
   onFijarObjetivo,
@@ -923,6 +1068,8 @@ function FilaPerfume({
         onAtar={onAtar}
         onDesatar={onDesatar}
       />
+
+      <CeldasDeStock perfume={perfume} enCanales={enCanales} onCambiar={onCambiar} />
 
       {/* Cuenta TODOS los pedidos, no solo el que está en pantalla: es el aviso
           de qué se lleva puesto un borrado. El detalle dice en cuáles. */}

@@ -56,6 +56,7 @@ export default function MercadoLibre({
   onAjustes,
   onCambiar,
   onSoltarMargenML,
+  onStockBase,
   onConfirmar,
 }) {
   const [consulta, setConsulta] = useState("");
@@ -201,15 +202,27 @@ export default function MercadoLibre({
     setPanel(cambiosParaML(perfumes, pubs, planes));
   };
 
-  const cambiarStock = (pub, stock) =>
+  /* El stock que le asignás a ML sale del stock base del catálogo (lo que tenías
+     sin publicar). `pub.stock` es lo que ML tiene ahora mismo —se releyó al abrir
+     la pestaña o al tocar stock—, así que el delta es correcto aunque ML haya
+     vendido en el medio. La base se mueve DESPUÉS de que ML acepta: si el PUT
+     falla, no se toca nada. */
+  const cambiarStock = (perfume, pub, stock) =>
     onConfirmar({
       titulo: "Cambiar el stock en Mercado Libre",
-      texto: `"${pub.titulo}" (${pub.id}): de ${pub.stock} a ${stock} unidades. Se cambia en la publicación real.`,
+      texto:
+        `"${pub.titulo}" (${pub.id}): de ${pub.stock} a ${stock} unidades. Se cambia en la publicación real.` +
+        (stock !== pub.stock
+          ? ` En el catálogo, el stock sin publicar de "${perfume.nombre}" ${
+              stock > pub.stock ? "baja" : "sube"
+            } ${Math.abs(stock - pub.stock)}.`
+          : ""),
       etiquetaOk: "Cambiar stock",
       onAceptar: async () => {
         try {
           const r = await actualizarPublicacionML(pub.id, { available_quantity: stock });
           setPublicaciones((ps) => ps.map((x) => (x.id === pub.id ? r.publicacion : x)));
+          onStockBase?.(perfume.id, pub.stock, stock);
         } catch (e) {
           setErrorML(`No se pudo cambiar el stock de ${pub.id} (${e.message}).`);
         }
@@ -364,7 +377,7 @@ export default function MercadoLibre({
                       pubPorId={pubPorId}
                       usadas={usadas}
                       onVincular={vincular}
-                      onStock={cambiarStock}
+                      onStock={(pub, stock) => cambiarStock(p, pub, stock)}
                       onPublicar={() => setPublicandoId(p.id)}
                       onActualizar={() => setActualizandoId(p.id)}
                     />

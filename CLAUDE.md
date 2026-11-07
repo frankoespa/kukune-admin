@@ -26,6 +26,8 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   (precio sugerido por margen), `src/almacenamiento.js` (cliente de los archivos)
   y las pantallas `src/Catalogo.jsx`, `src/MercadoLibre.jsx` y `src/PestanaTiendaNube.jsx`. La navegación entre pantallas
   es un `useState` (`vista`), no hay router.
+- `src/stock.js`: el stock base y sus movimientos (ver "Stock"). Puro y sin
+  imports, probado desde Node.
 - `src/pdf.js`: arma el catálogo para el proveedor con
   jsPDF. Recibe datos planos (`{ producto, cantidad, foto }[]`) y devuelve el
   `doc`, sin tocar React ni el DOM — así se puede generar un PDF de prueba desde
@@ -45,8 +47,16 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   El plugin se engancha con `configureServer` **y** `configurePreviewServer`, así
   que `npm run dev` y `npm run preview` guardan igual. Cada escritura es atómica
   (`.tmp` + `rename`) y rota su `.bak.json`. `src/almacenamiento.js` es el cliente.
-- Un archivo por pedido y no uno con todos adentro: cada uno tiene su historial
-  de versiones propio en OneDrive y solo se reescribe el que se está tocando.
+- Un archivo por pedido y no uno con todos adentro: así cada escritura es chica
+  y solo se reescribe el que se está tocando. Con todo en un archivo, tocar una
+  celda reescribe el historial entero y cualquier error se lleva puesto todo.
+- **No hay OneDrive ni historial de versiones.** La carpeta está adentro de
+  `OneDrive\Escritorio\` por cómo quedó armada la máquina, pero Franco no lo usa
+  y pidió que no se tenga en cuenta. Lo único que protege los datos es lo que
+  hace la app: la escritura atómica, **un** `.bak.json` por archivo (que rota en
+  la escritura siguiente, así que es solo la versión anterior) y
+  `datos/papelera/` al borrar un pedido. No usar "OneDrive guarda versiones"
+  como argumento de diseño ni como salida de emergencia.
 - **Ya no hay caché en localStorage.** Ahí solo queda `kukune:pedido-activo`, que
   es qué pedido estabas mirando — una preferencia de pantalla, no un dato. La
   caché no servía de nada desde que las fotos también las sirve el server.
@@ -141,6 +151,55 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   —el de pantalla o cualquier otro—, el diálogo de borrado no ofrece borrar esas
   filas, solo quitarlo del catálogo dejándolas huérfanas.
 
+## Stock
+- **El stock base se guarda; el total se calcula.** El modelo es *base (sin
+  publicar) + lo asignado a ML + lo asignado a Tiendanube*. Puras en
+  `src/stock.js` (sin imports, probadas desde Node).
+- **La dirección inversa está mal y no es intercambiable.** Con el total
+  guardado y `base = total − ML − TN`: ML vende uno y baja de 5 a 4 por su
+  cuenta, el total sigue en 10 y la base **sube** de 2 a 3 — la venta aparece
+  como una unidad que volvió al estante. Para que funcionara habría que
+  descontarle al total cada venta de cada canal, y la app no las sabe: las de
+  Tiendanube no se leen y las ventas en mano no se registran.
+- **Las cantidades de los canales NO se guardan**: se leen en vivo
+  (`useStockDeCanales` en `Catalogo.jsx`). Un espejo en `perfumes.json` habría
+  que refrescarlo con cada lectura, o sea **escribir por entrar a la pantalla**.
+  El precio es que las dos columnas muestran "?" hasta que vuelven las
+  respuestas, y "?" significa *no se sabe*, nunca cero.
+- `stockPorPerfume()` toma **un** número de ML, no la suma: ML comparte el stock
+  entre las publicaciones del mismo perfume (1 pago, 6 cuotas, normal y catálogo
+  son hasta cuatro del mismo User Product) y sumarlas contaría cuatro veces lo
+  mismo. En Tiendanube `stock: null` es **infinito** (gestión de stock apagada):
+  se muestra `∞` y no entra en ninguna suma, así que ahí no hay total posible.
+- Claves nuevas en el perfume, solo dos: **`stock`** (la base) y
+  **`aportesStock`** (`[{pedido, fila, unidades, fecha}]`). Ninguna está en
+  `AJUSTES_POR_DEFECTO` ni se escribe al leer: **abrir la app no escribe nada**
+  (verificado por md5 entrando a las cuatro pantallas). Sin `stock` la celda
+  muestra `—`, no 0.
+- **Lo único que mueve la base**: cerrar un pedido, asignarle stock a un canal
+  desde la app, y la edición a mano de la celda. Que ML o Tiendanube bajen solos
+  **no la toca**: esas unidades se vendieron y desaparecen del total por sí
+  mismas.
+- **Cerrar un pedido suma sus unidades**, que es cuando la mercadería llegó. La
+  suma va al **catálogo** y no al archivo del pedido: un cerrado acepta
+  exactamente dos escrituras y marcarlo sería una tercera. El candado contra
+  sumar dos veces es `aportesStock`, por **pedido + fila** (por fila, para que si
+  reabrís y agregás una, al volver a cerrar entre solo la nueva). Reabrir **no
+  resta** y volver a cerrar no vuelve a sumar; los dos diálogos lo dicen.
+- Los pedidos cerrados antes de que esto existiera **no aportan nada** y sus
+  archivos no se tocan. El stock inicial se carga a mano. No hay migración.
+- **Asignarle stock a un canal lo descuenta de la base**, con el delta contra lo
+  que el canal tenía **leído justo antes** (`cambiarStock` en `MercadoLibre.jsx`
+  y en `PestanaTiendaNube.jsx`). Así el delta es correcto aunque el canal haya
+  vendido en el medio. Se mueve **después** de que el canal acepta: si el PUT
+  falla, la base no se toca. Puede quedar negativa —asignaste unidades que nunca
+  registraste—; se avisa, no se traba.
+- **Hueco conocido y a propósito**: una venta en mano no descuenta nada hasta que
+  existan las ventas directas. Mientras tanto se corrige editando la celda.
+- Botón-filtro **"N sin stock"** en el catálogo, con la regla de los otros tres:
+  no desaparece con el filtro puesto (ahí dice "Ver todos"). En humo, no en
+  óxido: no tener stock cargado no es un error, y al principio son todos.
+
 ## Catálogo de perfumes
 - El nombre y la foto de cada perfume viven **una sola vez** en
   `datos/perfumes.json`; las filas del pedido apuntan por `perfumeId`. En la fila
@@ -221,6 +280,21 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - `BuscadorPerfume` es la celda Producto: busca por palabras sueltas y sin
   acentos (`buscarPerfumes` en `Catalogo.jsx`), y si no hay coincidencia ofrece
   crear la entrada con ese nombre. El nombre no se tipea libre.
+- **Un perfume va una sola vez por pedido.** Franco lo daba por hecho y el
+  código no lo hacía cumplir. Ahora `BuscadorPerfume` recibe `yaUsados` y no
+  ofrece los que ya están en otra fila, con un pie **"Mostrar los N ya
+  cargados"** que los trae marcados "ya en este pedido" — mismo gesto que el
+  buscador de publicaciones de ML. Solo se esconden, no se prohíben: el caso
+  legítimo es el mismo perfume comprado a dos proveedores en la misma compra.
+- Cuando todo lo que coincide está escondido, la lista dice **"Los que coinciden
+  ya están cargados en este pedido"** y va **arriba** de "Crear … en el
+  catálogo". Sin ese renglón, lo único visible es "Crear", que invita a duplicar
+  en el catálogo un perfume que ya existe. El aviso se decide contra
+  `coincidencias`, no contra `opciones`: con "Crear" en la lista, `opciones`
+  nunca llega a cero.
+- **Duplicar fila copia los costos pero no el perfume**: la copia nace sin
+  `perfumeId` y con el borde ámbar que pide elegir uno. Era la vía más fácil de
+  repetir un perfume en el pedido.
 
 ## Precios del catálogo
 - Cada perfume tiene `costo` y `precioPublico` (venta directa), **puestos a mano**.
@@ -402,7 +476,8 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   pantalla; recién en la primera edición del catálogo se escribe el mapa y se
   deja de escribir `precioML` —el valor ya vive en `preciosML["1"]` y tener los
   dos sería tener dos verdades—. Esa primera escritura deja la versión previa en
-  `perfumes.bak.json`, que **rota en la siguiente**: la red real es OneDrive.
+  `perfumes.bak.json`, que **rota en la siguiente**: después de dos escrituras
+  más, de la forma vieja no queda nada. No hay otra red.
 - `analisisDePrecio()` en `src/precios.js` devuelve `{ directo, ml }` con **`ml`
   como una lista, una entrada por plan** (`{plan, precio, comision, ganancia,
   margen, sugerido}`). Se apoya en `resultadoDeCanal({costo, precio, comision,
@@ -446,6 +521,9 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   también la caja de ajustes que las configura, para que se vea qué configura
   qué. La versión `-honda` es para las bandas del encabezado. El ámbar no se usa
   para esto: por eso el precio "publicar en ML" dejó de ser ámbar.
+- El catálogo tiene, además, el grupo **Stock** (sin publicar · En ML · En TN)
+  entre Venta directa y Usos. Va ahí y no al lado del Costo porque Costo sale de
+  `Precios` junto con las cuatro columnas de venta directa.
 - **Las columnas de ML (precio, margen, ganancia y "En ML" por plan) y la caja
   de sus ajustes viven en la pestaña Mercado Libre** (`src/MercadoLibre.jsx`), no
   en el catálogo: ahí ya no entraban. Lo de arriba sobre `preciosML`, `margenesML`
@@ -489,6 +567,16 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   50/50 con el costo guardado, que es la cuenta que se hacía a mano cuando el
   mismo perfume se le compró a dos proveedores. "Promediar" solo aparece si
   algún perfume ya tenía costo.
+- **El 50/50 no mira unidades, y se decidió dejarlo así igual.** Franco lo
+  planteó con un caso real: 10 unidades a $50.000 y 1 nueva a $65.000 dan
+  **$57.500** promediando, cuando el ponderado por unidades daría **$51.364**.
+  Se evaluó cambiarlo por el ponderado ahora que existe el stock y **se decidió
+  que no**, por dos motivos: el costo del catálogo manda los precios de los tres
+  canales y ahí lo que tiene que mandar es el **costo de reposición** (si el
+  precio sale de $51.364 mientras reponer cuesta $65.000, el margen no alcanza
+  para volver a comprar — el mismo problema que resolvió atar el costo al
+  dólar), y Franco prefirió no tocar el pase por ahora. **No reponerlo sin
+  preguntar.** El ponderado sirve para medir, no para fijar precios.
 - Si el mismo perfume aparece en dos filas del pedido, se promedia **por unidad**
   (ponderado por cantidad) antes de llegar al catálogo: el costo del catálogo es
   por unidad, no por fila. Las filas huérfanas se saltean solas.
@@ -1400,19 +1488,48 @@ veces por probar encima.
   una prueba.** Él trabaja en la app mientras nosotros editamos código. Si algo
   no cierra, se pregunta; no se restaura por cuenta propia. Así se borraron
   precios que él había cargado y los cambios que le había hecho a un pedido.
-- OneDrive guarda historial por archivo y es la única red real: botón derecho →
-  Historial de versiones. Conviene nombrarle la hora exacta en que se escribió
-  encima.
+- **No hay red de seguridad, y eso hace esta regla más estricta, no menos.**
+  Franco no usa OneDrive (ver "Arquitectura"), así que no existe el historial de
+  versiones por archivo: si se escribe encima, no hay a dónde volver. Lo único
+  que queda es el `.bak.json` —una sola versión anterior, que rota en la
+  escritura siguiente— y `datos/papelera/`. Si alguna vez se escribe encima por
+  error, decírselo al usuario enseguida y con la hora exacta: cuanto antes lo
+  sepa, más chance hay de que el `.bak` todavía sirva.
 
 ## Entorno de esta máquina
 - Node no está en el `PATH`: vive en `C:\Program Files\nodejs`. Por eso
   `.claude/launch.json` apunta directo a `node.exe` + `node_modules/vite/bin/vite.js`
   (además, un `spawn npm` en Windows falla porque `npm` es un `.cmd`).
-- La carpeta está sincronizada por OneDrive y el watcher de Tailwind a veces no
+- La carpeta vive adentro de `OneDrive\Escritorio\` (Franco no usa OneDrive, pero
+  la ruta es esa) y el watcher de Tailwind a veces no
   ve los archivos nuevos: si una clase recién agregada no aplica, reiniciar
   `npm run dev` regenera el CSS.
 
 ## Ideas pendientes (no implementadas)
+- **Ventas directas.** Es la pieza que cierra el hueco del stock: hoy una venta
+  en mano no descuenta nada. Diseño hablado con Franco, no empezado:
+  `datos/ventas/<AAAA-MM>.json` (un archivo por mes: uno por venta serían
+  cientos, y uno solo haría que cada venta reescriba el historial entero). La
+  venta guarda el `precio` precargado del `precioPublico` y **editable** (el
+  familiar al que se le cobra menos) y el **`costo` congelado** con
+  `costoEnFecha()`, mismo criterio que `congelarPrecios()` al cerrar un pedido.
+  Ganancia = `Σ (precio − costo) × cantidad`, sin comisión ni envío. Pantalla
+  `src/VentasDirectas.jsx` con el molde de `VentasML.jsx`, en el catálogo con un
+  selector Catálogo | Ventas directas. Si las cuentas salen a un módulo puro,
+  **no puede llamarse `ventasDirectas.js`** (choca con el `.jsx` en Windows).
+- **Clientes, con Tiendanube como base.** La app no guardaría lista propia: se
+  leen de la tienda y al cargar uno nuevo se crea allá. Verificado en la doc
+  (`tiendanube.dev/es-AR/api/resources/2025-03/customer`): existen
+  `POST /customers` (201), `PUT` y `DELETE` (422 si tiene pedidos); `q` busca por
+  nombre, email o identificación; hace falta el scope **`write_customers`**, y
+  cambiar scopes **obliga a reinstalar la app** ("Volver a conectar"), como pasó
+  con los cupones. **Qué campos son obligatorios al crear no está documentado.**
+  **Nunca mandar `send_email_invite`** (le manda un correo al cliente avisándole
+  del registro: una ficha creada porque le vendiste en mano no puede dispararle
+  un mail) **ni `password`**; `accepts_marketing` es de solo lectura. La venta
+  guardaría `clienteTN` + el nombre del momento, y **el cliente tiene que ser
+  opcional**: si la tienda no responde, la venta se guarda igual con el nombre
+  como texto libre.
 - Export a Excel/CSV (hoy solo JSON al portapapeles) e import desde Tiendanube.
   El "Exportar" actual copia al portapapeles; estaría bueno que baje un `.json`.
 - Sacar la barra espejo de scroll de arriba si termina resultando redundante:

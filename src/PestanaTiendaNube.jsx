@@ -35,7 +35,7 @@ import { zonaEnvioTN } from "./umbralEnvioTN";
 const COLUMNAS_TN = "52px minmax(200px,1fr) 100px 100px 124px 88px 100px 132px";
 const ANCHO_MINIMO = 52 + 200 + 200 + 312 + 132;
 
-export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCambiar, onSoltarMargenTN, onFijarObjetivoTN, onConfirmar }) {
+export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCambiar, onSoltarMargenTN, onFijarObjetivoTN, onStockBase, onConfirmar }) {
   const [consulta, setConsulta] = useState("");
   const [soloEnvioGratis, setSoloEnvioGratis] = useState(false);
   const [cuenta, setCuenta] = useState(null); // null = preguntando
@@ -156,20 +156,39 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
     if (lista) setPanel(cambiosParaTN(perfumes, lista));
   };
 
-  const cambiarStock = (perfume, variante, stock) =>
+  /* El stock que le asignás a Tiendanube sale del stock base del catálogo (lo que
+     tenías sin publicar). `variante.stock` es lo que la tienda tiene ahora mismo,
+     así que el delta es correcto aunque haya vendido en el medio. La base se mueve
+     DESPUÉS de que Tiendanube acepta: si el PUT falla, no se toca nada.
+
+     Con `stock: null` la variante tiene la gestión de stock apagada (infinito): no
+     hay delta posible y la base no se toca. */
+  const cambiarStock = (perfume, variante, stock) => {
+    const infinito = variante.stock == null;
+    const delta = infinito ? 0 : Number(stock) - Number(variante.stock);
     onConfirmar({
       titulo: "Cambiar el stock en Tiendanube",
-      texto: `"${variante.productoNombre}"${variante.valores ? ` (${variante.valores})` : ""}: de ${variante.stock} a ${stock} unidades. Se cambia en la tienda real.`,
+      texto:
+        `"${variante.productoNombre}"${variante.valores ? ` (${variante.valores})` : ""}: de ${
+          infinito ? "infinito" : variante.stock
+        } a ${stock} unidades. Se cambia en la tienda real.` +
+        (delta !== 0
+          ? ` En el catálogo, el stock sin publicar de "${perfume.nombre}" ${delta > 0 ? "baja" : "sube"} ${Math.abs(delta)}.`
+          : infinito
+            ? " Venía sin llevar la cuenta, así que el stock sin publicar del catálogo no cambia: ajustalo a mano."
+            : ""),
       etiquetaOk: "Cambiar stock",
       onAceptar: async () => {
         try {
           await actualizarVarianteTN(vinculoTN(perfume).productId, variante.id, { stock });
           traerProductos();
+          if (delta !== 0) onStockBase?.(perfume.id, variante.stock, stock);
         } catch (e) {
           setErrorTN(`No se pudo cambiar el stock (${e.message}).`);
         }
       },
     });
+  };
 
   /* Orden alfabético congelado por conjunto, como en el catálogo y en ML: acá se
      escriben precios y la lista no debe moverse por eso. */
