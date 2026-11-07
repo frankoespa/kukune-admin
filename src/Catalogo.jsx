@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Plus, Trash2, ImagePlus, Search, X, FileDown } from "lucide-react";
 import { leerCotizacion, urlFoto } from "./almacenamiento";
-import { analisisDePrecio, objetivoDirecto } from "./precios";
+import { analisisDePrecio, gananciaDeBanda, objetivoDirecto } from "./precios";
 import AplicarATodos from "./AplicarATodos";
 import { estaAtado, resumenDeCambio } from "./dolar";
 import { SelectorRedondeo } from "./TiendaNube";
@@ -282,11 +282,31 @@ export default function Catalogo({
 }) {
   const [consulta, setConsulta] = useState("");
   const [soloSinFoto, setSoloSinFoto] = useState(false);
+  const [soloFueraDeBanda, setSoloFueraDeBanda] = useState(false);
   const [porMargen, setPorMargen] = useState(false);
   const [nuevo, setNuevo] = useState("");
   const columnas = COLUMNAS_CATALOGO;
 
   const sinFoto = perfumes.filter((p) => !p.foto).length;
+
+  /* Los que se salieron de la banda que se aplicó la última vez — porque les
+     cambió el costo, casi siempre por el dólar. Solo se miran los que tienen
+     una ganancia fija puesta: uno con precio a mano o con margen clavado es una
+     excepción deliberada y no hay que darle la lata. Sin banda guardada no hay
+     nada que comparar y el botón ni aparece. */
+  const banda = ajustes?.bandaDirecta ?? null;
+  const fueraDeBanda = useMemo(() => {
+    if (!banda) return new Set();
+    return new Set(
+      perfumes
+        .filter((p) => {
+          if (!((Number(p.costo) || 0) > 0) || p.gananciaObjetivo == null) return false;
+          const g = gananciaDeBanda(p.costo, banda);
+          return g != null && Math.abs(Number(p.gananciaObjetivo) - g) > 1;
+        })
+        .map((p) => p.id)
+    );
+  }, [perfumes, banda]);
   const conPrecio = perfumes.filter((p) => (p.precioPublico || 0) > 0).length;
 
   /* El orden alfabético se recalcula solo cuando cambia el CONJUNTO de perfumes
@@ -297,7 +317,8 @@ export default function Catalogo({
   const orden = useRef({ clave: null, ids: [] });
 
   const visibles = useMemo(() => {
-    const base = soloSinFoto ? perfumes.filter((p) => !p.foto) : perfumes;
+    const conFiltro = soloFueraDeBanda ? perfumes.filter((p) => fueraDeBanda.has(p.id)) : perfumes;
+    const base = soloSinFoto ? conFiltro.filter((p) => !p.foto) : conFiltro;
     const filtrados = buscarPerfumes(base, consulta);
     const porId = new Map(filtrados.map((p) => [p.id, p]));
 
@@ -325,7 +346,7 @@ export default function Catalogo({
       };
     }
     return orden.current.ids.map((id) => porId.get(id)).filter(Boolean);
-  }, [perfumes, consulta, soloSinFoto, porMargen]);
+  }, [perfumes, consulta, soloSinFoto, porMargen, soloFueraDeBanda, fueraDeBanda]);
 
   const crear = () => {
     const nombre = nuevo.trim();
@@ -401,6 +422,27 @@ export default function Catalogo({
             {soloSinFoto && sinFoto === 0 ? "Ver todos" : `${sinFoto} sin foto`}
           </button>
         )}
+        {/* Los que se desalinearon de la banda. Óxido y no ámbar: es un "esto se
+            corrió", el mismo sentido con el que se marcan las filas huérfanas;
+            el ámbar sigue siendo sólo para la ganancia. Misma regla que el de
+            arriba: no desaparece mientras el filtro esté puesto. */}
+        {banda && (fueraDeBanda.size > 0 || soloFueraDeBanda) && (
+          <button
+            onClick={() => setSoloFueraDeBanda((v) => !v)}
+            aria-pressed={soloFueraDeBanda}
+            title={`La banda aplicada es ${pesos(banda.piso)} de piso, ${(banda.margen * 100)
+              .toFixed(0)
+              .replace(".", ",")}% de margen y ${pesos(banda.techo)} de techo. Estos quedaron con otra ganancia porque les cambió el costo.`}
+            className="k-col rounded-[3px] border px-3 py-[7px] transition"
+            style={{
+              borderColor: soloFueraDeBanda ? "var(--oxido)" : "var(--linea)",
+              color: soloFueraDeBanda ? "var(--oxido)" : "var(--humo)",
+              background: soloFueraDeBanda ? "#FDF6F4" : "transparent",
+            }}
+          >
+            {soloFueraDeBanda && fueraDeBanda.size === 0 ? "Ver todos" : `${fueraDeBanda.size} fuera de banda`}
+          </button>
+        )}
 
         <button
           onClick={() => setPorMargen((v) => !v)}
@@ -468,7 +510,11 @@ export default function Catalogo({
       {/* Solo la venta directa: ML y Tiendanube fijan lo suyo en sus pestañas. */}
       <AplicarATodos
         perfumes={visibles}
-        filtrado={!!consulta.trim() || soloSinFoto}
+        conBanda
+        banda={banda}
+        redondeo={ajustes?.redondeoDirecto ?? 1}
+        ajustesTN={ajustes?.tiendaNube}
+        filtrado={!!consulta.trim() || soloSinFoto || soloFueraDeBanda}
         onFijar={onFijarObjetivo}
         onConfirmar={onConfirmar}
         esAMano={(p) => objetivoDirecto(p) === null}

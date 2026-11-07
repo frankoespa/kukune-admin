@@ -43,7 +43,7 @@ import { registrarCosto } from "./historialCostos";
 import { aplicarDolar, atarAlDolar, conCostoEnPesos, costoAlDolar, costoUSDParaPasar, desatar, estaAtado } from "./dolar";
 import MercadoLibre from "./MercadoLibre";
 import PestanaTiendaNube from "./PestanaTiendaNube";
-import { resolverPrecios, resolverPreciosDelCatalogo } from "./precios";
+import { gananciaDeBanda, resolverPrecios, resolverPreciosDelCatalogo } from "./precios";
 import { NumberCell } from "./NumberCell";
 import { ContextoBloqueo, useBloqueo } from "./bloqueo";
 
@@ -1821,17 +1821,30 @@ export default function App() {
   /* Fijar el objetivo de la venta directa en uno o varios perfumes, en un solo
      `setPerfumes`: margen (fracción) o ganancia en pesos, uno borra al otro. Lo
      usan las celdas del catálogo y "Aplicar a todos". Gemelo de `fijarObjetivoTN`. */
-  const fijarObjetivoDirecto = (ids, { margen, ganancia }) => {
+  /* Con `banda` no se escribe el mismo número a todos: a cada perfume le toca la
+     ganancia que sale de SU costo (`gananciaDeBanda`), y lo que queda guardado
+     es una `gananciaObjetivo` común y corriente. La banda es la calculadora, no
+     un objetivo nuevo: por eso nada aguas abajo —`objetivoDirecto`, el resolver,
+     Tiendanube, ML— se entera de que existe.
+     La banda usada se guarda en `ajustes.bandaDirecta` para no retipear los tres
+     números y para poder marcar después a los que se salieron. */
+  const fijarObjetivoDirecto = (ids, { margen, ganancia, banda }) => {
     const cuales = new Set(ids);
     setPerfumes((ps) =>
       ps.map((p) => {
         if (!cuales.has(p.id)) return p;
         const { gananciaObjetivo, ...resto } = p;
+        if (banda) {
+          const g = gananciaDeBanda(p.costo, banda);
+          // Sin costo no hay banda que aplicar: la fila queda como estaba.
+          return g == null ? p : { ...resto, margenObjetivo: null, gananciaObjetivo: g };
+        }
         return ganancia != null
           ? { ...resto, margenObjetivo: null, gananciaObjetivo: ganancia }
           : { ...resto, margenObjetivo: margen };
       })
     );
+    if (banda) setAjustes((a) => ({ ...a, bandaDirecta: banda }));
   };
 
   /* El costo pasa por `registrarCosto`: deja asentado desde cuándo rige, para

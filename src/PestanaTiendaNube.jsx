@@ -9,6 +9,7 @@ import { actualizarVarianteTN, cambiosParaTN, enviarCodigoTN, estadoTN, leerCupo
 import { BandaConexionTN, CeldaTN, PanelActualizarTN } from "./ConexionTN";
 import CuponesTN from "./CuponesTN";
 import AplicarATodos from "./AplicarATodos";
+import EnvioGratisTN from "./EnvioGratisTN";
 
 /* ============================================================
    Tiendanube en su propia pestaña.
@@ -253,6 +254,14 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
         <AjustesTiendaNube tn={ajustes.tiendaNube} onCambiar={(tn) => onAjustes({ tiendaNube: tn })} onConfirmar={onConfirmar} />
       </div>
 
+      {/* El catálogo entero, no `visibles`: el envío lo paga todo lo que se
+          vende, no los resultados de la búsqueda. */}
+      <EnvioGratisTN
+        perfumes={perfumes}
+        tn={ajustes.tiendaNube}
+        onCambiar={(envioGratisDesde) => onAjustes({ tiendaNube: { ...ajustes.tiendaNube, envioGratisDesde } })}
+      />
+
       <AplicarATodos
         perfumes={visibles}
         filtrado={!!consulta.trim()}
@@ -354,13 +363,15 @@ function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, onFijarObjetivo
      RESULTA, sin la marca de clavado. */
   const porMargen = objetivo?.margen != null;
   const igualandoTN = objetivo?.igualarDirecto === true;
-  const envioTN = Number(ajustes.tiendaNube?.envioGratis) || 0;
   const tn = analisisTiendaNube({
     costo: perfume.costo,
     precio: precioTN,
     ajustesTN: ajustes.tiendaNube,
     formaId: objetivo?.formaId,
   });
+  /* Lo que se le descontó a ESTE precio: con monto mínimo, un perfume que no
+     llega al monto no paga envío porque lo paga el cliente. */
+  const envioTN = tn.envioAplicado;
   // Margen y ganancia de la forma que manda: la fijada, o la que menos deja.
   const formaManda = tn.manda >= 0 ? tn.formas[tn.manda].forma.nombre : null;
   const otraDejaMenos = tn.manda >= 0 && tn.define >= 0 && tn.manda !== tn.define;
@@ -538,7 +549,16 @@ function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, onFijarObjetivo
                     }" te queda menos, ${pesos(tn.ganancia)}.`
                   : `Con la forma de pago que más te cobra ("${tn.formas[tn.define].forma.nombre}") te quedan ${pesos(
                       tn.ganancia
-                    )}, ya descontado el costo${envioTN > 0 ? " y el envío gratis" : ""}. Con las demás, igual o más.`)
+                    )}, ya descontado el costo${envioTN > 0 ? " y el envío gratis" : ""}. Con las demás, igual o más.${
+                      tn.umbralEnvio > 0 && !tn.envioCalifica
+                        ? ` A este precio el envío lo paga el cliente: es gratis desde ${pesos(tn.umbralEnvio)}.`
+                        : ""
+                    }`) +
+                /* El retiro en mano no paga envío, así que deja esos pesos de
+                   más. El número de la celda sigue siendo el conservador. */
+                (envioTN > 0
+                  ? ` Si el cliente retira en Rosario no pagás envío: te quedan ${pesos(tn.gananciaManda + envioTN)}.`
+                  : "")
           }
         >
           {otraDejaMenos && (

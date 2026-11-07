@@ -123,6 +123,20 @@ export function AjustesTiendaNube({ tn, onCambiar, onConfirmar }) {
             />
           </div>
         </div>
+        {/* Desde qué compra lo paga el negocio. 0 = siempre, lo de siempre. El
+            monto se elige con la banda "Elegir el monto del envio gratis", que
+            lo tantea sin tocar este ajuste: acá cada tecla repreciaría todo. */}
+        <div className="block">
+          {rotulo("...a partir de")}
+          <div className="w-[104px]">
+            <CampoProtegido
+              valor={tn.envioGratisDesde || 0}
+              onCambiar={(v) => cambiar({ envioGratisDesde: Math.max(0, v) })}
+              mostrar={(v) => (Number(v) > 0 ? pesos(v) : "siempre")}
+              etiqueta="desde que monto el envio es gratis"
+            />
+          </div>
+        </div>
         <div className="block" title="Se suma a la comision de cada forma de pago, y lleva IVA">
           {rotulo("Comision TN")}
           <div className="w-[88px]">
@@ -161,9 +175,17 @@ export function AjustesTiendaNube({ tn, onCambiar, onConfirmar }) {
           <ChevronDown size={13} style={{ transform: abierto ? "rotate(180deg)" : undefined }} />
         </button>
       </div>
-      <p className="mt-1.5 max-w-[420px] text-[11px]" style={{ color: "var(--humo)" }}>
-        El envio gratis lo pagas vos: entra en la cuenta. El precio sale de la forma de pago
-        que mas te cobra.
+      <p className="mt-1.5 max-w-[460px] text-[11px]" style={{ color: "var(--humo)" }}>
+        {Number(tn.envioGratisDesde) > 0 ? (
+          <>
+            Desde {pesos(tn.envioGratisDesde)} el envio lo pagas vos y entra en la cuenta; abajo de
+            ese monto lo paga el cliente. Se mide contra el precio de lista por las unidades, antes
+            del cupon y del descuento del medio de pago.
+          </>
+        ) : (
+          <>El envio gratis lo pagas vos en toda venta: entra en la cuenta.</>
+        )}{" "}
+        El precio sale de la forma de pago que mas te cobra.
       </p>
 
       {abierto && (
@@ -331,7 +353,12 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
         })
       : base;
   const costo = Number(perfume.costo) || 0;
-  const envio = Number(tn.envioGratis) || 0;
+  /* Lo que se descontó de verdad en esta compra, no lo que cuesta el envío: con
+     monto mínimo puede ser cero porque lo paga el cliente. Sale del análisis que
+     se está mostrando, así que al simular una promo por cantidad se ve aparecer
+     el envío en el momento en que el carrito cruza el monto. */
+  const envio = r.envioAplicado;
+  const desdeEnvio = r.umbralEnvio;
   /* Igualar lo que paga una forma al precio de venta directa. El objetivo no es
      un margen ni una ganancia, así que la marca ámbar va en "Paga el cliente",
      que es el número que se iguala, y al lado se muestra contra qué. */
@@ -435,6 +462,26 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                 Lo define "{define.forma.nombre}", la que más te cobra. Con esa te quedan{" "}
                 <span className="k-num">{pesos(define.llega)}</span> ({pesos(costo)} de costo
                 {envio > 0 ? ` + ${pesos(envio)} de envío` : ""} + {pesos(define.ganancia)} de ganancia).
+              </p>
+            )}
+            {/* Quién paga el envío, en su propio renglón: vale para los dos
+                casos de arriba (forma fijada o no) y es lo que cambia con el
+                monto mínimo. Al simular una promo por cantidad se ve pasar de
+                uno al otro en el momento en que el carrito cruza el monto. */}
+            {desdeEnvio > 0 && (
+              <p className="mt-1 max-w-[640px] text-[12px]" style={{ color: "var(--humo)" }}>
+                {r.envioCalifica ? (
+                  <>
+                    Esta compra llega a <span className="k-num">{pesos(desdeEnvio)}</span>, así que el envío
+                    lo pagás vos: ya está descontado arriba.
+                  </>
+                ) : (
+                  <>
+                    Acá el envío lo paga el cliente: es gratis desde{" "}
+                    <span className="k-num">{pesos(desdeEnvio)}</span>
+                    {r.unidades > 1 ? " de compra" : ", y un frasco solo no llega"}.
+                  </>
+                )}
               </p>
             )}
             {indiceFija >= 0 && indiceFija !== base.define && define && (
@@ -858,6 +905,13 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                       f.ganancia === null ? "var(--humo-claro)" : f.ganancia >= 0 ? "var(--verde)" : "var(--oxido)";
                     // Sobre el costo de lo que se lleva: con un carrito de N, N costos.
                     const margenFila = f.ganancia === null || !(costo > 0) ? null : f.ganancia / (costo * r.unidades);
+                    /* Lo que queda si el cliente retira en Rosario: la misma
+                       ganancia sin el envío que se le restó. No es una cuenta
+                       nueva ni un objetivo —es el mismo número mirado sin el
+                       envío—, así que va de renglón chico al lado y no de
+                       columna. Solo cuando esta compra paga envío: si no, los
+                       dos números son el mismo y repetirlo es ruido. */
+                    const siRetira = f.ganancia === null || envio <= 0 ? null : f.ganancia + envio;
                     if (!editable || f.ganancia === null)
                       return (
                         <>
@@ -866,6 +920,11 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                             {r.unidades > 1 && f.ganancia !== null && (
                               <small className="block text-[10.5px] font-normal" style={{ color: "var(--humo)" }}>
                                 {pesos(f.gananciaPorUnidad)} c/u
+                              </small>
+                            )}
+                            {siRetira !== null && (
+                              <small className="block text-[10.5px] font-normal" style={{ color: "var(--ambar)" }}>
+                                {pesos(siRetira)} si retira
                               </small>
                             )}
                           </td>
@@ -898,6 +957,13 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                               style={porGanancia ? marca : undefined}
                             />
                           </div>
+                          {/* Debajo del campo: el que retira no es un objetivo
+                              que se fije, es la consecuencia del que sí. */}
+                          {siRetira !== null && (
+                            <small className="mt-0.5 block text-[10.5px]" style={{ color: "var(--ambar)" }}>
+                              {pesos(siRetira)} si retira
+                            </small>
+                          )}
                         </td>
                         <td className={td}>
                           <div
@@ -926,6 +992,13 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
             : indiceFija >= 0
               ? `El precio sale de "${tn.formas[indiceFija].nombre}", la forma que fijaste. Las demás pueden dejar más o menos.`
               : "El precio sale de la forma de pago que más te cuesta: con todas las demás ganás igual o más."}
+          {/* El segundo número de cada fila, explicado donde se lee. Va escrito
+              y no en un `title`: un gesto que hay que descubrir pasando el mouse
+              no existe (la lección del Stock del panel de publicar). */}
+          {envio > 0 &&
+            ` El segundo número de cada fila es lo que te queda si el cliente retira en mano: ahí no pagás los ${pesos(
+              envio
+            )} de envío.`}
           {editable && " Escribí el margen o la ganancia en una forma de pago para fijar el precio contra esa forma."}
           {onFijar && (conCupon || conPromo) && " Con un cupón o una promo puestos no se edita: sacalos para cambiar el margen o la ganancia."}
         </p>

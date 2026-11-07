@@ -26,9 +26,16 @@ export const CAMPOS_FICHA = [
   { id: "VERSION", nombre: "Versión", tipo: "texto" },
   { id: "UNIT_VOLUME", nombre: "Volumen", tipo: "numero", unidad: "mL", obligatorio: true },
   { id: "PERFUME_TYPE", nombre: "Tipo de perfume", tipo: "lista" },
+  { id: "APPLICATION_FORMAT", nombre: "Formato de aplicación", tipo: "lista" },
   { id: "GENDER", nombre: "Género", tipo: "lista" },
   { id: "GTIN", nombre: "Código de barras (GTIN)", tipo: "texto" },
   { id: "EMPTY_GTIN_REASON", nombre: "Si no tiene código, por qué", tipo: "lista" },
+  /* El SKU va como atributo `SELLER_SKU` y no como `seller_custom_field` del
+     ítem: ML acepta los dos, pero por acá entra al camino que ya existe —se
+     carga en el mismo formulario, viaja en `attributes` y `fichaDesdeAtributos`
+     lo lee de vuelta en Actualizar— sin una línea de código aparte. No lo ve
+     el comprador. */
+  { id: "SELLER_SKU", nombre: "SKU (tu código interno)", tipo: "texto" },
   { id: "OLFACTORY_FAMILIES", nombre: "Familias olfativas", tipo: "multi" },
   { id: "OLFACTORY_NOTES", nombre: "Notas olfativas", tipo: "notas" },
   { id: "ORIGIN_COUNTRY", nombre: "País de origen", tipo: "texto" },
@@ -38,6 +45,10 @@ export const CAMPOS_FICHA = [
   { id: "IS_REFILLABLE", nombre: "Es recargable", tipo: "siono" },
   { id: "IS_SET", nombre: "Es set", tipo: "siono" },
   { id: "IS_ALCOHOL_FREE", nombre: "Es libre de alcohol", tipo: "siono" },
+  { id: "IS_CRUELTY_FREE", nombre: "Es libre de crueldad", tipo: "siono" },
+  { id: "IS_VEGAN", nombre: "Es vegano", tipo: "siono" },
+  // El de ANMAT para cosméticos. Número suelto, sin unidad.
+  { id: "155_98_RESOLUTION_FILE_NUMBER", nombre: "Legajo resolución 155/98", tipo: "numero" },
 ];
 
 const vacio = (v) =>
@@ -86,12 +97,42 @@ export function tipoDePlan(plan) {
   throw new Error(`No sé publicar el plan ${plan}`);
 }
 
+/* La facturación (`sale_term` INVOICE) es una LISTA y además multivaluada: ML
+   la quiere como `values: [{id}]` con uno de estos ids, no como `value_name`.
+   Mandarle el nombre deja el valor en null y la publicación se rechaza con
+   "Sale term INVOICE has an invalid value (null)". Los ids salen de
+   `GET /categories/MLA1271/sale_terms` (verificados el 27/10/2026) y son los
+   mismos que tiene la publicación real del Musamam (6891888, "No factura"). */
+export const VALORES_FACTURA = [
+  { id: "6891885", nombre: "Factura A" },
+  { id: "6891886", nombre: "Factura B" },
+  { id: "6891887", nombre: "Factura C" },
+  { id: "6891888", nombre: "No factura" },
+];
+
+/* Lo guardado en `ajustes.publicacionML.factura` → el id que espera ML, o null.
+   Acepta el id, el nombre entero ("Factura C") y lo que Franco llegó a tipear
+   cuando el campo era de texto libre ("C", "no"): el ajuste viejo no se
+   reescribe y tiene que seguir significando lo mismo. */
+export function idDeFactura(valor) {
+  const v = String(valor ?? "").trim();
+  if (!v) return null;
+  const sinAcentos = sinTildes(v).toLowerCase();
+  const porId = VALORES_FACTURA.find((x) => x.id === v);
+  if (porId) return porId.id;
+  const porNombre = VALORES_FACTURA.find((x) => sinTildes(x.nombre).toLowerCase() === sinAcentos);
+  if (porNombre) return porNombre.id;
+  if (/^(no|sin)/.test(sinAcentos)) return "6891888";
+  const letra = sinAcentos.match(/^(?:factura\s*)?([abc])$/);
+  return letra ? VALORES_FACTURA.find((x) => x.nombre.toLowerCase().endsWith(letra[1])).id : null;
+}
+
 /* Condiciones comunes a todas las publicaciones (`ajustes.publicacionML`).
    El arranque es lo que tiene la publicación real del Musamam. */
 export const CONDICIONES_POR_DEFECTO = {
   garantiaTipo: "Garantía del vendedor",
   garantiaTiempo: "30 días",
-  factura: "No factura",
+  factura: "6891888", // No factura
   maxPorCompra: 2,
   paquete: { alto: 14, ancho: 19, largo: 14, peso: 700 }, // cm y g
 };
@@ -110,7 +151,7 @@ export function cuerpoDeItem({ ficha, plan, precio, stock, familyName, fotos, co
   const saleTerms = [
     c.garantiaTipo && { id: "WARRANTY_TYPE", value_name: c.garantiaTipo },
     c.garantiaTiempo && { id: "WARRANTY_TIME", value_name: c.garantiaTiempo },
-    c.factura && { id: "INVOICE", value_name: c.factura },
+    idDeFactura(c.factura) && { id: "INVOICE", values: [{ id: idDeFactura(c.factura) }] },
     Number(c.maxPorCompra) > 0 && { id: "PURCHASE_MAX_QUANTITY", value_name: String(Number(c.maxPorCompra)) },
   ].filter(Boolean);
   const p = c.paquete ?? {};
@@ -133,6 +174,11 @@ export function cuerpoDeItem({ ficha, plan, precio, stock, familyName, fotos, co
     condition: "new",
     ...(tags.length ? { tags } : {}),
     pictures: (fotos ?? []).map((id) => ({ id })),
+    // Mercado Envíos a cargo de ML (me2), como la publicación real del Musamam.
+    // Sin esto ML prueba con me1, que la cuenta de Franco no tiene, y avisa
+    // "User has not mode me1". Lo demás (si el envío es gratis, el
+    // `logistic_type`) lo resuelve ML según el precio y la cuenta.
+    shipping: { mode: "me2", local_pick_up: false },
     sale_terms: saleTerms,
     attributes: [...atributosDeFicha(ficha), ...paquete],
   };

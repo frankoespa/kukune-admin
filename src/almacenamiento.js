@@ -135,6 +135,9 @@ export const AJUSTES_POR_DEFECTO = {
   redondeoML: 1,
   tiendaNube: {
     envioGratis: 0,
+    /* Compra mínima para que el envío gratis lo pague el negocio. 0 (o sin la
+       clave) = siempre gratis, lo de siempre: abrir la app no reprecia nada. */
+    envioGratisDesde: 0,
     comision: 0, // la de Tiendanube, que se suma a la de cada forma de pago
     redondeo: 1000,
     // El % que se propone al mandar precios con promoción (precio tachado).

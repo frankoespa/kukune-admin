@@ -174,6 +174,33 @@ export function precioPublicoDesdeGanancia(costo, ganancia, redondeo = 1) {
   return Math.max(0, redondearPrecio(c + g, { redondeo, k: 1, costo: c }));
 }
 
+/* La banda de ganancia de la venta directa: `piso` y `techo` en pesos y
+   `margen` en fracción. La ganancia es el margen sobre el costo, pero nunca
+   menos que el piso ni más que el techo.
+
+   Existe porque una ganancia fija sola deja el margen desparramado —con
+   $30.000 parejos, un costo de $21.803 da 138% y uno de $69.831 da 43%— y un
+   margen solo le deja demasiado poco a los baratos, que dan el mismo trabajo
+   de empaquetar y despachar que los caros. El piso cubre eso y el techo evita
+   que un perfume caro se vaya de precio.
+
+   **No es un tipo de objetivo nuevo**: es la cuenta con la que se calcula la
+   `gananciaObjetivo` que se le guarda a cada perfume al aplicar la banda. Por
+   eso no la lee `objetivoDirecto()` ni el resolver. Una banda incompleta vale:
+   sin piso no hay mínimo, sin techo no hay máximo.
+   -> ganancia en pesos, o null si no hay costo o margen con qué contar. */
+export function gananciaDeBanda(costo, banda) {
+  const c = Number(costo) || 0;
+  const m = Number(banda?.margen);
+  if (!(c > 0) || !Number.isFinite(m)) return null;
+  let g = c * m;
+  const piso = Number(banda?.piso);
+  const techo = Number(banda?.techo);
+  if (Number.isFinite(piso) && piso > 0 && g < piso) g = piso;
+  if (Number.isFinite(techo) && techo > 0 && g > techo) g = techo;
+  return g;
+}
+
 /* El objetivo de la venta directa: ganancia fija en pesos (`gananciaObjetivo`)
    o margen (`margenObjetivo`). Si aparecieran los dos, manda la ganancia, igual
    que al resolver. `null` = precio a mano. Gemelo de `objetivoTN`. */
@@ -299,6 +326,28 @@ const aplicaTN = (forma, precio) => {
   return minimo <= 0 || precio * (1 - (Number(forma.descuento) || 0)) >= minimo;
 };
 
+/* Si el envío gratis sale gratis en esta compra. `envioGratisDesde` es la compra
+   mínima para que lo pague el negocio; 0 o ausente = siempre gratis, que es lo
+   de siempre. Es la ÚNICA definición de "¿califica?" de toda la app.
+
+   Se mide contra el SUBTOTAL: el precio publicado por las unidades, con la promo
+   por cantidad aplicada, ANTES del cupón y ANTES del descuento del medio de
+   pago. El descuento del medio de pago no puede ser la base — en el orden de
+   prioridad del Centro de Ayuda el envío gratis va 4° y ese descuento 5°, y se
+   elige en el checkout después de calcular el envío—; así que el que paga por
+   transferencia mira el mismo monto que los demás. Del cupón (3°) la ayuda no
+   dice nada, así que se toma la base MÁS ALTA, que es la pesimista: el carrito
+   califica más seguido, el envío lo paga el negocio más seguido y el monto que
+   sugiere la calculadora queda del lado seguro. Si algún día se confirma que
+   Tiendanube mide con el cupón ya restado, se cambia acá y en ningún otro lado.
+   -> { envio, desde, califica, aplicado } */
+export function envioDelCarrito(ajustesTN = {}, subtotal = 0) {
+  const envio = Number(ajustesTN.envioGratis) || 0;
+  const desde = Number(ajustesTN.envioGratisDesde) || 0;
+  const califica = desde <= 0 || subtotal >= desde;
+  return { envio, desde, califica, aplicado: califica ? envio : 0 };
+}
+
 /* Qué deja un precio con cada forma de pago.
    `define` es la forma que aplica y deja MENOS: la que manda en el precio.
    El margen es esa ganancia sobre el costo, así se compara de igual a igual con
@@ -331,10 +380,14 @@ export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon, forma
   const dCantidad = Math.min(0.99, Math.max(0, Number(carrito?.descuento) || 0));
   const c = (Number(costo) || 0) * unidades;
   const p = Number(precio) || 0;
-  const envio = Number(ajustesTN.envioGratis) || 0;
   const tn = Number(ajustesTN.comision) || 0;
   // La promo por cantidad va primero, sobre el precio de cada unidad.
   const subtotal = p * unidades * (1 - dCantidad);
+  /* El envío solo lo paga el negocio si la compra llega al monto mínimo; abajo
+     lo paga el cliente y no entra en la cuenta. Queda fuera de `paga` y `llega`:
+     el cliente no lo paga, sale de lo que llega. */
+  const { envio, desde: umbralEnvio, califica: envioCalifica, aplicado: envioAplicado } =
+    envioDelCarrito(ajustesTN, subtotal);
   const cuponPct = Math.min(1, Math.max(0, Number(cupon?.porcentaje) || 0));
   const cuponMonto = Math.max(0, Number(cupon?.monto) || 0);
   const cuponMinimo = Math.max(0, Number(cupon?.minimo) || 0);
@@ -371,8 +424,8 @@ export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon, forma
       tasaBase: base,
       tasaReal: real,
       llega,
-      ganancia: c > 0 && p > 0 ? llega - c - envio : null,
-      gananciaPorUnidad: c > 0 && p > 0 ? (llega - c - envio) / unidades : null,
+      ganancia: c > 0 && p > 0 ? llega - c - envioAplicado : null,
+      gananciaPorUnidad: c > 0 && p > 0 ? (llega - c - envioAplicado) / unidades : null,
     };
   });
 
@@ -399,6 +452,12 @@ export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon, forma
     gananciaPorUnidad: ganancia === null ? null : ganancia / unidades,
     subtotal,
     cuponAplica,
+    /* `envio` es lo que cuesta el envío y `envioAplicado` lo que se descontó: la
+       pantalla necesita los dos para poder decir "acá lo paga el cliente". */
+    envio,
+    umbralEnvio,
+    envioAplicado,
+    envioCalifica,
   };
 }
 
@@ -561,6 +620,17 @@ export function precioTNParaIgualarPago({ precioDirecto, costo, formaId, ajustes
    · Con `igualarDirecto`: no hay margen ni ganancia que despejar, el objetivo es
      lo que paga el cliente. Delega en `precioTNParaIgualarPago`, así el resolver
      y el popup siguen entrando por una sola puerta.
+
+   Con envío gratis A PARTIR DE UN MONTO el despeje es a DOS TRAMOS. La ganancia
+   como función del precio crece, da un salto hacia abajo de `envio` justo en el
+   monto, y vuelve a crecer; así que hasta dos precios cumplen el objetivo y se
+   quiere el más chico. `sin` es el precio que lo cumple suponiendo que el
+   cliente paga el envío: si no llega al monto, la suposición se cumple sola y
+   es el mínimo posible. Si llega, el envío lo paga el negocio y hay que sumarlo
+   (`con`, que también llega al monto porque el redondeo es monótono). No hay
+   caso imposible. El test va contra el precio YA REDONDEADO: el redondeo es
+   HACIA ARRIBA y un precio crudo de $99.600 con redondeo $1.000 se publica en
+   $100.000 y cruzaría un monto de $100.000 sin que nada lo avise.
    Devuelve `{ precio, define }` o null si no hay cuenta posible. */
 export function precioTiendaNubeDesdeObjetivo({
   costo,
@@ -578,7 +648,6 @@ export function precioTiendaNubeDesdeObjetivo({
   const formas = ajustesTN.formas ?? [];
   if (!formas.length) return null;
 
-  const objetivo = c + (Number(ajustesTN.envioGratis) || 0) + extra;
   const redondeo = Number(ajustesTN.redondeo) > 0 ? Number(ajustesTN.redondeo) : 1;
   const k = formas.map(
     (f) => (1 - (Number(f.descuento) || 0)) * (1 - comisionRealTN(f, ajustesTN))
@@ -586,37 +655,50 @@ export function precioTiendaNubeDesdeObjetivo({
   if (k.some((x) => !(x > 0))) return null;
 
   const fija = indiceFormaTN(formaId, ajustesTN);
-  if (fija >= 0) {
-    const precio = redondearPrecio(objetivo / k[fija], { redondeo, k: k[fija], costo: c });
-    return aplicaTN(formas[fija], precio) ? { precio, define: fija } : { precio, define: fija, noAplica: true };
-  }
 
-  const precioCon = (activas) => {
-    let necesario = 0;
-    let define = -1;
-    k.forEach((x, i) => {
-      if (!activas[i]) return;
-      const p = objetivo / x;
-      if (p > necesario) {
-        necesario = p;
-        define = i;
-      }
-    });
-    if (define < 0) return { precio: 0, define };
-    // El mismo redondeo que directo y ML, con el `k` de la forma que manda.
-    return { precio: redondearPrecio(necesario, { redondeo, k: k[define], costo: c }), define };
+  const despejar = (objetivo) => {
+    if (fija >= 0) {
+      const precio = redondearPrecio(objetivo / k[fija], { redondeo, k: k[fija], costo: c });
+      return aplicaTN(formas[fija], precio) ? { precio, define: fija } : { precio, define: fija, noAplica: true };
+    }
+
+    const precioCon = (activas) => {
+      let necesario = 0;
+      let define = -1;
+      k.forEach((x, i) => {
+        if (!activas[i]) return;
+        const p = objetivo / x;
+        if (p > necesario) {
+          necesario = p;
+          define = i;
+        }
+      });
+      if (define < 0) return { precio: 0, define };
+      // El mismo redondeo que directo y ML, con el `k` de la forma que manda.
+      return { precio: redondearPrecio(necesario, { redondeo, k: k[define], costo: c }), define };
+    };
+
+    let activas = formas.map((f) => !((Number(f.minimo) || 0) > 0));
+    let r = precioCon(activas);
+    for (let vuelta = 0; vuelta < 10; vuelta++) {
+      const siguientes = formas.map((f) => aplicaTN(f, r.precio));
+      if (siguientes.every((v, i) => v === activas[i])) break;
+      activas = siguientes;
+      r = precioCon(activas);
+    }
+    if (r.define < 0) return null;
+    return r;
   };
 
-  let activas = formas.map((f) => !((Number(f.minimo) || 0) > 0));
-  let r = precioCon(activas);
-  for (let vuelta = 0; vuelta < 10; vuelta++) {
-    const siguientes = formas.map((f) => aplicaTN(f, r.precio));
-    if (siguientes.every((v, i) => v === activas[i])) break;
-    activas = siguientes;
-    r = precioCon(activas);
-  }
-  if (r.define < 0) return null;
-  return r;
+  const { envio, desde } = envioDelCarrito(ajustesTN);
+  // Sin monto mínimo (o sin envío) el camino es el de siempre, bit por bit.
+  if (!(desde > 0) || !(envio > 0)) return despejar(c + envio + extra);
+
+  const sin = despejar(c + extra);
+  // `envioAlCliente`: este precio no llega al monto, así que el envío lo paga el
+  // cliente y la ganancia pedida queda entera.
+  if (sin && !sin.noAplica && sin.precio < desde) return { ...sin, envioAlCliente: true };
+  return despejar(c + envio + extra);
 }
 
 /* Qué planes de pago se publican: un pago siempre, más los que tengan comisión

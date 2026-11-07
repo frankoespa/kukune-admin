@@ -14,10 +14,12 @@ import {
 } from "./clienteML";
 import {
   CAMPOS_FICHA,
+  VALORES_FACTURA,
   condicionesDe,
   descripcionDesdeTxt,
   faltantes,
   fichaDesdeTxt,
+  idDeFactura,
   tipoDePlan,
   tituloDesdeTxt,
 } from "./armadoML";
@@ -243,20 +245,29 @@ export default function PublicarML({ perfume, ajustes, planes, onAjustes, onCamb
                 );
               })}
             </ul>
-            <div className="grid gap-3 md:grid-cols-[1fr_120px]">
-              <label className="block">
-                <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
-                  Nombre de la publicación ({familyName.trim().length}/120) · ML arma el título con esto
+            <label className="block">
+              <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
+                Nombre de la publicación ({familyName.trim().length}/120) · ML arma el título con esto
+              </span>
+              <input value={familyName} maxLength={120} onChange={(e) => setFamilyName(e.target.value)} className={campo} style={caja} />
+            </label>
+            {/* El stock tiene renglón propio: apretado al lado del nombre no se
+                veía y Franco lo dio por inexistente. Y que sea uno solo para
+                todos los planes se dice en pantalla, no en un `title` que nadie
+                llega a pasarle el mouse por encima. */}
+            <label className="mt-3 block">
+              <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
+                Stock · unidades que vas a publicar
+              </span>
+              <span className="flex items-center gap-3">
+                <span className="w-[120px] shrink-0">
+                  <NumberCell value={stock} onChange={(v) => setStock(Math.max(0, Math.round(v)))} />
                 </span>
-                <input value={familyName} maxLength={120} onChange={(e) => setFamilyName(e.target.value)} className={campo} style={caja} />
-              </label>
-              <label className="block" title="Uno solo para todos los planes: ML comparte el stock entre las publicaciones del mismo perfume">
-                <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
-                  Stock
+                <span className="text-[12px]" style={{ color: "var(--humo)" }}>
+                  Uno solo para todos los planes: ML comparte el stock entre las publicaciones del mismo perfume.
                 </span>
-                <NumberCell value={stock} onChange={(v) => setStock(Math.max(0, Math.round(v)))} />
-              </label>
-            </div>
+              </span>
+            </label>
             <label className="mt-3 block">
               <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
                 Descripción {carpeta && !txt && "· la carpeta no tiene publicacion_ml.txt"}
@@ -338,7 +349,25 @@ function Condiciones({ condiciones: c, onCambiar }) {
     <div className="mt-2 grid grid-cols-2 gap-3 rounded-[3px] border p-3 md:grid-cols-4" style={{ borderColor: "var(--zona-ml-honda)", background: "var(--zona-ml)" }}>
       {texto("garantiaTipo", "Tipo de garantía")}
       {texto("garantiaTiempo", "Tiempo de garantía")}
-      {texto("factura", "Factura")}
+      {/* Factura: lista cerrada, no texto libre. ML solo acepta uno de estos
+          cuatro ids; escrito a mano ("C") rechazaba la publicación entera. */}
+      <label className="block">
+        <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
+          Factura
+        </span>
+        <select
+          value={idDeFactura(c.factura) ?? ""}
+          onChange={(e) => onCambiar({ ...c, factura: e.target.value })}
+          className={campo}
+          style={caja}
+        >
+          {VALORES_FACTURA.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.nombre}
+            </option>
+          ))}
+        </select>
+      </label>
       <label className="block">
         <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
           Máximo por compra
@@ -354,8 +383,18 @@ function Condiciones({ condiciones: c, onCambiar }) {
 }
 
 function ResultadosValidacion({ resultados }) {
+  // El envío gratis obligatorio no es un problema de la publicación, es plata:
+  // a este precio lo paga el negocio. Va arriba de todo y una sola vez.
+  const envioGratis = resultados.some((r) => r.envioGratisObligatorio);
   return (
-    <ul className="mb-3 grid gap-1.5">
+    <>
+      {envioGratis && (
+        <p className="mb-2 rounded-[3px] border px-3 py-2 text-[12px]" style={{ borderColor: "var(--zona-ml-honda)", background: "var(--zona-ml)", color: "var(--tinta)" }}>
+          A este precio Mercado Libre obliga a <strong>envío gratis</strong>: el envío lo pagás vos. La ganancia que muestra la app ya lo
+          descuenta (el envío de los ajustes de ML).
+        </p>
+      )}
+      <ul className="mb-3 grid gap-1.5">
       {resultados.map((r) => (
         <li key={r.plan} className="rounded-[3px] border px-3 py-2 text-[12px]" style={{ borderColor: r.ok ? "var(--verde)" : "var(--oxido)" }}>
           <span className="flex items-center gap-1.5 font-medium" style={{ color: r.ok ? "var(--verde)" : "var(--oxido)" }}>
@@ -373,7 +412,8 @@ function ResultadosValidacion({ resultados }) {
           ))}
         </li>
       ))}
-    </ul>
+      </ul>
+    </>
   );
 }
 

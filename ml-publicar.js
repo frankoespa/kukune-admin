@@ -76,13 +76,31 @@ const cabecera = async (archivo) => {
 
 const espera = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/* Los avisos de ML vienen en `cause`: `type` error (bloquea) o warning. */
+/* Advertencias de ML que importan, en castellano. Son las que ML devuelve
+   siempre para esta cuenta y esta categoría, y en inglés parecen errores.
+   · lost_me1_by_user: la cuenta no tiene Mercado Envíos 1. No es un problema:
+     se publica con me2, que es el que usa el Musamam.
+   · mandatory_free_shipping: a este precio ML OBLIGA envío gratis, y el envío
+     lo paga el negocio. La cuenta de ganancia de la app ya lo descuenta
+     (`ajustes.envioML`), pero hay que decirlo: cambia la plata que queda. */
+const EN_CASTELLANO = {
+  "shipping.lost_me1_by_user": "Tu cuenta no tiene Mercado Envíos 1: se publica con Mercado Envíos 2, como el resto.",
+  "item.shipping.mandatory_free_shipping":
+    "A este precio Mercado Libre obliga a envío gratis: el envío lo pagás vos (la ganancia de la app ya lo descuenta).",
+};
+export const ENVIO_GRATIS_OBLIGATORIO = "item.shipping.mandatory_free_shipping";
+
+/* Los avisos de ML vienen en `cause`: `type` error (bloquea) o warning.
+   OJO: /items/validate devuelve 400 aunque la única causa sea una advertencia,
+   así que el `ok` del HTTP no sirve para decidir — manda `errores`. */
 const causas = (datos) => {
   const lista = Array.isArray(datos?.cause) ? datos.cause : [];
-  const errores = lista.filter((c) => c.type !== "warning").map((c) => c.message || c.code);
-  const advertencias = lista.filter((c) => c.type === "warning").map((c) => c.message || c.code);
+  const texto = (c) => EN_CASTELLANO[c.code] || c.message || c.code;
+  const errores = lista.filter((c) => c.type !== "warning").map(texto);
+  const advertencias = lista.filter((c) => c.type === "warning").map(texto);
+  const codigos = lista.map((c) => c.code).filter(Boolean);
   if (!lista.length && datos?.message) errores.push(datos.message);
-  return { errores, advertencias };
+  return { errores, advertencias, codigos };
 };
 
 export function crearPublicador({ ml, mlCrudo, raizDatos, base }) {
@@ -207,7 +225,17 @@ export function crearPublicador({ ml, mlCrudo, raizDatos, base }) {
     const resultados = [];
     for (const plan of p.planes) {
       const r = await mlCrudo("/items/validate", { method: "POST", body: JSON.stringify(cuerpoPara(p, plan, fotos)) });
-      resultados.push({ plan: plan.plan, ok: r.ok, ...causas(r.datos) });
+      // ML contesta 400 también cuando lo único que hay son advertencias (la
+      // cuenta sin me1, el envío gratis obligatorio), así que `r.ok` da falso
+      // con la publicación impecable: lo que decide es que no haya errores.
+      const { errores, advertencias, codigos } = causas(r.datos);
+      resultados.push({
+        plan: plan.plan,
+        ok: !errores.length,
+        errores,
+        advertencias,
+        envioGratisObligatorio: codigos.includes(ENVIO_GRATIS_OBLIGATORIO),
+      });
     }
     return { fotos, resultados };
   };

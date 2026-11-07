@@ -291,6 +291,72 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   muestra "Medido contra"). Fija margen o ganancia en los que se ven con costo
   (búsqueda y filtro "sin foto" incluidos), pisando los de precio a mano, con
   confirmación. **Solo venta directa**: ML y Tiendanube no se tocan.
+- **La banda de ganancia** (`gananciaDeBanda` en `precios.js`): cuarto modo de
+  "Aplicar a todos", **solo en el catálogo** (prop `conBanda`; Tiendanube no lo
+  muestra). Son tres números —**piso $ · margen % · techo $**— y la ganancia de
+  cada perfume es el margen sobre SU costo, nunca menos que el piso ni más que
+  el techo.
+  - Existe porque una ganancia fija sola desparrama el margen: con $30.000
+    parejos, el costo de $21.803 daba **138%** y el de $69.831 **43%**. Con
+    22.000 / 65% / 35.000 va de 101% a 50%.
+  - **No es un objetivo nuevo: es una calculadora.** Al aplicarla, a cada
+    perfume se le guarda una `gananciaObjetivo` común y corriente, y de ahí en
+    adelante todo sigue igual. Por eso `objetivoDirecto()`, el resolver,
+    Tiendanube y ML **no saben que existe**. Si algún día se quiere que mande
+    sola, eso sí sería un objetivo nuevo.
+  - **Se aplica a mano, no es una regla permanente** (decisión de Franco). Se
+    descartó el modelo de tramos con un corte de costo: daba un **escalón**
+    —$2 más de costo, $13.100 más de precio— y, como los costos están atados al
+    dólar, una cotización nueva cruzaría perfumes de tramo y les saltaría el
+    precio solo en los tres canales. La banda es monótona y no tiene saltos.
+  - La banda usada queda en **`ajustes.bandaDirecta`** (no está en
+    `AJUSTES_POR_DEFECTO`: la clave aparece recién al aplicar una, así que abrir
+    la app no escribe). Sirve para no retipear y para el contador de abajo.
+  - **"N fuera de banda"**, botón-filtro al lado de "N sin foto" y con su misma
+    regla (no desaparece con el filtro puesto; ahí dice "Ver todos"). Son los
+    que tienen costo **y `gananciaObjetivo` puesta** cuya ganancia ya no
+    coincide con la banda, casi siempre porque el dólar les movió el costo. Los
+    de precio a mano y los de margen clavado **no se cuentan**: son excepciones
+    deliberadas. Como "Aplicar a todos" trabaja sobre los que se ven, filtrar y
+    reaplicar es el mismo gesto de siempre. Va en **óxido**, no en ámbar: es un
+    "esto se corrió", como las filas huérfanas.
+  - La confirmación dice **cuántos caen en el piso, cuántos por margen y
+    cuántos en el techo**: si casi todos quedan en el piso, la banda está mal
+    elegida y es una ganancia fija disfrazada. Con los 36 reales y
+    22.000/65%/35.000 son 14 / 15 / 7.
+  - **La vista previa en vivo es lo que vuelve elegibles tres números
+    abstractos**, y por eso existe: Franco probó la banda y lo primero que dijo
+    fue "lo veo complicado de elegir". Debajo de los campos, recalculándose con
+    cada tecla: el reparto, el rango de margen, cuántos suben y bajan, y
+    —lo que más pesa para decidir— **cuánto ganás en total contra hoy**
+    (verde/óxido, nunca ámbar: es una comparación, no plata que te queda).
+    Encabezado y filas comparten **una sola constante** (`COLUMNAS_VISTA`), y el
+    bloque va con `w-max`: con el nombre en `flex-1` los números se iban al
+    borde derecho y costaba seguir el renglón.
+    Cada fila lleva **flecha y diferencia en color** (↑ verde sube, ↓ óxido
+    baja, "igual" en gris), con el mismo criterio que el total: plata que entra
+    o sale. Sin precio hoy no hay con qué comparar y la fila va sin color.
+    La **ganancia** que le toca a cada uno va en ámbar y pegada al margen —son
+    la misma cuenta mirada de dos maneras—, y es la columna donde mejor se ve
+    dónde deja de mandar el piso: una tira de números repetidos y, a partir de
+    ahí, creciendo.
+    Con Tiendanube configurado se suma **lo que deja ese canal** con el precio
+    nuevo, medido contra la forma que cada perfume tiene fijada; el rótulo la
+    nombra cuando todas miden contra la misma, que es el caso real
+    ("Transferencia · Pago Nube"). Hace falta porque los perfumes que **igualan
+    a la venta directa** cuelgan del precio directo: la banda les mueve también
+    Tiendanube y sin esta columna ese movimiento quedaba invisible. Se recalcula
+    igual que en `resolverPreciosDelCatalogo` —`objetivoTN` →
+    `precioTiendaNubeDesdeObjetivo` → `analisisTiendaNube`— y por eso
+    `AplicarATodos` recibe `ajustesTN`.
+    Abajo, tres perfumes de muestra con `costo · hoy → nuevo · margen · zona`:
+    **el más barato, el del medio y el más caro**, que son los tres en los que
+    se ve si la banda hace lo que se quiere. "Ver los N" despliega todos,
+    ordenados por costo.
+  - La línea de los **cruces** ("hasta $33.846 de costo manda el piso") es
+    aritmética pura de los tres números (`piso / margen` y `techo / margen`): no
+    mira el catálogo. El que cuenta perfumes es el reparto. Vale aclararlo
+    porque es la primera confusión que aparece.
 - El despeje es `precioPublicoDesdeMargen(costo, margen) = costo × (1 + margen)`.
   Acá no hace falta el de los pedidos porque vender directo no tiene comisión ni
   envío a cargo del negocio. El redondeo es el de `redondearPrecio()` (ver abajo).
@@ -553,8 +619,9 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   cuántos no se tocan. Escribe en el catálogo, no en Tiendanube.
 - Ajustes en `ajustes.tiendaNube`: `envioGratis` (uno para todo el catálogo; lo
   paga el negocio, **sí entra en la cuenta**, al revés del envío de Rosario),
-  `comision` (la de Tiendanube, se suma a la de cada forma), `redondeo` y
-  `formas: [{id, nombre, comision, descuento, minimo}]`.
+  `envioGratisDesde` (ver abajo), `comision` (la de Tiendanube, se suma a la de
+  cada forma), `redondeo` y `formas: [{id, nombre, comision, descuento, minimo}]`.
+
 - La comisión de cada forma se carga **sin IVA**, como la muestra el medio de
   pago; `comisionRealTN()` le aplica el 21%. Comisión + financiación o CPT se
   suman a mano en el mismo número.
@@ -644,6 +711,112 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   ejemplos": pisaba de un clic las formas que Franco había cargado.
 - Zona de color `--zona-tn` / `--zona-tn-honda`. No va al PDF de precios ni al
   orden "Por margen" (que siguen mirando la venta directa).
+
+## Envío gratis a partir de un monto (Tiendanube)
+- `ajustes.tiendaNube.envioGratisDesde` es la **compra mínima** para que el
+  envío lo pague el negocio. **0 o ausente = siempre gratis**, que es lo de
+  siempre: abrir la app no reprecia nada ni escribe. `envioGratis` sigue siendo
+  *cuánto cuesta*; esto es *desde cuándo lo pagás vos*.
+- **Contra qué monto se decide: el precio de lista, no lo que paga el cliente.**
+  La base es el `subtotal` —`precioTN` × unidades, con la promo por cantidad
+  aplicada—, **antes del cupón y antes del descuento del medio de pago**. El
+  descuento del medio de pago no puede ser la base: en el orden de prioridad del
+  Centro de Ayuda el envío gratis va 4° y ese descuento 5°, y se elige en el
+  checkout después de calcular el envío. Del cupón (3°) la ayuda pública **no
+  dice nada** —el artículo de envío gratis con monto mínimo ya no existe—, así
+  que se toma la base **más alta**, que es la pesimista: el carrito califica más
+  seguido, el envío lo pagás vos más seguido y el monto que sugiere la
+  calculadora queda del lado seguro. Lo del cupón sigue **sin confirmar**:
+  carrito apenas arriba del monto, elegir transferencia en el checkout y ver si
+  el envío sigue gratis. Todo esto vive en **una sola función**,
+  `envioDelCarrito()` en `precios.js`: darlo vuelta es una línea.
+- **El mínimo INCLUYE el monto exacto (`>=`), verificado en la tienda real** el
+  06/11/2026: con la promoción en `minimum_purchase: 120000` (leído por la API),
+  un producto de exactamente $120.000 sale con envío gratis. La ayuda pública no
+  lo define y las señales iban para los dos lados —el campo del panel figura
+  como "Mayor de", el equivalente en cupones dice "el monto a partir del cual
+  aplica"—, así que esto se probó y no se dedujo. Es lo que hace
+  `envioDelCarrito()` (`subtotal >= desde`).
+  Importa porque las sugerencias de la calculadora caen justo en el borde: "para
+  no dejar menos de $10.000" propone $104.600 y hay tres perfumes a exactamente
+  ese precio (Yum Yum, Untold, Tropical Vibe), que con la regla estricta no
+  calificarían y con ésta sí. La otra sugerencia ("que nadie califique solo")
+  suma un escalón al precio más caro, así que no depende de esto.
+- `analisisTiendaNube` resta `envioAplicado`, no `envioGratis`, y devuelve
+  `envio`, `umbralEnvio`, `envioAplicado` y `envioCalifica`. El envío sigue
+  **fuera de `paga` y `llega`** (el cliente no lo paga) y fuera de los mínimos
+  de las formas, que se miden contra `paga`.
+- **El despeje de `precioTiendaNubeDesdeObjetivo` es a dos tramos** (margen y
+  ganancia fija; `igualarDirecto` no cambia, ahí el envío nunca entró). La
+  ganancia como función del precio crece, da un salto hacia abajo de `envio`
+  justo en el monto y vuelve a crecer, así que hasta dos precios cumplen el
+  objetivo y se quiere el más chico: si el precio sin envío no llega al monto,
+  ése; si llega, el de con envío. No hay caso imposible.
+  **El test va contra el precio YA REDONDEADO**: el redondeo es hacia arriba y
+  un precio crudo de $99.600 con redondeo $1.000 se publica en $100.000 y
+  cruzaría un monto de $100.000 sin que nada lo avise. Probado con un barrido de
+  54.620 casos (dos redondeos, umbral de 0 a 300.000 de a 100): el objetivo se
+  cumple siempre y el precio es siempre el mínimo.
+- **La calculadora "¿desde qué monto?"**: `src/umbralEnvioTN.js`, puro y
+  probable desde Node. **No se puede llamar `envioGratisTN.js`**: en Windows
+  choca con `EnvioGratisTN.jsx` y el build falla con "default is not exported",
+  igual que `clienteML.js` con `MercadoLibre.jsx`.
+  - El riesgo del monto mínimo **no es** el perfume caro que se vende solo con
+    envío gratis —ése ya lo absorbe en su precio—, es el **carrito que cruza el
+    monto sumando frascos baratos que no lo absorbieron**. Por eso el número que
+    decide es **el peor carrito que califica**: si ése deja bien, ninguno deja mal.
+  - `gananciaDelCarrito` **no suma la ganancia de cada frasco por separado**:
+    una forma con mínimo no aplica a un frasco solo pero sí al carrito de dos, y
+    deja mucho menos, así que un carrito puede ser peor que sus partes
+    (verificado: con una forma al 40% desde $150.000, un frasco deja $5.443 y
+    dos dejan −$8.587 por unidad). Pasa todo por `analisisTiendaNube` con el
+    costo y el precio totales: una sola cuenta, imposible de desfasar.
+  - `carritosPosibles` enumera todos los carritos de hasta 4 frascos con
+    repetición **una sola vez** (no depende del monto), guarda por subtotal el
+    que menos deja y arma un mínimo por sufijo; después cada monto es una
+    búsqueda binaria. **No se poda por "ya califica, no lo extiendo"**: parece
+    obvio y es incorrecto, por lo mismo de arriba. Con 37 perfumes son 101.269
+    carritos, 2.917 subtotales y ~130 ms, y por eso el panel **solo enumera con
+    el panel abierto**.
+  - `analisisDelUmbral` devuelve el reparto, el peor carrito, el más barato que
+    califica solo, la ganancia total contra hoy, qué precios se moverían y dos
+    sugerencias: "que nadie califique solo" y "para no dejar menos de $X".
+- **El panel** es `src/EnvioGratisTN.jsx`, una banda de la pestaña (no de la caja
+  de ajustes), con el molde de la vista previa de la banda de ganancia. **El
+  monto se tantea con un campo local, no con el ajuste**: `NumberCell` escribe en
+  cada tecla y cada tecla sobre el ajuste repreciaría todo el catálogo clavado y
+  reiniciaría el temporizador del guardado. "Usar este monto" es el único que
+  escribe. El campo guardado ("...a partir de", en los ajustes) va con
+  `CampoProtegido` como el resto del canal.
+- Números del catálogo real al 06/11/2026, por si hay que verificar: ganancia de
+  hoy vendiendo uno de cada uno **$570.787**; el eslabón flojo es el **Rayhaan
+  Kiss** ($101.400 de precio, $55.909 de costo), que con envío gratis deja
+  $5.443; "nadie califica solo" da **$133.300** (+$370.000 contra hoy, peor
+  carrito 2× Kiss $202.800 que deja $20.886); para no dejar menos de $10.000,
+  **$104.600**; de $15.000, **$138.400**. Los 37 están con `igualarDirecto`, así
+  que **el monto no mueve ningún precio**: solo cambia cuánto queda.
+- **La ganancia si el cliente retira en Rosario** va de renglón chico, en ámbar,
+  debajo de la ganancia de cada forma de pago en `DetalleTiendaNube`, y el pie
+  del popup lo explica con palabras. Es `f.ganancia + envioAplicado`: **no hay
+  cuenta nueva**, es el mismo número mirado sin el envío, y por eso es un
+  renglón y no una columna. **Solo aparece cuando esa compra paga envío**: si no
+  llega al monto los dos números son el mismo y repetirlo es ruido. El `title`
+  de la celda Ganancia de la fila dice lo mismo en una oración.
+  Existe porque el supuesto de la app —toda venta paga $10.000— es parejo y el
+  retiro en mano no cuesta envío: la venta real del 06/11/2026 (Armaf Odyssey
+  Marshmallow, retiro en Rosario) dejó $25.837 y la app decía $15.864. El
+  supuesto **no se tocó**: sigue del lado conservador y ahora se ve al lado lo
+  que pasa en el otro caso. Un "% de retiros" no se agregó a propósito: con una
+  venta no hay con qué estimarlo, y el dato sale solo de las órdenes de
+  Tiendanube cuando haya unas cuantas.
+- Lo que la app **no** hace: escribir el monto en Tiendanube. La promoción de
+  envío gratis se configura en el panel; la app dice qué número poner.
+  **Franco ya lo puso en $120.000** (06/11/2026, promoción 813555), así que
+  `ajustes.tiendaNube.envioGratisDesde` tiene que quedar en ese mismo número o
+  las dos cuentas no coinciden. Con $120.000: 34 perfumes quedan debajo —el
+  envío lo paga el cliente—, siguen con envío gratis vendidos solos Hawas Verde
+  ($120.000 justo, que entra por ser inclusivo), Rayhaan Italia y 9PM Night Out,
+  y la ganancia sube **+$340.000** contra el envío gratis siempre.
 
 ## Conexión con Tiendanube
 - Mismo molde que ML: vincular cada perfume con su variante y mandarle precio y
@@ -897,6 +1070,27 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   `armadoML.js`; los valores de las listas salen de `/categories/MLA1271/attributes`.
   Al lado, solo de referencia, la ficha del texto (ver arriba). Se guarda en
   el perfume (`fichaML`, y `familyNameML`) al tocar Validar.
+- **Qué parte de ML cubre `CAMPOS_FICHA`, para no volver a preguntárselo**
+  (inventario del 27/10/2026 contra la API): MLA1271 declara **83 atributos**,
+  pero **56 son `hidden` y/o `read_only`** —los pone ML: marca destacada,
+  paquete de fábrica, tags de búsqueda, impuestos de otros países—. De los que
+  carga el vendedor, `CAMPOS_FICHA` tiene **23**, o sea todos los que le sirven
+  al negocio. Lo que queda afuera es a propósito: variaciones, tienda oficial,
+  suscripciones y loyalty, precios globales, y `VALUE_ADDED_TAX` /
+  `IMPORT_DUTY` (son para facturación y acá se publica "No factura"). Las
+  promociones, Mercado Ads y la garantía extendida no se cargan al crear el
+  ítem: se hacen después en ML.
+- **El SKU va como atributo `SELLER_SKU`, no como `seller_custom_field`.** ML
+  acepta los dos (probado con `/items/validate`), pero por el atributo entra al
+  camino que ya existe: se carga en el mismo formulario, viaja en `attributes`
+  y `fichaDesdeAtributos()` lo lee de vuelta en Actualizar, sin código aparte.
+  No lo ve el comprador. Lo mismo vale para cualquier campo nuevo: si ML lo
+  expone como atributo de la categoría, **agregarlo es un renglón en
+  `CAMPOS_FICHA` y nada más** — `CampoFicha` ya resuelve texto, numero, lista,
+  multi, siono y notas, y los dos paneles son un `CAMPOS_FICHA.map(...)`.
+- `PURCHASE_MAX_QUANTITY` (máximo por compra) figura **`read_only`** en la
+  categoría, aunque la app lo manda, ML no se queja y el Musamam lo tiene en 2.
+  Puede ser que lo ignore en silencio. Mirarlo recién con una publicación real.
 - Lo que pide ML (doc + la publicación real del Musamam): categoría **MLA1271**.
   La cuenta está en **User Products** (`user_product_seller`): **no se manda
   `title`, se manda `family_name`** y ML arma el título. Obligatorios: BRAND,
@@ -906,6 +1100,37 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - **Condiciones** (garantía, factura, máximo por compra, medidas del paquete) en
   `ajustes.publicacionML`, editables en el panel. El arranque
   (`CONDICIONES_POR_DEFECTO`) es lo que tiene la publicación del Musamam.
+- **La facturación (`sale_term` INVOICE) es una lista multivaluada**: va como
+  `values: [{id}]`, nunca `value_name`. Con el nombre, ML deja el valor en
+  `null` y rechaza la publicación entera ("Sale term INVOICE has an invalid
+  value (null). Allowed values are [6891885, 6891886, 6891887, 6891888]"). Los
+  cuatro ids son Factura A/B/C y No factura, en ese orden
+  (`VALORES_FACTURA` en `armadoML.js`, de `GET /categories/MLA1271/sale_terms`,
+  verificados contra la publicación real del Musamam: 6891888). Por eso el
+  campo Factura del panel es un **desplegable, no texto libre**: escrito a mano
+  ("C") no era un valor de ML. `idDeFactura()` traduce lo que haya guardado
+  —id, nombre o lo tipeado— así que el ajuste viejo no se reescribe.
+  El resto de los `sale_terms` (garantía, máximo por compra) **sí** van con
+  `value_name`: no son multivaluados.
+- **El envío va explícito: `shipping: {mode: "me2", local_pick_up: false}`**,
+  como el Musamam. Sin eso ML prueba con me1, que la cuenta de Franco no tiene.
+  Si es gratis y con qué `logistic_type` lo decide ML, no la app.
+- **`/items/validate` contesta 400 aunque lo único que haya sean advertencias**,
+  así que el `ok` del HTTP da falso con la publicación impecable. Lo que decide
+  es que no haya causas de `type: "error"` — por eso `validar()` arma su `ok`
+  desde `errores`, no desde `r.ok`. Las dos advertencias que esta cuenta recibe
+  siempre van traducidas (`EN_CASTELLANO` en `ml-publicar.js`): "no tenés me1"
+  (no es un problema) y **"envío gratis obligatorio"**, que sí importa porque
+  es plata: a ese precio ML obliga a envío gratis y lo paga el negocio. El
+  panel lo avisa arriba de los resultados; la ganancia de la app ya lo
+  descuenta con `ajustes.envioML`.
+- **El Stock tiene renglón propio en el paso 3**, con la aclaración al lado en
+  pantalla ("uno solo para todos los planes: ML comparte el stock entre las
+  publicaciones del mismo perfume"). Antes era una columna de 120px apretada a
+  la derecha del nombre de la publicación, con esa aclaración en un `title`:
+  Franco lo usó y dio por hecho que **no se podía poner el stock**. La lección
+  sirve para todo el panel: lo que explica un campo va escrito, no en un
+  `title` que nadie va a descubrir pasando el mouse.
 - **Validar no publica**: sube las fotos y corre `POST /items/validate` por plan.
   ML **no tiene sandbox**: lo publicado es real. "Publicar N" se habilita solo si
   todo validó, cualquier cambio obliga a validar de nuevo, y pide confirmación.
