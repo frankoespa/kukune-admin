@@ -12,6 +12,7 @@ import {
   indiceFormaTN,
   IVA,
   objetivoTN,
+  precioOfertaTN,
   precioTiendaNubeDesdeObjetivo,
   resultadoDeCanal,
 } from "./precios";
@@ -94,7 +95,7 @@ export function SelectorRedondeo({ valor, onCambiar }) {
    Todo lo que se tipea va detrás de un doble clic (`CampoProtegido`): cada uno
    de estos números mueve el precio de todos los perfumes con margen clavado.
    Quitar una forma de pago pide confirmación, por la misma razón. */
-export function AjustesTiendaNube({ tn, onCambiar, onConfirmar }) {
+export function AjustesTiendaNube({ tn, onCambiar, onConfirmar, categorias = null }) {
   const [abierto, setAbierto] = useState(false);
   // La forma recién agregada nace con el nombre abierto para escribir.
   const [recienCreada, setRecienCreada] = useState(null);
@@ -164,6 +165,35 @@ export function AjustesTiendaNube({ tn, onCambiar, onConfirmar }) {
             />
           </div>
         </div>
+        {/* La categoría que arma la sección Ofertas de la web: al mandar precios,
+            los perfumes en oferta entran y los que dejaron de estarlo salen. No
+            mueve ningún precio, así que va sin candado. Solo con la tienda
+            conectada: la lista sale de ahí. */}
+        {categorias && (
+          <label className="block" title="Los perfumes en oferta entran a esta categoría al mandar los precios, y salen cuando les sacás la oferta. Creala en el panel de Tiendanube.">
+            {rotulo("Categoria de ofertas")}
+            <select
+              value={tn.categoriaOfertas ?? ""}
+              onChange={(e) => {
+                const valor = e.target.value;
+                const { categoriaOfertas, ...resto } = tn;
+                onCambiar(valor ? { ...resto, categoriaOfertas: Number(valor) } : resto);
+              }}
+              className="max-w-[200px] rounded-[3px] border px-1.5 py-[5px] text-[12.5px]"
+              style={{ background: "var(--papel)", borderColor: "var(--linea)", color: "var(--tinta)" }}
+            >
+              <option value="">Ninguna</option>
+              {tn.categoriaOfertas != null && !categorias.some((c) => String(c.id) === String(tn.categoriaOfertas)) && (
+                <option value={tn.categoriaOfertas}>(ya no existe)</option>
+              )}
+              {categorias.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.nombre}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <button
           type="button"
           onClick={() => setAbierto((v) => !v)}
@@ -306,8 +336,18 @@ function FilaForma({ forma, tn, nueva, onCambiar, onQuitar }) {
    fija el objetivo del perfume contra ESA forma (`formaTN`) y el precio se
    despeja solo. `precio` llega ya resuelto desde la lista, así que al tipear se
    ven el precio y todas las filas nuevas. */
-export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSoltar, cuponesTienda = [], productosTN = [] }) {
+export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSoltar, onOferta, cuponesTienda = [], productosTN = [] }) {
   const [copiado, setCopiado] = useState(false);
+  /* Oferta REAL: el tachado es este precio y el cliente paga menos. El % se
+     tantea acá (estado local, en número: 15 = 15%) y solo "Poner en oferta"
+     escribe en el catálogo —cada tecla no reescribe el archivo—. Arranca con la
+     guardada, así al abrir se ve lo que hoy deja. */
+  const guardada = perfume.ofertaTN ? +(Number(perfume.ofertaTN.descuento) * 100).toFixed(1) : 0;
+  const [pctOferta, setPctOferta] = useState(guardada);
+  const precioOferta = precioOfertaTN(precio, pctOferta / 100, tn.redondeo ?? 1);
+  const conOferta = precioOferta != null;
+  // Lo que paga el frasco antes de cupones y medio de pago.
+  const precioCompra = conOferta ? precioOferta : precio;
   /* Cupón simulado: vale para todas las formas de pago y se acumula con su
      descuento. Es una prueba —vive solo mientras el panel está abierto— y no
      toca ningún precio. Porcentaje en número entero (10 = 10%), monto en pesos.
@@ -340,10 +380,10 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
   // Un cupón de la tienda que es para otros productos no se aplica.
   const cuponEnCuenta = conCupon && alcance !== "no";
   const r =
-    cuponEnCuenta || conPromo
+    cuponEnCuenta || conPromo || conOferta
       ? analisisTiendaNube({
           costo: perfume.costo,
-          precio,
+          precio: precioCompra,
           ajustesTN: tn,
           formaId,
           carrito,
@@ -374,8 +414,8 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
     ? precioTiendaNubeDesdeObjetivo({ costo, precioDirecto, ...objetivo, ajustesTN: tn })
     : null;
   // Con un cupón o una promo puestos los números son otros: se edita sin ellos.
-  const editable = !!onFijar && !conCupon && !conPromo && costo > 0;
-  const simulando = (conCupon && cuponEnCuenta) || conPromo;
+  const editable = !!onFijar && !conCupon && !conPromo && !conOferta && costo > 0;
+  const simulando = (conCupon && cuponEnCuenta) || conPromo || conOferta;
 
   useEffect(() => {
     const tecla = (e) => e.key === "Escape" && onCerrar();
@@ -438,7 +478,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
             {r.ganancia !== null && (
               <p className="mt-1 text-[12.5px] font-semibold" style={{ color: r.ganancia >= 0 ? "var(--ambar)" : "var(--oxido)" }}>
                 {simulando
-                  ? `Con ${[conPromo && "la promo", cuponEnCuenta && r.cuponAplica && "el cupón"].filter(Boolean).join(" y ")} ganás al menos `
+                  ? `Con ${[conOferta && "la oferta", conPromo && "la promo", cuponEnCuenta && r.cuponAplica && "el cupón"].filter(Boolean).join(" y ")} ganás al menos `
                   : "Vas a ganar al menos "}
                 <span className="k-num">{pesos(r.ganancia)}</span> {r.unidades > 1 ? `por el carrito de ${r.unidades}` : "por venta"}
                 {r.unidades > 1 && (
@@ -594,6 +634,69 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                 )}
               </div>
             )}
+            {/* Oferta real. Va primero porque es lo primero que se aplica: el
+                precio promocional es el precio del producto en el carrito, y
+                la promo, el cupón y el medio de pago van encima. */}
+            {onOferta && (
+              <div className="mt-3 rounded-[4px] border px-3 py-2.5" style={{ borderColor: "var(--zona-tn-honda)", background: "var(--papel)" }}>
+                <div className="flex flex-wrap items-end gap-2">
+                  <span className="k-col pb-2" style={{ color: "var(--tinta)" }}>
+                    Oferta
+                  </span>
+                  <label className="block w-[80px]" title="Descuento de la oferta sobre el precio de Tiendanube">
+                    <NumberCell value={pctOferta} onChange={(v) => setPctOferta(Math.max(0, Math.min(90, v)))} suffix="%" />
+                  </label>
+                  {conOferta ? (
+                    <span className="pb-2 text-[12.5px]" style={{ color: "var(--tinta)" }}>
+                      se ve <span className="k-num line-through" style={{ color: "var(--humo)" }}>{pesos(precio)}</span>{" "}
+                      y paga <b className="k-num">{pesos(precioOferta)}</b>
+                      <span style={{ color: "var(--humo)" }}>
+                        {" "}
+                        · <span className="k-num">{pctSinMiles(1 - precioOferta / precio, 1)}</span> OFF en la tienda
+                      </span>
+                    </span>
+                  ) : pctOferta > 0 ? (
+                    <span className="pb-2 text-[12px]" style={{ color: "var(--oxido)" }}>
+                      Con ese % el precio no baja.
+                    </span>
+                  ) : null}
+                  {conOferta && pctOferta !== guardada && (
+                    <button
+                      type="button"
+                      onClick={() => onOferta({ descuento: pctOferta / 100, desde: perfume.ofertaTN?.desde ?? new Date().toISOString() })}
+                      className="k-col mb-1 rounded-[3px] px-2.5 py-[5px] text-white transition"
+                      style={{ background: "var(--tinta)" }}
+                    >
+                      {perfume.ofertaTN ? "Cambiar la oferta" : "Poner en oferta"}
+                    </button>
+                  )}
+                  {perfume.ofertaTN && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onOferta(undefined);
+                        setPctOferta(0);
+                      }}
+                      className="k-col mb-1 rounded-[3px] border px-2.5 py-[5px] transition"
+                      style={{ borderColor: "var(--linea)", color: "var(--humo)", background: "var(--papel)" }}
+                    >
+                      Sacar de la oferta
+                    </button>
+                  )}
+                </div>
+                <span className="mt-1 block text-[11px]" style={{ color: "var(--humo)" }}>
+                  {perfume.ofertaTN && pctOferta === guardada
+                    ? `En oferta desde el ${new Date(perfume.ofertaTN.desde).toLocaleDateString("es-AR")}. `
+                    : conOferta
+                      ? "Todavía no está guardada: los números de abajo son una prueba. "
+                      : ""}
+                  El precio tachado es el de Tiendanube y el de oferta se redondea hacia abajo, así el % que se ve nunca es menor al
+                  que pusiste. El descuento del medio de pago se suma encima. A la tienda va con "Actualizar precios en
+                  Tiendanube", que también lo mete en la categoría de ofertas si la elegiste.
+                </span>
+              </div>
+            )}
+
             {/* Promoción por cantidad: va antes del cupón, como en Tiendanube. */}
             <div className="mt-3 flex flex-wrap items-end gap-2">
               <span className="k-col pb-2" style={{ color: "var(--tinta)" }}>
@@ -643,7 +746,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
               )}
               {conPromo && (
                 <span className="w-full text-[11px]" style={{ color: "var(--humo)" }}>
-                  Se cuenta el carrito entero: {carrito.unidades} frascos a {pesos(precio)} con −{pctSinMiles(carrito.descuento, 1)}, un solo envío,
+                  Se cuenta el carrito entero: {carrito.unidades} frascos a {pesos(precioCompra)} con −{pctSinMiles(carrito.descuento, 1)}, un solo envío,
                   y después el cupón y el descuento del medio de pago (se supone que la promo se combina con ellos).
                 </span>
               )}
@@ -831,6 +934,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                       // Qué se descontó del precio: el de la forma y el del cupón.
                       // En el orden en que se aplican: primero el cupón.
                       const partes = [];
+                      if (conOferta) partes.push(`−${pctSinMiles(1 - precioOferta / precio, 1)} oferta`);
                       if (conPromo) partes.push(`−${pctSinMiles(carrito.descuento, 1)} promo`);
                       const cuponVa = cuponEnCuenta && r.cuponAplica;
                       if (cuponVa && cupon.porcentaje > 0) partes.push(`−${porcentaje(cupon.porcentaje / 100)} cupón`);
@@ -1000,7 +1104,8 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
               envio
             )} de envío.`}
           {editable && " Escribí el margen o la ganancia en una forma de pago para fijar el precio contra esa forma."}
-          {onFijar && (conCupon || conPromo) && " Con un cupón o una promo puestos no se edita: sacalos para cambiar el margen o la ganancia."}
+          {onFijar && (conCupon || conPromo || conOferta) &&
+            " Con una oferta, un cupón o una promo puestos no se edita: poné la oferta en 0% (sin guardar) o sacalos para cambiar el margen o la ganancia del precio normal."}
         </p>
       </div>
     </div>,

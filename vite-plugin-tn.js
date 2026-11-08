@@ -22,6 +22,8 @@ import { loadEnv } from "vite";
    · POST /api/tn/autorizar/codigo          {pegado} → canjea el código (dura 5 min)
    · GET  /api/tn/productos                 todos los productos con sus variantes
    · PUT  /api/tn/variantes/<prod>/<var>    {price?, promotional_price?, stock?} (ESCRIBE)
+   · GET  /api/tn/categorias                -> {categorias: [{id, nombre}]}
+   · PUT  /api/tn/productos/<prod>/categorias {agregar|quitar: id}   (ESCRIBE)
    · GET  /api/tn/cupones                   los cupones de la tienda (permiso de cupones)
    · POST /api/tn/cupones                   crea un cupón (ESCRIBE)
    · PUT  /api/tn/cupones/<id>              cambia un cupón, solo lo que cambió (ESCRIBE)
@@ -234,6 +236,39 @@ export default function pluginTN() {
       return (Array.isArray(r) ? r : []).find((v) => String(v.id) === String(variante)) ?? actual;
     };
 
+    /* Las categorías de la tienda (solo id y nombre), todas las páginas. */
+    const categorias = async () => {
+      const lista = [];
+      for (let pagina = 1; pagina <= 20; pagina++) {
+        let r;
+        try {
+          r = await tn(`/categories?per_page=${POR_PAGINA}&page=${pagina}&fields=id,name,parent`);
+        } catch (e) {
+          if (e.codigo === 404 && pagina > 1) break;
+          throw e;
+        }
+        lista.push(...r.map((c) => ({ id: c.id, nombre: nombreDe(c.name), padre: c.parent ?? null })));
+        if (r.length < POR_PAGINA) break;
+      }
+      return lista;
+    };
+
+    /* Meter o sacar un producto de UNA categoría sin tocar las demás. En
+       `PUT /products/<id>` el campo `categories` REEMPLAZA la lista entera (doc
+       "Product" 2025-03: mandarla vacía deja el producto sin categorías), así
+       que se relee la lista actual justo antes y se manda completa. Si no
+       cambia nada, no se escribe. */
+    const moverCategoria = async (producto, { agregar, quitar }) => {
+      const id = Number(agregar ?? quitar);
+      if (!(id > 0)) throw new ErrorTN(400, "Falta la categoría");
+      const actual = await tn(`/products/${producto}?fields=id,categories`);
+      const ids = (actual.categories ?? []).map((c) => Number(typeof c === "object" ? c.id : c));
+      const nuevas = agregar != null ? (ids.includes(id) ? ids : [...ids, id]) : ids.filter((x) => x !== id);
+      if (nuevas.length === ids.length && nuevas.every((x, i) => x === ids[i])) return { categorias: ids, cambio: false };
+      const r = await tn(`/products/${producto}`, { method: "PUT", body: JSON.stringify({ categories: nuevas }) });
+      return { categorias: (r.categories ?? []).map((c) => (typeof c === "object" ? c.id : c)), cambio: true };
+    };
+
     const cuerpo = async (req) => {
       const partes = [];
       for await (const parte of req) partes.push(parte);
@@ -325,6 +360,10 @@ export default function pluginTN() {
             throw sinPermiso(e);
           }
         }
+
+        if (req.method === "GET" && ruta === "/categorias") return responder(res, { categorias: await categorias() });
+        const mcat = ruta.match(/^\/productos\/(\d+)\/categorias$/);
+        if (req.method === "PUT" && mcat) return responder(res, await moverCategoria(mcat[1], await cuerpo(req)));
 
         const m = ruta.match(/^\/variantes\/(\d+)\/(\d+)$/);
         if (req.method === "PUT" && m) {

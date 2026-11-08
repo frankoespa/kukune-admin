@@ -132,6 +132,31 @@ export function precioTachadoTN(precio, descuento, redondeo = 1) {
   return Math.ceil(p / (1 - d) / r - 1e-9) * r;
 }
 
+/* Oferta REAL de Tiendanube (`perfume.ofertaTN = { descuento, desde }`): al
+   revés que la promoción inflada de arriba, el tachado es el precio de
+   Tiendanube de siempre (`precioTN`) y el cliente paga menos. El precio de
+   oferta se redondea HACIA ABAJO al redondeo del canal, así el % que se ve en la
+   tienda es igual o un poco mayor al anunciado, nunca menor.
+   -> el precio de oferta, o null si no hay precio, el % no tiene sentido o no
+   queda por debajo del normal. */
+export function precioOfertaTN(precio, descuento, redondeo = 1) {
+  const p = Number(precio) || 0;
+  const d = Number(descuento) || 0;
+  if (!(p > 0) || !(d > 0) || !(d < 1)) return null;
+  const r = Number(redondeo) > 1 ? Number(redondeo) : 1;
+  const oferta = Math.floor((p * (1 - d)) / r + 1e-9) * r;
+  return oferta > 0 && oferta < p ? oferta : null;
+}
+
+/* El precio de oferta de un perfume, o null si no está en oferta. */
+export const ofertaDeTN = (perfume, ajustesTN = {}) =>
+  perfume?.ofertaTN ? precioOfertaTN(perfume.precioTN, perfume.ofertaTN.descuento, ajustesTN.redondeo ?? 1) : null;
+
+/* Lo que paga de verdad el cliente en Tiendanube por un frasco (antes del
+   descuento del medio de pago y de cupones): el de oferta si hay, si no el
+   normal. Es la base para todo lo que se aplica DESPUÉS, como un cupón real. */
+export const pagaEnTN = (perfume, ajustesTN = {}) => ofertaDeTN(perfume, ajustesTN) ?? (Number(perfume?.precioTN) || 0);
+
 /* El descuento que se ve en la tienda con un precio tachado: 1 − precio ÷ tachado. */
 export const descuentoVisto = (precio, tachado) =>
   Number(tachado) > 0 && Number(precio) > 0 ? 1 - Number(precio) / Number(tachado) : null;
@@ -520,15 +545,17 @@ export function impactoDeCupon(c, perfumes, ajustesTN, productosTN = []) {
   const filas = [];
   const noSeSabe = [];
   for (const p of perfumes ?? []) {
-    if (!(Number(p.costo) > 0) || !(Number(p.precioTN) > 0)) continue;
+    // Un cupón real se aplica sobre lo que paga: con oferta, sobre el promocional.
+    const precio = pagaEnTN(p, ajustesTN);
+    if (!(Number(p.costo) > 0) || !(precio > 0)) continue;
     const alcance = aQuienAplica(c, p, productosTN);
     if (alcance === "no") continue;
     if (alcance === "no se sabe") {
       noSeSabe.push(p);
       continue;
     }
-    const con = analisisTiendaNube({ costo: p.costo, precio: p.precioTN, ajustesTN, cupon });
-    const sin = analisisTiendaNube({ costo: p.costo, precio: p.precioTN, ajustesTN });
+    const con = analisisTiendaNube({ costo: p.costo, precio, ajustesTN, cupon });
+    const sin = analisisTiendaNube({ costo: p.costo, precio, ajustesTN });
     if (con.ganancia === null) continue;
     // Cada forma por separado: un cupón no combinable le saca el descuento a
     // algunas y se lo deja a otras, así que no se mueven todas igual.

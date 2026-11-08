@@ -1087,6 +1087,57 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   vincular, prender y apagar promociones, stock con y sin varias ubicaciones.
   Con la tienda real, primero solo leer; los primeros cambios los hace Franco.
 
+## Ofertas en Tiendanube
+- **Dos cosas distintas que se ven parecido en la tienda.** La "promoción" del
+  panel de Actualizar es **inflada**: el cliente paga `precioTN` y el `price` se
+  infla para mostrarse tachado. La ganancia no cambia, es vidriera. La
+  **oferta** es de verdad (pedido de Franco, para la sección Ofertas de la web):
+  el tachado es `precioTN` y el cliente paga menos. Son excluyentes por perfume.
+- `ofertaTN: { descuento, desde }` en el perfume (fracción; `desde` es solo
+  informativo). Sin la clave = sin oferta, sin migración, abrir no escribe.
+  **Sin fecha de fin** (decisión de Franco): dura hasta que se saca.
+- `precioTN` sigue siendo el precio normal y sigue saliendo de su objetivo; la
+  oferta cuelga de él. `precioOfertaTN(precio, d, redondeo)` en `precios.js`
+  redondea **hacia abajo** al redondeo de Tiendanube (el % que se ve nunca es
+  menor al anunciado: 15% de $123.000 con $1.000 → $104.000, se ve 15,4%).
+  `ofertaDeTN(perfume, ajustesTN)` y `pagaEnTN()` son los atajos.
+- Lo que queda: `analisisTiendaNube({precio: oferta})`, sin tocarlo. El
+  promocional es el precio del producto en el carrito, así que envío desde un
+  monto, mínimos y descuento del medio de pago (combina con el promocional) salen
+  solos. `impactoDeCupon` mide sobre `pagaEnTN`: un cupón real va sobre el
+  promocional.
+- **Se pone y se saca en el detalle del precio** (`DetalleTiendaNube`, bloque
+  "Oferta"): el % se tantea en estado local y solo "Poner en oferta" escribe en
+  el catálogo. Con el % puesto la tabla muestra lo que deja cada forma con la
+  oferta y no se edita el margen (es el del precio normal). En la fila: renglón
+  "oferta −15% · $X" bajo el precio y "en oferta $Y" bajo la Ganancia, que sigue
+  siendo la del precio normal. Botón-filtro "N en oferta" con la regla de los demás.
+- **Mandar**: `cambiosParaTN(perfumes, productos, ajustesTN)` distingue en lo
+  publicado la inflada (`price > precioTN`) de la oferta (`price <= precioTN`, o
+  el producto ya está en la categoría de ofertas). Un perfume que **dejó** de
+  estar en oferta arranca sin promoción en el panel: si arrancara "como está
+  publicado", la oferta vieja quedaría como promoción inflada.
+- **La sección Ofertas es una categoría de Tiendanube** que Franco crea en el
+  panel y elige en los ajustes ("Categoria de ofertas",
+  `ajustes.tiendaNube.categoriaOfertas`; no mueve precios, así que va sin
+  candado). Al mandar, los en oferta entran y los que salieron se sacan, primero
+  el precio y después la categoría. `PUT /api/tn/productos/<id>/categorias`
+  relee el producto y manda la lista **completa**: en `PUT /products/<id>`,
+  `categories` **reemplaza** la lista (doc "Product" 2025-03; vacía deja el
+  producto sin categorías). Sin categoría elegida, la sección no se toca.
+- **Por qué no es una promoción nativa de Tiendanube** ("% off" del panel de
+  Promociones), para no volver a investigarlo: el `POST /promotions` público
+  (doc "Discount" 2025-03) es para apps que son el motor de descuentos y exige
+  una URL de callback pública que Tiendanube llama en cada cambio de carrito; si
+  no contesta, borra los descuentos. La app corre en la compu de Franco, así que
+  no sirve. Franco pidió **todo desde la app**, sin el conector de Tiendanube.
+- No se ajustaron a la oferta la calculadora del envío gratis ni `zonaEnvioTN`:
+  siguen mirando `precioTN`.
+- Probado en la copia con Tiendanube falsa: poner en oferta llevó
+  `{"price":119000,"promotional_price":101100}` y `{"categories":[5,77]}`;
+  sacarla, `promotional_price: null` y `[5]`. Con la tienda real, la primera
+  la manda Franco.
+
 ## Conexión con Mercado Libre
 - Pestaña **Mercado Libre** (`vista === "mercadolibre"`). Además de los precios
   por plan, vincula cada plan con su publicación real y le manda precio y stock.

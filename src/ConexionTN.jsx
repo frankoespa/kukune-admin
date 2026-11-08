@@ -4,8 +4,8 @@ import { Check, Link2, PlugZap, RefreshCw, Upload } from "lucide-react";
 import { NumberCell } from "./NumberCell";
 import { normalizarTexto, pesos } from "./Catalogo";
 import { pctSinMiles as pctCorto } from "./numeros";
-import { descuentoVisto } from "./precios";
-import { actualizarVarianteTN, envioParaTN, pagaHoy, vinculoTN } from "./clienteTN";
+import { descuentoVisto, ofertaDeTN } from "./precios";
+import { actualizarVarianteTN, envioParaTN, moverCategoriaTN, pagaHoy, vinculoTN } from "./clienteTN";
 
 /* ============================================================
    Las piezas de la pestaña Tiendanube que hablan con la tienda: la banda de
@@ -79,11 +79,13 @@ export function BandaConexionTN({ cuenta, productos, vinculados, trayendo, onCon
    Sin vínculo: un botón para elegir el producto. Con vínculo: lo que paga hoy
    el cliente, verde si es el precio de la app y óxido si no (compara, no es
    ganancia: nada de ámbar). Con promoción, abajo el tachado y el %. */
-export function CeldaTN({ perfume, conectado, productos, porVariante, usadas, onVincular, onStock }) {
+export function CeldaTN({ perfume, conectado, productos, porVariante, usadas, onVincular, onStock, ajustesTN = {} }) {
   const [abierto, setAbierto] = useState(false);
   const v = vinculoTN(perfume);
   const variante = v ? porVariante.get(String(v.variantId)) : null;
   const precioApp = Number(perfume.precioTN) || 0;
+  // En oferta, lo que tiene que pagar el cliente es el de oferta, con el normal tachado.
+  const oferta = ofertaDeTN(perfume, ajustesTN);
 
   let contenido;
   let color = "var(--humo-claro)";
@@ -105,13 +107,20 @@ export function CeldaTN({ perfume, conectado, productos, porVariante, usadas, on
     titulo = "Ese producto o variante ya no aparece en la tienda. Clic para cambiarlo.";
   } else {
     const paga = pagaHoy(variante);
-    const coincide = paga === precioApp;
+    const coincide =
+      oferta != null ? variante.precio === precioApp && variante.promocional === oferta : paga === precioApp;
     contenido = paga != null ? pesos(paga) : "—";
     color = coincide ? "var(--verde)" : "var(--oxido)";
     const conPromo = variante.promocional != null && variante.promocional < (variante.precio ?? 0);
     if (conPromo) debajo = `${pesos(variante.precio)} · −${pctCorto(descuentoVisto(variante.promocional, variante.precio), 0)}`;
     titulo = `${variante.productoNombre}${variante.valores ? ` · ${variante.valores}` : ""}. El cliente paga ${pesos(paga)}${conPromo ? ` (promoción; normal tachado ${pesos(variante.precio)})` : ""}. ${
-      coincide ? "Es el precio de la app." : `La app dice ${pesos(precioApp)}.`
+      oferta != null
+        ? coincide
+          ? "Es la oferta de la app."
+          : `La app dice ${pesos(oferta)} en oferta, con ${pesos(precioApp)} tachado: mandalo con Actualizar precios.`
+        : coincide
+          ? "Es el precio de la app."
+          : `La app dice ${pesos(precioApp)}.`
     }`;
   }
 
@@ -284,13 +293,19 @@ function BuscadorTN({ perfume, vinculo, variante, productos, usadas, onElegir, o
 }
 
 /* ---------- Actualizar precios en Tiendanube ----------
-   Acá se decide la promoción, renglón por renglón. Arranca como está publicado:
-   con promoción si ya la tiene (con su %), sin si no. Prenderla propone el
-   "Descuento a mostrar" general. Nada se manda hasta "Actualizar N"; va de a uno
-   y el resultado queda en el renglón. */
+   Acá se decide la promoción inflada, renglón por renglón. Arranca como está
+   publicado: con promoción si ya la tiene (con su %), sin si no. Prenderla
+   propone el "Descuento a mostrar" general. Nada se manda hasta "Actualizar N";
+   va de a uno y el resultado queda en el renglón.
+
+   Los perfumes en OFERTA (la de verdad, `ofertaTN`) no se deciden acá: se
+   ponen en el detalle del precio. Su renglón dice la oferta, sin la casilla de
+   la inflada (son excluyentes), y mueve la categoría de ofertas si está
+   elegida. Uno que DEJÓ de estar en oferta arranca sin promoción: si arrancara
+   como está publicado, la oferta vieja se quedaría como inflada. */
 const COLUMNAS = "28px minmax(0,1fr) 150px 120px 120px 56px";
 
-export function PanelActualizarTN({ renglones, perdidos, ajustesTN, onCerrar, onTerminado }) {
+export function PanelActualizarTN({ renglones, perdidos, ajustesTN, nombreCategoria = null, onCerrar, onTerminado }) {
   const redondeo = ajustesTN?.redondeo ?? 1;
   const general = ajustesTN?.descuentoMostrado ?? 0.2;
   const [verTodos, setVerTodos] = useState(false);
@@ -300,12 +315,13 @@ export function PanelActualizarTN({ renglones, perdidos, ajustesTN, onCerrar, on
         r.perfumeId,
         {
           mandar: !r.coincide,
-          conPromo: r.conPromoHoy,
+          // Solo la inflada se conserva: una oferta vieja no se vuelve inflada.
+          conPromo: r.infladaHoy,
           // `descuento` es el que se usa para la cuenta; `pct` el que se muestra.
           // Si ya tiene promoción y no se toca el %, se conserva el descuento EXACTO
           // publicado: con el redondeado, un tachado de $136.000 pasaría a $136.100.
-          descuento: r.descuentoHoy ?? general,
-          pct: +((r.descuentoHoy ?? general) * 100).toFixed(1),
+          descuento: (r.infladaHoy ? r.descuentoHoy : null) ?? general,
+          pct: +(((r.infladaHoy ? r.descuentoHoy : null) ?? general) * 100).toFixed(1),
         },
       ])
     )
@@ -319,23 +335,48 @@ export function PanelActualizarTN({ renglones, perdidos, ajustesTN, onCerrar, on
   // Lo que se mandaría en cada renglón, y si de verdad cambia algo.
   const filas = renglones.map((r) => {
     const d = decision[r.perfumeId];
-    const envio = envioParaTN(r.precioApp, { conPromo: d.conPromo, descuento: d.descuento, redondeo });
-    const igual = envio && envio.price === r.actual.precio && (envio.promotional_price ?? null) === (r.actual.promocional ?? null);
-    return { r, d, envio, igual };
+    const envio = envioParaTN(r.precioApp, { conPromo: d.conPromo, descuento: d.descuento, redondeo, oferta: r.oferta });
+    const igualPrecio = envio && envio.price === r.actual.precio && (envio.promotional_price ?? null) === (r.actual.promocional ?? null);
+    // La categoría va aparte del precio: un renglón puede tener el precio bien y
+    // faltarle entrar (o salir) de ofertas.
+    const igual = igualPrecio && !r.categoriaCambia;
+    return { r, d, envio, igual, igualPrecio };
   });
   const visibles = filas.filter((f) => verTodos || !f.r.coincide || !f.igual);
   const aMandar = filas.filter((f) => f.d.mandar && f.envio && !f.igual);
+  // Cuántos entran y cuántos salen de la categoría de ofertas (las demás no se tocan).
+  const entran = aMandar.filter((f) => f.r.categoriaCambia === "agregar").length;
+  const salen = aMandar.filter((f) => f.r.categoriaCambia === "quitar").length;
+  const destino = nombreCategoria ?? "ofertas";
+  const sobreCategoria = [
+    entran && `${entran} entra${entran === 1 ? "" : "n"} a ${destino}`,
+    salen && `${salen} sale${salen === 1 ? "" : "n"} de ${destino}`,
+  ]
+    .filter(Boolean)
+    .join(", ");
 
   const enviar = async () => {
     setEnviando(true);
     for (const f of aMandar) {
+      // Primero el precio y después la categoría: si el precio falla, el
+      // producto no entra a Ofertas sin estar en oferta.
       try {
-        await actualizarVarianteTN(f.r.productId, f.r.variantId, f.envio);
+        if (!f.igualPrecio) {
+          await actualizarVarianteTN(f.r.productId, f.r.variantId, f.envio);
+          await espera(RESPIRO_MS);
+        }
+        if (f.r.categoriaCambia) {
+          try {
+            await moverCategoriaTN(f.r.productId, { [f.r.categoriaCambia]: ajustesTN.categoriaOfertas });
+          } catch (e) {
+            throw new Error(`${f.igualPrecio ? "" : "El precio quedó, pero "}la categoría no se pudo ${f.r.categoriaCambia === "agregar" ? "agregar" : "sacar"}: ${e.message}`);
+          }
+          await espera(RESPIRO_MS);
+        }
         setResultado((x) => ({ ...x, [f.r.perfumeId]: "ok" }));
       } catch (e) {
         setResultado((x) => ({ ...x, [f.r.perfumeId]: e.message }));
       }
-      await espera(RESPIRO_MS);
     }
     setEnviando(false);
     onTerminado();
@@ -372,7 +413,11 @@ export function PanelActualizarTN({ renglones, perdidos, ajustesTN, onCerrar, on
         <p className="mb-3 text-[12.5px]" style={{ color: "var(--humo)" }}>
           El precio de la app es lo que paga el cliente. <b>Con promoción</b> va como precio promocional y el normal se infla para mostrarse
           tachado (redondeado como Tiendanube). <b>Sin promoción</b> va como precio normal y, si tenía promocional, se saca. Tu ganancia es la
-          misma en los dos casos.
+          misma en los dos casos. Los que están <b>en oferta</b> van al revés: el precio de la app tachado y el de oferta como promocional; ahí
+          sí ganás menos.
+          {nombreCategoria
+            ? ` Los que entran en oferta se agregan a "${nombreCategoria}" y los que salen, se sacan; las demás categorías no se tocan.`
+            : " No hay categoría de ofertas elegida (ajustes de Tiendanube): la sección de la web no se toca."}
         </p>
 
         {visibles.length === 0 ? (
@@ -383,13 +428,13 @@ export function PanelActualizarTN({ renglones, perdidos, ajustesTN, onCerrar, on
           <div data-scroll className="max-h-[50vh] overflow-y-auto rounded-[3px] border" style={{ borderColor: "var(--linea)" }}>
             <div className="sticky top-0 z-[1] grid items-center border-b text-[11px]" style={{ gridTemplateColumns: COLUMNAS, background: "var(--papel)", borderColor: "var(--linea)" }}>
               <span />
-              {["Perfume", "Promoción", "Hoy", "Queda", ""].map((t, i) => (
+              {["Perfume", "Promoción / oferta", "Hoy", "Queda", ""].map((t, i) => (
                 <span key={i} className={`k-col px-2 py-1.5 ${i === 0 || i === 1 ? "text-left" : "text-right"}`} style={{ color: "var(--humo)" }}>
                   {t}
                 </span>
               ))}
             </div>
-            {visibles.map(({ r, d, envio, igual }) => {
+            {visibles.map(({ r, d, envio, igual, igualPrecio }) => {
               const res = resultado[r.perfumeId];
               const visto = envio?.promotional_price != null ? descuentoVisto(envio.promotional_price, envio.price) : null;
               const bloqueado = enviando || terminado;
@@ -404,10 +449,18 @@ export function PanelActualizarTN({ renglones, perdidos, ajustesTN, onCerrar, on
                     </span>
                     <span className="block truncate text-[11px]" style={{ color: "var(--humo)" }}>
                       {r.titulo}
-                      {r.conPromoHoy && !d.conPromo ? " · se saca la promoción" : ""}
-                      {r.promoRota && !d.conPromo ? " · se ve 0% OFF: se saca el promocional" : ""}
+                      {r.oferta == null && r.ofertaHoy ? " · se saca la oferta" : r.oferta == null && r.conPromoHoy && !d.conPromo ? " · se saca la promoción" : ""}
+                      {r.oferta != null && r.conPromoHoy && !r.ofertaHoy ? " · la promoción inflada pasa a oferta" : ""}
+                      {r.promoRota && !d.conPromo && r.oferta == null ? " · se ve 0% OFF: se saca el promocional" : ""}
+                      {r.categoriaCambia === "agregar" ? ` · entra a ${nombreCategoria}` : r.categoriaCambia === "quitar" ? ` · sale de ${nombreCategoria}` : ""}
+                      {igualPrecio && r.categoriaCambia ? " (el precio ya está)" : ""}
                     </span>
                   </span>
+                  {r.oferta != null ? (
+                    <span className="px-2 text-[12px]" style={{ color: "var(--tinta)" }} title="La oferta se pone y se saca en el detalle del precio">
+                      oferta −{Math.round(r.descuentoOferta * 1000) / 10}%
+                    </span>
+                  ) : (
                   <span className="flex items-center gap-1.5 px-2">
                     <input type="checkbox" checked={d.conPromo} disabled={bloqueado} onChange={(e) => cambiar(r.perfumeId, { conPromo: e.target.checked, mandar: true })} aria-label={`Con promoción ${r.nombre}`} />
                     {d.conPromo ? (
@@ -423,6 +476,7 @@ export function PanelActualizarTN({ renglones, perdidos, ajustesTN, onCerrar, on
                       </span>
                     )}
                   </span>
+                  )}
                   <span className="px-2">{par(r.actual.precio, r.actual.promocional, false)}</span>
                   <span className="px-2">{envio ? par(envio.price, envio.promotional_price, true) : <span className="k-num block text-right" style={{ color: "var(--oxido)" }}>—</span>}</span>
                   <span className="flex justify-end px-2">
@@ -470,7 +524,9 @@ export function PanelActualizarTN({ renglones, perdidos, ajustesTN, onCerrar, on
               className="rounded-[3px] px-3.5 py-1.5 text-[12.5px] font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-40"
               style={{ background: "var(--tinta)" }}
             >
-              {enviando ? "Mandando…" : `Actualizar ${aMandar.length} en Tiendanube`}
+              {enviando
+                ? "Mandando…"
+                : `Actualizar ${aMandar.length} en Tiendanube${sobreCategoria ? ` (${sobreCategoria})` : ""}`}
             </button>
           )}
         </div>

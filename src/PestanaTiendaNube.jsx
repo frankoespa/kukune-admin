@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ListTree, Search, X } from "lucide-react";
 import { urlFoto } from "./almacenamiento";
-import { analisisDePrecio, analisisTiendaNube, objetivoTN, precioTiendaNubeDesdeMargen } from "./precios";
+import { analisisDePrecio, analisisTiendaNube, objetivoTN, ofertaDeTN, precioTiendaNubeDesdeMargen } from "./precios";
 import { AjustesTiendaNube, DetalleTiendaNube } from "./TiendaNube";
 import { NumberCell } from "./NumberCell";
 import { buscarPerfumes, ConVistaPrevia, margenReal, pesos } from "./Catalogo";
-import { actualizarVarianteTN, cambiosParaTN, enviarCodigoTN, estadoTN, leerCuponesTN, leerProductosTN, pedirAutorizacionTN, vinculoTN } from "./clienteTN";
+import { actualizarVarianteTN, cambiosParaTN, enviarCodigoTN, estadoTN, leerCategoriasTN, leerCuponesTN, leerProductosTN, pedirAutorizacionTN, vinculoTN } from "./clienteTN";
 import { BandaConexionTN, CeldaTN, PanelActualizarTN } from "./ConexionTN";
 import CuponesTN from "./CuponesTN";
 import AplicarATodos from "./AplicarATodos";
@@ -29,6 +29,10 @@ import { zonaEnvioTN } from "./umbralEnvioTN";
    directa, para que la tienda no se vea más cara que comprar por fuera.
    Las cuentas viven en `precios.js` y el detalle por forma de pago en
    `TiendaNube.jsx`.
+
+   Ofertas reales (`ofertaTN`): un % sobre `precioTN` que se pone y se saca en
+   el detalle del precio. El par precio/margen sigue midiendo el precio normal;
+   la fila muestra aparte el de oferta y lo que deja.
    ============================================================ */
 
 // foto · nombre · costo · ganancia directa ‖ precio · margen · ganancia · en Tiendanube
@@ -38,6 +42,8 @@ const ANCHO_MINIMO = 52 + 200 + 200 + 312 + 132;
 export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCambiar, onSoltarMargenTN, onFijarObjetivoTN, onStockBase, onConfirmar }) {
   const [consulta, setConsulta] = useState("");
   const [soloEnvioGratis, setSoloEnvioGratis] = useState(false);
+  const [soloOferta, setSoloOferta] = useState(false);
+  const [categorias, setCategorias] = useState(null); // las de la tienda, solo lectura
   const [cuenta, setCuenta] = useState(null); // null = preguntando
   const [productos, setProductos] = useState(null);
   const [errorTN, setErrorTN] = useState("");
@@ -77,6 +83,15 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
     }
   }, []);
 
+  // Solo lectura: para elegir cuál es la categoría de ofertas y nombrarla.
+  const traerCategorias = useCallback(async () => {
+    try {
+      setCategorias(await leerCategoriasTN());
+    } catch {
+      setCategorias(null);
+    }
+  }, []);
+
   useEffect(() => {
     let vigente = true;
     estadoTN()
@@ -86,13 +101,14 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
         if (c.conectado) {
           traerProductos();
           traerCupones();
+          traerCategorias();
         }
       })
       .catch((e) => vigente && setCuenta({ conectado: false, error: e.message }));
     return () => {
       vigente = false;
     };
-  }, [traerProductos, traerCupones]);
+  }, [traerProductos, traerCupones, traerCategorias]);
 
   /* Como con ML: Tiendanube vuelve a kukune.com.ar con el código en la
      dirección y Franco la pega acá. La pestaña se abre en el clic, antes del
@@ -118,6 +134,7 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
             setCuenta(await enviarCodigoTN(pegado));
             traerProductos();
             traerCupones();
+            traerCategorias();
           } catch (e) {
             setErrorTN(`No se pudo conectar (${e.message}).`);
           }
@@ -153,7 +170,7 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
   const abrirActualizar = async () => {
     // Se releen antes de comparar: el precio en la tienda pudo cambiar.
     const lista = await traerProductos();
-    if (lista) setPanel(cambiosParaTN(perfumes, lista));
+    if (lista) setPanel(cambiosParaTN(perfumes, lista, ajustes.tiendaNube ?? {}));
   };
 
   /* El stock que le asignás a Tiendanube sale del stock base del catálogo (lo que
@@ -224,7 +241,15 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
     }
     return m;
   }, [perfumes, ajustes.tiendaNube]);
-  const alaVista = soloEnvioGratis ? visibles.filter((p) => conEnvioGratis.has(p.id)) : visibles;
+  // Los que están en oferta en la app (se manden o no a la tienda), del catálogo entero.
+  const enOferta = useMemo(
+    () => new Set(perfumes.filter((p) => ofertaDeTN(p, ajustes.tiendaNube ?? {}) != null).map((p) => p.id)),
+    [perfumes, ajustes.tiendaNube]
+  );
+  const alaVista = visibles.filter((p) => (!soloEnvioGratis || conEnvioGratis.has(p.id)) && (!soloOferta || enOferta.has(p.id)));
+  const categoriaOfertas = ajustes.tiendaNube?.categoriaOfertas ?? null;
+  const nombreCategoriaOfertas =
+    categoriaOfertas == null ? null : categorias?.find((c) => String(c.id) === String(categoriaOfertas))?.nombre ?? "la categoría de ofertas";
 
   return (
     <section className="mx-auto max-w-[1480px] px-6 py-8">
@@ -274,6 +299,23 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
             {soloEnvioGratis && conEnvioGratis.size === 0 ? "Ver todos" : `${conEnvioGratis.size} con envío gratis`}
           </button>
         )}
+        {/* Los que están en oferta. Misma regla que los otros filtros: no
+            desaparece con el filtro puesto. Humo: no es un problema, es un estado. */}
+        {(enOferta.size > 0 || soloOferta) && (
+          <button
+            onClick={() => setSoloOferta((v) => !v)}
+            aria-pressed={soloOferta}
+            title="Los que tienen una oferta puesta en la app. Se mandan a la tienda con Actualizar precios en Tiendanube."
+            className="k-col rounded-[3px] border px-3 py-[7px] transition"
+            style={{
+              borderColor: soloOferta ? "var(--tinta)" : "var(--linea)",
+              color: soloOferta ? "var(--tinta)" : "var(--humo)",
+              background: soloOferta ? "var(--zona-tn)" : "transparent",
+            }}
+          >
+            {soloOferta && enOferta.size === 0 ? "Ver todos" : `${enOferta.size} en oferta`}
+          </button>
+        )}
       </div>
 
       <BandaConexionTN
@@ -291,7 +333,13 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
         </p>
       )}
       {panel && (
-        <PanelActualizarTN {...panel} ajustesTN={ajustes.tiendaNube} onCerrar={() => setPanel(null)} onTerminado={traerProductos} />
+        <PanelActualizarTN
+          {...panel}
+          ajustesTN={ajustes.tiendaNube}
+          nombreCategoria={nombreCategoriaOfertas}
+          onCerrar={() => setPanel(null)}
+          onTerminado={traerProductos}
+        />
       )}
 
       {cuenta?.conectado && (
@@ -309,7 +357,12 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
       )}
 
       <div className="mb-5">
-        <AjustesTiendaNube tn={ajustes.tiendaNube} onCambiar={(tn) => onAjustes({ tiendaNube: tn })} onConfirmar={onConfirmar} />
+        <AjustesTiendaNube
+          tn={ajustes.tiendaNube}
+          onCambiar={(tn) => onAjustes({ tiendaNube: tn })}
+          onConfirmar={onConfirmar}
+          categorias={cuenta?.conectado ? categorias : null}
+        />
       </div>
 
       {/* El catálogo entero, no `visibles`: el envío lo paga todo lo que se
@@ -322,7 +375,7 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
 
       <AplicarATodos
         perfumes={alaVista}
-        filtrado={!!consulta.trim() || soloEnvioGratis}
+        filtrado={!!consulta.trim() || soloEnvioGratis || soloOferta}
         formas={ajustes.tiendaNube?.formas ?? []}
         onFijar={onFijarObjetivoTN}
         onConfirmar={onConfirmar}
@@ -335,9 +388,11 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
         <p className="py-12 text-center text-[13px]" style={{ color: "var(--humo-claro)" }}>
           {perfumes.length === 0
             ? "El catálogo está vacío. Los perfumes se agregan en la pestaña Catálogo."
-            : soloEnvioGratis
-              ? "Ninguno de los que se ven llega al monto del envío gratis vendido solo."
-              : "Ningún perfume coincide con la búsqueda."}
+            : soloOferta && enOferta.size === 0
+              ? "No queda ninguno en oferta."
+              : soloEnvioGratis
+                ? "Ninguno de los que se ven llega al monto del envío gratis vendido solo."
+                : "Ningún perfume coincide con la búsqueda."}
         </p>
       ) : (
         <div className="overflow-x-auto pb-2">
@@ -352,7 +407,7 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
                   onCambiar={onCambiar}
                   onSoltarMargenTN={onSoltarMargenTN}
                   onFijarObjetivoTN={onFijarObjetivoTN}
-                  conexion={{ conectado: !!cuenta?.conectado, productos, porVariante, usadas, onVincular: vincular, onStock: cambiarStock }}
+                  conexion={{ conectado: !!cuenta?.conectado, productos, porVariante, usadas, onVincular: vincular, onStock: cambiarStock, ajustesTN: ajustes.tiendaNube ?? {} }}
                   cuponesTienda={cupones ?? []}
                   productosTN={productos ?? []}
                 />
@@ -429,6 +484,14 @@ function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, onFijarObjetivo
     ajustesTN: ajustes.tiendaNube,
     formaId: objetivo?.formaId,
   });
+  /* La oferta real, si hay: el cliente paga `precioOferta` y el tachado es
+     `precioTN`. Se mide con la misma forma que manda, para comparar de igual a
+     igual con la celda Ganancia (que sigue siendo la del precio normal). */
+  const precioOferta = ofertaDeTN(perfume, ajustes.tiendaNube ?? {});
+  const tnOferta =
+    precioOferta == null
+      ? null
+      : analisisTiendaNube({ costo: perfume.costo, precio: precioOferta, ajustesTN: ajustes.tiendaNube, formaId: objetivo?.formaId });
   /* Lo que se le descontó a ESTE precio: con monto mínimo, un perfume que no
      llega al monto no paga envío porque lo paga el cliente. */
   const envioTN = tn.envioAplicado;
@@ -568,6 +631,17 @@ function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, onFijarObjetivo
             ganancia con el producto más barato—. Humo cuando el precio ya lo
             absorbe: no hay nada que hacer, es informativo. El número va escrito
             y no sólo en el `title`: es la acción. */}
+        {precioOferta != null && (
+          <button
+            type="button"
+            onClick={() => setDetalleTN(true)}
+            title={`En oferta: en la tienda se ve ${pesos(precioTN)} tachado y paga ${pesos(precioOferta)}. Clic para cambiarla o sacarla.`}
+            className="block w-full pb-0.5 text-right text-[10.5px] leading-tight"
+            style={{ color: "var(--tinta)" }}
+          >
+            oferta −{Math.round(perfume.ofertaTN.descuento * 1000) / 10}% · <span className="k-num">{pesos(precioOferta)}</span>
+          </button>
+        )}
         {zonaEnvio && (
           <small
             className="block pb-0.5 text-right text-[10.5px] leading-tight"
@@ -669,6 +743,18 @@ function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, onFijarObjetivo
             {tn.gananciaManda === null ? "—" : pesos(tn.gananciaManda)}
           </span>
         </div>
+        {/* Con oferta: lo que deja de verdad hoy, con la misma forma que manda. */}
+        {tnOferta && tnOferta.gananciaManda !== null && (
+          <small
+            className="block px-1.5 pb-0.5 text-right text-[10.5px] leading-tight"
+            style={{ color: colorGanancia(tnOferta.gananciaManda) }}
+            title={`Con la oferta (paga ${pesos(precioOferta)}) te quedan ${pesos(tnOferta.gananciaManda)}${
+              tn.gananciaManda !== null ? `, ${pesos(tn.gananciaManda - tnOferta.gananciaManda)} menos que a precio normal` : ""
+            }.`}
+          >
+            en oferta <span className="k-num">{pesos(tnOferta.gananciaManda)}</span>
+          </small>
+        )}
       </div>
 
       <CeldaTN perfume={perfume} {...conexion} />
@@ -681,6 +767,7 @@ function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, onFijarObjetivo
           onCerrar={cerrarDetalleTN}
           onFijar={onFijarObjetivoTN ? (o) => onFijarObjetivoTN([perfume.id], o) : undefined}
           onSoltar={() => onSoltarMargenTN(perfume.id, precioTN)}
+          onOferta={(ofertaTN) => onCambiar(perfume.id, { ofertaTN })}
           cuponesTienda={cuponesTienda}
           productosTN={productosTN}
         />
