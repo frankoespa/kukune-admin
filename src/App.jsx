@@ -2302,6 +2302,7 @@ export default function App() {
           onCambiarDolar={cambiarDolar}
           onAtar={atarPerfume}
           onDesatar={desatarPerfume}
+          onStockBase={asignarStockACanal}
         />
       )}
 

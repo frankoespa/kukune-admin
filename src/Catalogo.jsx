@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Plus, Trash2, ImagePlus, Search, X, FileDown } from "lucide-react";
 import { leerCotizacion, urlFoto } from "./almacenamiento";
@@ -9,9 +9,9 @@ import { SelectorRedondeo } from "./TiendaNube";
 import { NumberCell } from "./NumberCell";
 import { CampoProtegido } from "./CampoProtegido";
 import { pctSinMiles as pctCorto } from "./numeros";
-import { stockPorPerfume, totalEnMano } from "./stock";
-import { estadoML, leerPublicacionesML } from "./clienteML";
-import { estadoTN, leerProductosTN } from "./clienteTN";
+import { estaSinStock, stockPorPerfume, totalEnMano } from "./stock";
+import { actualizarPublicacionML, estadoML, leerPublicacionesML } from "./clienteML";
+import { actualizarVarianteTN, estadoTN, leerProductosTN, vinculoTN } from "./clienteTN";
 
 /* Una sola fuente para las columnas del encabezado y de las filas. Si se
    escribieran por separado se desalinean al primer cambio de ancho, que es
@@ -23,7 +23,7 @@ import { estadoTN, leerProductosTN } from "./clienteTN";
    existiría en el CSS.
 
    Columnas: foto · nombre · costo ‖ precio · margen · con envío · ganancia ‖
-             sin publicar · en ML · en TN ‖ usos · borrar
+             sin publicar · en ML · en TN · total ‖ usos · borrar
    Mercado Libre y Tiendanube tienen su propia pestaña (`MercadoLibre.jsx`,
    `PestanaTiendaNube.jsx`): acá no entraban.
    Sin `gap` horizontal a propósito: el aire lo pone cada celda con su padding,
@@ -34,11 +34,15 @@ const COLUMNAS_CATALOGO =
     // Precio y Margen pegados: son un par que se maneja junto, igual que en la
     // tabla del pedido. Con envío y Ganancia salen de ellos.
     "104px 88px 96px 100px",
-    // Stock: la base (sin publicar, editable) y lo que hay en cada canal, en
-    // vivo. Va acá y no al lado del Costo porque Costo sale de `Precios` junto
-    // con las cuatro de venta directa. Pegado a Usos, que dice lo mismo desde
-    // otro lado: dónde está este perfume.
-    "72px 64px 64px",
+    // Stock: la base (sin publicar, editable), lo que hay en cada canal (en
+    // vivo, con +/− para mover unidades) y el total en mano. Va acá y no al lado
+    // del Costo porque Costo sale de `Precios` junto con las cuatro de venta
+    // directa. Pegado a Usos, que dice lo mismo desde otro lado: dónde está
+    // este perfume.
+    // Los canales son más anchos que la base y el total porque además del número
+    // llevan los botones de mover unidades y, con un cambio pendiente, la línea
+    // para mandarlo.
+    "72px 96px 96px 64px",
     "72px 32px",
   ].join(" ");
 
@@ -75,6 +79,11 @@ const fechaCorta = (iso) => (iso ? new Date(iso).toLocaleString("es-AR", { day: 
 function useStockDeCanales(perfumes) {
   const [publicaciones, setPublicaciones] = useState(null);
   const [productosTN, setProductosTN] = useState(null);
+  /* Lo que ya se cambió desde acá y el canal aceptó, pisado sobre lo leído. Se
+     anota en vez de volver a leer el canal entero: la respuesta del PUT ya trae
+     el número, y releer las 44 publicaciones por mover una unidad es tirar el
+     tope de 2 pedidos/s de ML por la ventana. */
+  const [escrito, setEscrito] = useState({});
 
   useEffect(() => {
     let vigente = true;
@@ -91,10 +100,25 @@ function useStockDeCanales(perfumes) {
     };
   }, []);
 
-  return useMemo(
+  const leido = useMemo(
     () => stockPorPerfume(perfumes, publicaciones, productosTN),
     [perfumes, publicaciones, productosTN]
   );
+  const mapa = useMemo(() => {
+    const ids = Object.keys(escrito);
+    if (!ids.length) return leido; // el mismo Map: no invalida los memos de arriba
+    const m = new Map(leido);
+    for (const id of ids) if (m.has(id)) m.set(id, { ...m.get(id), ...escrito[id] });
+    return m;
+  }, [leido, escrito]);
+
+  const anotar = useCallback(
+    (perfumeId, cambio) =>
+      setEscrito((e) => ({ ...e, [perfumeId]: { ...e[perfumeId], ...cambio } })),
+    []
+  );
+
+  return [mapa, anotar];
 }
 
 function CajaDolar({ perfumes, dolar, onCambiarDolar, onConfirmar }) {
@@ -322,6 +346,7 @@ export default function Catalogo({
   onCambiarDolar,
   onAtar,
   onDesatar,
+  onStockBase,
 }) {
   const [consulta, setConsulta] = useState("");
   const [soloSinFoto, setSoloSinFoto] = useState(false);
@@ -334,15 +359,49 @@ export default function Catalogo({
   const sinFoto = perfumes.filter((p) => !p.foto).length;
 
   // Cuánto hay en cada canal. No se guarda: se lee en vivo (ver el hook).
-  const enCanales = useStockDeCanales(perfumes);
+  const [enCanales, anotarCanal] = useStockDeCanales(perfumes);
 
-  /* Los que no tienen stock sin publicar cargado, o que lo tienen en cero. No
-     mira los canales: lo que este contador busca es el stock que la app posee y
-     que todavía nadie cargó. Un perfume agotado de verdad también cae acá, que
-     es útil: son los dos casos en que hay que mirar la fila. */
+  /* Mandarle al canal las unidades que se juntaron con los +/−. Devuelve `null`
+     si salió bien o el texto del error, que la celda muestra en su renglón.
+
+     El orden importa y es el mismo que en las dos pestañas: **primero escribe el
+     canal y solo después se mueve la base**. Si el PUT falla, el stock sin
+     publicar no se toca — si no, una unidad desaparecería del cajón sin haber
+     llegado a ninguna publicación.
+
+     El delta sale de `anterior`, que es lo que el canal tenía cuando se leyó, y
+     a ML se le escribe **la misma publicación de la que salió ese número**
+     (`mlPubId`): comparten stock entre las del mismo User Product, así que
+     elegir otra sería calcular el delta contra un número ajeno. */
+  const moverEnCanal = async (perfume, canal, destino) => {
+    const { ml, tn, mlPubId } = enCanales.get(perfume.id) ?? {};
+    const anterior = canal === "ml" ? ml : tn;
+    if (typeof anterior !== "number") return "No se sabe cuánto hay";
+    try {
+      if (canal === "ml") {
+        if (!mlPubId) return "Sin publicación vinculada";
+        const r = await actualizarPublicacionML(mlPubId, { available_quantity: destino });
+        anotarCanal(perfume.id, { ml: Number(r?.publicacion?.stock ?? destino) });
+      } else {
+        const v = vinculoTN(perfume);
+        if (!v) return "Sin variante vinculada";
+        await actualizarVarianteTN(v.productId, v.variantId, { stock: destino });
+        anotarCanal(perfume.id, { tn: destino });
+      }
+    } catch (e) {
+      return e.message || "No se pudo";
+    }
+    if (destino !== anterior) onStockBase?.(perfume.id, anterior, destino);
+    return null;
+  };
+
+  /* Los que hay que mirar: nunca se les cargó el stock, o están agotados. La
+     regla vive en `estaSinStock` (`stock.js`), que es donde se puede probar.
+     Depende de los canales, así que el contador se recalcula cuando llegan sus
+     lecturas. */
   const sinStock = useMemo(
-    () => new Set(perfumes.filter((p) => !((Number(p.stock) || 0) > 0)).map((p) => p.id)),
-    [perfumes]
+    () => new Set(perfumes.filter((p) => estaSinStock(p, enCanales.get(p.id))).map((p) => p.id)),
+    [perfumes, enCanales]
   );
 
   /* Los que se salieron de la banda que se aplicó la última vez — porque les
@@ -510,7 +569,7 @@ export default function Catalogo({
           <button
             onClick={() => setSoloSinStock((v) => !v)}
             aria-pressed={soloSinStock}
-            title="No tienen stock sin publicar cargado, o está en cero. Las unidades entran solas al cerrar un pedido; el stock inicial se carga a mano."
+            title="No tienen unidades en ninguna parte: cero sin publicar y cero en los canales. Uno con unidades en ML o Tiendanube no entra acá, aunque todavía no le hayas cargado la base — que falte cargarla se ve en la fila, que muestra un guión. Las unidades entran solas al cerrar un pedido; el stock inicial se carga a mano."
             className="k-col rounded-[3px] border px-3 py-[7px] transition"
             style={{
               borderColor: soloSinStock ? "var(--tinta)" : "var(--linea)",
@@ -600,6 +659,21 @@ export default function Catalogo({
         avisoFinal="Cambia el precio de venta directa del catálogo; Mercado Libre y Tiendanube no se tocan."
       />
 
+      {/* Qué es cada columna de Stock, ESCRITO y no en un `title`. Franco cargó
+          el primer perfume dando por hecho que "Sin publicar" era el total y
+          estuvo por poner ahí los frascos que ya tenía publicados, que los
+          habría contado dos veces. Es la misma lección que el campo Stock del
+          panel de publicar en ML: lo que explica un campo va en pantalla, porque
+          un `title` no se descubre si no se pasa el mouse justo por encima. */}
+      {perfumes.length > 0 && (
+        <p className="mb-2 text-[12px] leading-relaxed" style={{ color: "var(--humo)" }}>
+          <span style={{ color: "var(--tinta)" }}>Sin publicar</span> son los frascos que no están en
+          ninguna publicación: el total en mano es sin publicar + en ML + en TN, así que lo que ya
+          está publicado no va acá. Las dos columnas de los canales se leen en vivo y no se guardan —
+          un <span className="k-num">?</span> quiere decir que no se sabe, nunca cero.
+        </p>
+      )}
+
       {visibles.length === 0 ? (
         <div className="py-12 text-center">
           <p className="text-[13px]" style={{ color: "var(--humo-claro)" }}>
@@ -608,7 +682,7 @@ export default function Catalogo({
               : soloSinFoto
               ? "Ya no queda ningún perfume sin foto."
               : soloSinStock
-              ? "Todos los que se ven tienen stock cargado."
+              ? "Todos los que se ven tienen unidades en algún lado."
               : "Ningún perfume coincide con la búsqueda."}
           </p>
           {(soloSinFoto || soloSinStock) && perfumes.length > 0 && (
@@ -626,7 +700,7 @@ export default function Catalogo({
         </div>
       ) : (
         <div className="overflow-x-auto pb-2">
-          <div style={{ minWidth: 1024 }}>
+          <div style={{ minWidth: 1120 }}>
             <EncabezadoCatalogo columnas={columnas} />
             <ul className="grid gap-1.5">
               {visibles.map((p) => (
@@ -637,6 +711,7 @@ export default function Catalogo({
                   ajustes={ajustes}
                   columnas={columnas}
                   enCanales={enCanales.get(p.id)}
+                  onMoverCanal={moverEnCanal}
                   onCambiar={onCambiar}
                   onSoltarMargen={onSoltarMargen}
                   onFijarObjetivo={onFijarObjetivo}
@@ -682,7 +757,7 @@ function EncabezadoCatalogo({ columnas }) {
           Perfume
         </span>
         {grupo("Venta directa", "var(--zona-directa-honda)", 4)}
-        {grupo("Stock", "transparent", 3)}
+        {grupo("Stock", "transparent", 4)}
         <span className="col-span-2" />
       </div>
       <div className="grid items-center border border-transparent" style={{ gridTemplateColumns: columnas }}>
@@ -696,6 +771,7 @@ function EncabezadoCatalogo({ columnas }) {
         {col("Sin publicar", "transparent")}
         {col("En ML", "var(--zona-ml)")}
         {col("En TN", "var(--zona-tn)")}
+        {col("Total", "transparent")}
         {col("Usos", "transparent")}
         <span />
       </div>
@@ -914,48 +990,143 @@ export const pesos = (n) =>
 
 
 
-/* Las tres celdas de stock: la base (sin publicar, lo único que esta app posee y
-   lo único editable) y lo que hay en cada canal, leído en vivo.
+/* Una celda de canal: el número que hay publicado ahí, los botones para mover
+   unidades y, cuando hay un cambio sin mandar, la línea que lo manda.
+
+   **Los +/− no escriben en el canal.** Juntan el cambio en pantalla y recién el
+   tilde lo manda (pedido de Franco, elegido sobre "escribe en cada clic"): subir
+   dos unidades es un solo PUT con el número final en vez de dos, un clic de más
+   se corrige con el otro botón antes de mandar, y nada toca la publicación viva
+   hasta que se pide. Mientras hay algo pendiente el número va en tinta con el
+   anterior al lado, así se ve de dónde a dónde.
+
+   Se puede mover solo si el canal está vinculado y se sabe cuánto hay: con `?`
+   no hay contra qué calcular el delta y con `∞` no hay cuenta que llevar. */
+function CeldaDeCanal({ valor, fondo, nombre, vinculado, pendiente, estado, onMover, onMandar, onCancelar }) {
+  const editable = vinculado && typeof valor === "number";
+  const mostrado = pendiente ?? valor;
+  const hayCambio = pendiente != null && pendiente !== valor;
+
+  const boton = (texto, delta, titulo) => (
+    <button
+      onClick={() => onMover(delta)}
+      title={titulo}
+      className="k-num w-[13px] shrink-0 text-[13px] leading-none opacity-0 transition group-hover:opacity-100"
+      style={{ color: "var(--humo-claro)" }}
+    >
+      {texto}
+    </button>
+  );
+
+  return (
+    <div className="px-1.5 py-1" style={{ background: fondo }}>
+      <div className="flex items-center justify-end gap-1">
+        {editable && boton("−", -1, `Una unidad menos en ${nombre}. Vuelve al stock sin publicar.`)}
+        <span
+          className="k-num text-[12px]"
+          style={{
+            color: hayCambio
+              ? "var(--tinta)"
+              : valor == null || !vinculado
+                ? "var(--humo-claro)"
+                : "var(--humo)",
+          }}
+          title={
+            valor == null
+              ? `No se sabe cuánto hay en ${nombre}: está vinculado pero todavía no llegó la lectura, o no hay conexión. No es cero.`
+              : !vinculado
+                ? `No está publicado en ${nombre}, así que no tiene unidades ahí. Se vincula desde la pestaña de ${nombre}.`
+                : valor === "inf"
+                  ? `En ${nombre} la variante no lleva la cuenta del stock (gestión de stock apagada), así que no se puede mover.`
+                  : `${valor} en ${nombre}. Movelo con los botones: sale del stock sin publicar y se manda con el tilde.`
+          }
+        >
+          {mostrado == null ? "?" : mostrado === "inf" ? "∞" : mostrado}
+        </span>
+        {editable && boton("+", 1, `Una unidad más en ${nombre}. Sale del stock sin publicar.`)}
+      </div>
+
+      {/* El renglón de abajo y no un botón al costado: la columna es angosta y
+          al costado no entra. Mismo recurso que el vínculo de catálogo en ML. */}
+      {hayCambio && (
+        <div className="mt-0.5 flex items-center justify-end gap-1.5 text-[10.5px] leading-none">
+          <span className="k-num" style={{ color: "var(--humo-claro)" }}>
+            era {valor}
+          </span>
+          <button
+            onClick={onMandar}
+            disabled={estado === "mandando"}
+            title={`Mandarle ${pendiente} unidades a ${nombre}. Se cambia en la publicación real y el stock sin publicar se ajusta solo.`}
+            style={{ color: "var(--verde)" }}
+          >
+            {estado === "mandando" ? "…" : "✓ mandar"}
+          </button>
+          <button onClick={onCancelar} title="Dejarlo como está" style={{ color: "var(--humo-claro)" }}>
+            ✕
+          </button>
+        </div>
+      )}
+      {estado && estado !== "mandando" && estado !== "ok" && (
+        <div className="mt-0.5 text-right text-[10.5px] leading-tight" style={{ color: "var(--oxido)" }}>
+          {estado}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Las cuatro celdas de stock: la base (sin publicar, lo único que esta app posee
+   y lo único que se escribe en el archivo), lo que hay en cada canal (en vivo,
+   con los botones para mover unidades) y el total en mano.
 
    Un perfume sin stock cargado muestra "—" y no 0: la clave `stock` aparece en
    `perfumes.json` recién cuando se carga, así que abrir la app no escribe nada.
 
-   El total en mano va en el `title` y no en una columna: es una suma de cosas
-   que ya están a la vista, y con Tiendanube en infinito no existe. */
-function CeldasDeStock({ perfume, enCanales, onCambiar }) {
+   El total era un `title` y pasó a columna a pedido de Franco: con los +/− al
+   lado, es el número contra el que se comprueba que lo repartido cierre con lo
+   que hay. Sigue sin existir con un canal en infinito. */
+function CeldasDeStock({ perfume, enCanales, onCambiar, onMoverCanal }) {
   const base = Number(perfume.stock) || 0;
   const cargado = perfume.stock != null && perfume.stock !== "";
   const { ml, tn } = enCanales ?? { ml: null, tn: null };
   const { total, parcial, infinito } = totalEnMano(base, ml, tn);
+  /* Lo tecleado y todavía sin mandar, por canal, y cómo salió el último envío.
+     Es estado de pantalla: se pierde al recargar y no toca ningún archivo. */
+  const [pendiente, setPendiente] = useState({});
+  const [estado, setEstado] = useState({});
 
-  const deCanal = (valor, fondo, nombre) => (
-    <div className="px-2 text-right" style={{ background: fondo }}>
-      <span
-        className="k-num text-[12px]"
-        style={{ color: valor == null ? "var(--humo-claro)" : "var(--humo)" }}
-        title={
-          valor == null
-            ? `No se sabe cuánto hay en ${nombre}: sin vincular, sin conexión o todavía leyendo. No es cero.`
-            : valor === "inf"
-              ? `En ${nombre} la variante no lleva la cuenta del stock (gestión de stock apagada).`
-              : `${valor} en ${nombre}. Se cambia desde la pestaña de ${nombre}, y sale del stock sin publicar.`
-        }
-      >
-        {valor == null ? "?" : valor === "inf" ? "∞" : valor}
-      </span>
-    </div>
-  );
+  const mover = (canal, valor, delta) =>
+    setPendiente((p) => ({ ...p, [canal]: Math.max(0, (p[canal] ?? valor) + delta) }));
+
+  const mandar = async (canal) => {
+    const destino = pendiente[canal];
+    setEstado((e) => ({ ...e, [canal]: "mandando" }));
+    const error = await onMoverCanal(perfume, canal, destino);
+    setEstado((e) => ({ ...e, [canal]: error ?? "ok" }));
+    if (!error) setPendiente((p) => ({ ...p, [canal]: undefined }));
+  };
+
+  const comun = (canal, valor) => ({
+    valor,
+    nombre: canal === "ml" ? "Mercado Libre" : "Tiendanube",
+    pendiente: pendiente[canal],
+    estado: estado[canal],
+    onMover: (d) => mover(canal, valor, d),
+    onMandar: () => mandar(canal),
+    onCancelar: () => {
+      setPendiente((p) => ({ ...p, [canal]: undefined }));
+      setEstado((e) => ({ ...e, [canal]: undefined }));
+    },
+  });
 
   return (
     <>
       <div
         className="px-1.5"
         title={
-          infinito
-            ? "No se puede calcular el total: un canal no lleva la cuenta del stock."
-            : parcial
-              ? `${base} sin publicar. Falta leer algún canal, así que todavía no hay total en mano.`
-              : `${total} en mano: ${base} sin publicar + ${ml} en Mercado Libre + ${tn} en Tiendanube.`
+          cargado
+            ? "Los frascos que no están en ninguna publicación. Se edita a mano; las unidades entran solas al cerrar un pedido y salen al asignarlas a un canal."
+            : "Todavía no se cargó. Escribí cuántos frascos tenés que no estén publicados en ningún canal."
         }
       >
         <NumberCell
@@ -964,8 +1135,29 @@ function CeldasDeStock({ perfume, enCanales, onCambiar }) {
           className={cargado ? "" : "opacity-60"}
         />
       </div>
-      {deCanal(ml, "var(--zona-ml)", "Mercado Libre")}
-      {deCanal(tn, "var(--zona-tn)", "Tiendanube")}
+      <CeldaDeCanal
+        {...comun("ml", ml)}
+        fondo="var(--zona-ml)"
+        vinculado={Object.keys(perfume.publicacionesML ?? {}).length > 0}
+      />
+      <CeldaDeCanal {...comun("tn", tn)} fondo="var(--zona-tn)" vinculado={!!perfume.publicacionTN} />
+      <div
+        className="px-2 text-right"
+        title={
+          infinito
+            ? "No hay total posible: un canal no lleva la cuenta del stock."
+            : parcial
+              ? "Falta leer algún canal, así que todavía no se puede sumar el total."
+              : `${total} en mano: ${base} sin publicar + ${ml} en Mercado Libre + ${tn} en Tiendanube.`
+        }
+      >
+        <span
+          className="k-num text-[12px]"
+          style={{ color: infinito || parcial ? "var(--humo-claro)" : "var(--tinta)" }}
+        >
+          {infinito ? "∞" : parcial ? "?" : total}
+        </span>
+      </div>
     </>
   );
 }
@@ -976,6 +1168,7 @@ function FilaPerfume({
   ajustes,
   columnas,
   enCanales,
+  onMoverCanal,
   onCambiar,
   onSoltarMargen,
   onFijarObjetivo,
@@ -1069,7 +1262,12 @@ function FilaPerfume({
         onDesatar={onDesatar}
       />
 
-      <CeldasDeStock perfume={perfume} enCanales={enCanales} onCambiar={onCambiar} />
+      <CeldasDeStock
+        perfume={perfume}
+        enCanales={enCanales}
+        onCambiar={onCambiar}
+        onMoverCanal={onMoverCanal}
+      />
 
       {/* Cuenta TODOS los pedidos, no solo el que está en pantalla: es el aviso
           de qué se lleva puesto un borrado. El detalle dice en cuáles. */}

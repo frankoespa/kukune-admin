@@ -122,6 +122,29 @@ export function conStockAsignado(perfume, anterior, nuevo) {
   return { ...perfume, stock: num(perfume.stock) - delta };
 }
 
+/* ¿Este perfume está sin stock? Significa **una sola cosa: no hay unidades en
+   ninguna parte, y lo sabemos**.
+
+   Antes significaba dos, y por eso mentía. "El stock nunca se cargó" entraba sin
+   mirar los canales, así que un perfume con 2 publicados en Tiendanube aparecía
+   bajo "N sin stock" —tiene stock, lo que falta es decir cuántos quedan en el
+   cajón—. En el catálogo real eran 13 de 24. Que falte cargarlo se ve en la
+   fila, que muestra `—` en vez de un número; no es "no tengo".
+
+   Las dos piezas de la regla:
+   · **La base ausente cuenta como cero**, no como un caso aparte.
+   · **Los canales ya vienen resueltos** por `stockPorPerfume`: un canal sin
+     vínculo llega como `0` (no está publicado ahí, así que no hay unidades ahí)
+     y `null` es *no se sabe* —vinculado pero sin leer, o sin conexión—. Con un
+     `null` o un `"inf"` no se afirma nada: el contador solo marca lo que puede
+     probar. */
+export function estaSinStock(perfume, enCanales) {
+  if (num(perfume?.stock) > 0) return false;
+  const { ml, tn } = enCanales ?? { ml: null, tn: null };
+  if ([ml, tn].some((u) => u == null || u === "inf")) return false; // no se sabe
+  return num(ml) <= 0 && num(tn) <= 0;
+}
+
 /* El total en mano. `enML` y `enTN` son números, `null` si todavía no se leyeron
    e `"inf"` si el canal tiene la gestión de stock apagada (en Tiendanube,
    `stock: null` significa infinito).
@@ -147,10 +170,20 @@ export function totalEnMano(base, enML, enTN) {
        que sumarlas contaría cuatro veces lo mismo. Se toma la primera vinculada.
      · `tn`: el stock de su variante vinculada, o `"inf"` si la variante tiene la
        gestión de stock apagada (en Tiendanube eso llega como `stock: null`).
-     · `null` en cualquiera de los dos = no se sabe (sin vincular, sin conexión o
-       todavía no se leyó). No es cero.
+     · **Sin vínculo en ese canal = `0`**, que es un dato y no una incógnita: si
+       el perfume no está publicado ahí, no tiene unidades ahí. Antes esto daba
+       `null` igual que "no se leyó", y las dos cosas no son lo mismo: el total en
+       mano de un perfume que solo se vende en mano quedaba sin calcular, y el
+       contador de "sin stock" terminaba contradiciendo a la celda, que decía
+       "no se sabe" mientras el botón afirmaba que no había nada.
+     · `null` = **no se sabe**: vinculado pero sin leer todavía, o sin conexión.
+       No es cero.
+     · `mlPubId`: **a cuál de las publicaciones se le leyó** ese número. Sale acá
+       porque quien quiera cambiarlo tiene que escribirle a esa misma y no elegir
+       otra por su cuenta: comparten el stock, así que escribirle a la que no se
+       leyó daría un delta calculado contra un número ajeno.
 
-   -> Map(perfumeId -> { ml, tn }) */
+   -> Map(perfumeId -> { ml, tn, mlPubId }) */
 export function stockPorPerfume(perfumes, publicaciones, productosTN) {
   const pubPorId = publicaciones ? new Map(publicaciones.map((x) => [String(x.id), x])) : null;
   let varPorId = null;
@@ -160,23 +193,26 @@ export function stockPorPerfume(perfumes, publicaciones, productosTN) {
   }
   const salida = new Map();
   for (const perfume of perfumes ?? []) {
-    let ml = null;
+    const idsML = Object.values(vinculosML(perfume));
+    let ml = idsML.length ? null : 0; // sin vínculo no es incógnita: es cero
+    let mlPubId = null;
     if (pubPorId) {
-      for (const id of Object.values(vinculosML(perfume))) {
+      for (const id of idsML) {
         const pub = pubPorId.get(String(id));
         if (pub && pub.stock != null) {
           ml = Number(pub.stock);
+          mlPubId = pub.id;
           break; // comparten stock: con una alcanza
         }
       }
     }
-    let tn = null;
-    if (varPorId) {
-      const v = vinculoDeTN(perfume);
-      const variante = v ? varPorId.get(String(v.variantId)) : null;
+    const v = vinculoDeTN(perfume);
+    let tn = v ? null : 0;
+    if (varPorId && v) {
+      const variante = varPorId.get(String(v.variantId));
       if (variante) tn = variante.stock == null ? "inf" : Number(variante.stock);
     }
-    salida.set(perfume.id, { ml, tn });
+    salida.set(perfume.id, { ml, tn, mlPubId });
   }
   return salida;
 }

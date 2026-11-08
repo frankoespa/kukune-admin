@@ -171,6 +171,48 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   son hasta cuatro del mismo User Product) y sumarlas contaría cuatro veces lo
   mismo. En Tiendanube `stock: null` es **infinito** (gestión de stock apagada):
   se muestra `∞` y no entra en ninguna suma, así que ahí no hay total posible.
+- **"N sin stock" significa una sola cosa: no hay unidades en ninguna parte, y
+  se sabe.** Antes significaba dos —"no tengo" y "todavía no lo cargué"— y por eso
+  mentía: un perfume con 2 publicados en Tiendanube caía en el filtro, cuando lo
+  que falta ahí es decir cuántos quedan en el cajón. En el catálogo real eran 13
+  de 24. Que falte cargarlo se ve en la fila, que muestra `—` en vez de un
+  número. La regla es `estaSinStock()` en `src/stock.js`, probada desde Node.
+- **Sin vínculo en un canal es `0`, no `?`.** `stockPorPerfume` los daba iguales
+  y no son lo mismo: si el perfume no está publicado ahí, no tiene unidades ahí,
+  y eso es un dato. `?` quedó solo para lo que de verdad no se sabe —vinculado y
+  sin leer, o sin conexión—. Sin esta distinción el total en mano de un perfume
+  que solo se vende en mano no se calculaba nunca, y la celda terminaba diciendo
+  "no se sabe" mientras el botón afirmaba que no había nada.
+- **El total en mano es una columna** (antes vivía en el `title`, "porque es una
+  suma de cosas que ya están a la vista"). Lo pidió Franco y con los +/− al lado
+  tiene sentido: es el número contra el que se comprueba que lo repartido cierre
+  con lo que hay, y **no se mueve al mover unidades entre lugares** —pasar un
+  frasco del cajón a ML no cambia cuántos tenés—, así que sirve de control. Con
+  un canal en infinito sigue sin existir; mientras falte leer un canal, `?`.
+- **Los +/− de En ML y En TN no escriben en el canal: juntan y recién el tilde
+  manda** (elegido por Franco sobre "escribe en cada clic"). Subir dos unidades
+  es **un solo PUT** con el número final en vez de dos —verificado contra el ML
+  falso: `PUT {"available_quantity":6}`, sin el 5 intermedio—, un clic de más se
+  corrige antes de mandar, y nada toca la publicación viva hasta que se pide.
+  Mientras hay algo pendiente el número va en tinta con "era N" al lado.
+  - El orden es el mismo que en las dos pestañas y **no es negociable**: primero
+    escribe el canal, y la base se mueve solo después. Si el PUT falla, el stock
+    sin publicar no se toca y el error va en la celda con el pendiente intacto
+    para reintentar (verificado forzando un 500 en la Tiendanube falsa).
+  - A ML se le escribe **la misma publicación de la que se leyó el número**
+    (`mlPubId`, que ahora devuelve `stockPorPerfume`): comparten stock entre las
+    del mismo User Product, así que elegir otra sería calcular el delta contra
+    un número ajeno.
+  - Solo se puede mover si el canal está vinculado y se sabe cuánto hay: con `?`
+    no hay contra qué calcular el delta y con `∞` no hay cuenta que llevar.
+  - Lo que el canal acepta se **anota** sobre lo leído (`escrito` en
+    `useStockDeCanales`) en vez de releer el canal: la respuesta del PUT ya trae
+    el número, y releer las 44 publicaciones por mover una unidad tira por la
+    ventana el tope de 2 pedidos/s de ML.
+- **Qué es cada columna va ESCRITO arriba de la tabla, no en un `title`.** Franco
+  leyó "Sin publicar" como el total y estuvo por cargar ahí los frascos que ya
+  tenía publicados, que los habría contado dos veces. Misma lección que el campo
+  Stock del panel de publicar en ML.
 - Claves nuevas en el perfume, solo dos: **`stock`** (la base) y
   **`aportesStock`** (`[{pedido, fila, unidades, fecha}]`). Ninguna está en
   `AJUSTES_POR_DEFECTO` ni se escribe al leer: **abrir la app no escribe nada**
@@ -521,9 +563,9 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   también la caja de ajustes que las configura, para que se vea qué configura
   qué. La versión `-honda` es para las bandas del encabezado. El ámbar no se usa
   para esto: por eso el precio "publicar en ML" dejó de ser ámbar.
-- El catálogo tiene, además, el grupo **Stock** (sin publicar · En ML · En TN)
-  entre Venta directa y Usos. Va ahí y no al lado del Costo porque Costo sale de
-  `Precios` junto con las cuatro columnas de venta directa.
+- El catálogo tiene, además, el grupo **Stock** (sin publicar · En ML · En TN ·
+  total) entre Venta directa y Usos. Va ahí y no al lado del Costo porque Costo
+  sale de `Precios` junto con las cuatro columnas de venta directa.
 - **Las columnas de ML (precio, margen, ganancia y "En ML" por plan) y la caja
   de sus ajustes viven en la pestaña Mercado Libre** (`src/MercadoLibre.jsx`), no
   en el catálogo: ahí ya no entraban. Lo de arriba sobre `preciosML`, `margenesML`
@@ -577,6 +619,43 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   para volver a comprar — el mismo problema que resolvió atar el costo al
   dólar), y Franco prefirió no tocar el pase por ahora. **No reponerlo sin
   preguntar.** El ponderado sirve para medir, no para fijar precios.
+- **La "bolsa de excedente" también se evaluó y se descartó** (07/11/2026). Franco
+  volvió sobre el pase con otra idea: juntar el excedente de un pedido entrante
+  —5u en stock a $50.000 y 2u del pedido a $60.000 son $20.000— y con un botón
+  repartirlo entre todo el stock del catálogo, **como el factor de gasto de la
+  mesa**, para que no le aumente de golpe un perfume. Por qué no, en orden:
+  - **El factor de gasto reparte lo que NO tiene dueño.** `costosExtras =
+    comisionRedUsdt × dólar + envioCorreo` son costos del envío que no se pueden
+    atribuir a ningún perfume, y por eso se prorratean por `costoBase`. El
+    excedente de un perfume sí tiene dueño: repartirlo es **desasignar un costo
+    atribuible**, lo contrario de lo que hace el factor. La analogía es intuitiva
+    y está dada vuelta.
+  - **Repartirlo "entre todo el stock de X" es el ponderado con otro nombre**:
+    (5×50.000 + 2×60.000)/7 = **$52.857**, el mismo número del punto de arriba.
+  - **Repartirlo entre todo el catálogo tapa el agujero en vez de cerrarlo.** Con
+    la banda real guardada (piso $25.000 · 60% · techo $30.000) X está en el
+    techo, así que su precio se mueve 1:1 con el costo: $80.000 → $90.000.
+    Repartir $20.000 entre ~66 unidades da **$303 por unidad** —los demás se
+    mueven 0,4%, invisible— y X queda en $80.000 costando $60.000 reponerlo: deja
+    $20.000 y **la pantalla diría $30.000**. El problema no es que sea poca plata:
+    es que el número mostrado pasa a ser falso. Mismo agujero que tapó atar el
+    costo al dólar. La variante "igual que la bolsa pero escribiendo
+    `gananciaObjetivo` en vez de `costo`" queda descartada por lo mismo: recupera
+    un pago de una vez con un reparto invisible y deja el agujero de X abierto.
+  - **Hoy no habría con qué dividir**: `stock` está ausente en los 44 perfumes.
+  - **El sobreprecio es el precio de la factura, no del perfume.** El dato que
+    faltaba: Franco le compra al proveedor caro **por excepción**, cuando necesita
+    las facturas. Visto así el reparto no era una mala intuición —es un gasto del
+    negocio, no del producto—, pero **para repartirlo hay que saber cuánto es
+    sobreprecio**: qué cobraba el barato por ese perfume ese día. Ese dato no
+    existe en la app. Es justo el que daría "Comparar precios de varias listas de
+    proveedores" (en "Ideas pendientes"); hasta entonces la bolsa no se calcula.
+  - **Cómo lo trabaja Franco, y alcanza con lo que ya hay**: de los pedidos con
+    factura **no pasa los costos** —el costo del catálogo queda en el del
+    proveedor barato, que es el de reposición real— y cuando le conviene usa
+    **Promediar**. Las dos salidas ya existen: el pase es **por fila** además de
+    por pedido, y Promediar sigue ahí. **No hace falta ninguna bolsa, ningún
+    ponderado y ningún botón nuevo. No reponerlos sin preguntar.**
 - Si el mismo perfume aparece en dos filas del pedido, se promedia **por unidad**
   (ponderado por cantidad) antes de llegar al catálogo: el costo del catálogo es
   por unidad, no por fila. Las filas huérfanas se saltean solas.
