@@ -781,8 +781,18 @@ function Dialogo({ dialogo, onCerrar }) {
    exactamente lo que el catálogo llama `costo`. Esto solo arma la lista de qué
    cambiaría; quién la llama decide con qué filas (las incluidas, o una sola).
    Si el mismo perfume está en dos filas, se promedia **por unidad** (ponderado
-   por cantidad): el costo del catálogo es por unidad, no por fila. */
-function costosParaElCatalogo(filas, perfumePorId, monedaPedido = "USD", dolarCatalogo = 0) {
+   por cantidad): el costo del catálogo es por unidad, no por fila.
+
+   `yaPasado` es el último pase de ESTE pedido a ese perfume (`pasesDeCosto`,
+   en el perfume del catálogo), o null: lo usa el diálogo para avisar y saltear
+   lo que ya se pasó. */
+const ultimoPase = (perfume, pedidoId) => {
+  const pases = Array.isArray(perfume?.pasesDeCosto) ? perfume.pasesDeCosto : [];
+  for (let i = pases.length - 1; i >= 0; i--) if (pases[i].pedido === pedidoId) return pases[i];
+  return null;
+};
+
+function costosParaElCatalogo(filas, perfumePorId, monedaPedido = "USD", dolarCatalogo = 0, pedidoId = null) {
   const porPerfume = new Map();
   for (const f of filas) {
     if (!f.perfumeId || !(f.precioSinGanPesos > 0)) continue;
@@ -806,6 +816,7 @@ function costosParaElCatalogo(filas, perfumePorId, monedaPedido = "USD", dolarCa
       nuevoUSD: usd / unidades,
       actualUSD: Number(perfume.costoUSD) || 0,
       atado: estaAtado(perfume),
+      yaPasado: pedidoId ? ultimoPase(perfume, pedidoId) : null,
     }))
     .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
 }
@@ -837,8 +848,16 @@ const COLUMNAS_COSTO = "grid grid-cols-[minmax(0,1fr)_96px_96px_96px] gap-x-3 it
    JSX suelto porque la casilla "Atar al dólar" cambia las cifras al tildarla:
    atado, el costo sale de los dólares al dólar del catálogo. La casilla le
    avisa a App por `onAtar`, que es lo que lee `aplicarAlCatalogo` al confirmar. */
-function CuerpoDelPase({ lista, uno, dolar, enDolares, atarInicial, onAtar }) {
+const fechaCorta = (iso) => (iso ? new Date(iso).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" }) : "");
+
+function CuerpoDelPase({ lista, uno, dolar, enDolares, atarInicial, onAtar, onSaltear }) {
   const [atar, setAtar] = useState(atarInicial);
+  /* Los que ya se pasaron desde este pedido se saltean por defecto: volver a
+     apretar por confusión no tiene que mover nada (con Promediar, volvería a
+     promediar y correría el costo). Destildando se pasan igual. */
+  const yaPasados = lista.filter((p) => p.yaPasado);
+  const [saltear, setSaltear] = useState(true);
+  const salteando = saltear && yaPasados.length > 0;
   const atando = atar && dolar > 0;
   const yaConCosto = lista.filter((p) => p.actual > 0);
   const seDesatan = !atando ? lista.filter((p) => p.atado).length : 0;
@@ -876,6 +895,36 @@ function CuerpoDelPase({ lista, uno, dolar, enDolares, atarInicial, onAtar }) {
           )}
         </span>
       </label>
+      {yaPasados.length > 0 && (
+        <label
+          className="mb-2 flex cursor-pointer items-start gap-2 rounded-[3px] border px-2.5 py-2 text-[12px]"
+          style={{ borderColor: "var(--oxido)", color: "var(--tinta)", background: "#FDF6F4" }}
+        >
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={saltear}
+            onChange={(e) => {
+              setSaltear(e.target.checked);
+              onSaltear(e.target.checked);
+            }}
+          />
+          <span>
+            <b>
+              {uno
+                ? `Saltearlo: ya lo pasaste desde este pedido el ${fechaCorta(yaPasados[0].yaPasado.fecha)}`
+                : `Saltear ${yaPasados.length === 1 ? "el que ya pasaste" : `los ${yaPasados.length} que ya pasaste`} desde este pedido`}
+            </b>{" "}
+            — pasarlo de nuevo con Promediar vuelve a promediar y corre el costo. Destildá solo si querés repetirlo a
+            propósito.
+            {!uno && lista.length === yaPasados.length && salteando && (
+              <span className="block mt-0.5" style={{ color: "var(--oxido)" }}>
+                Ya pasaste todos: tildado, no se cambia nada.
+              </span>
+            )}
+          </span>
+        </label>
+      )}
       {/* Las tres cifras en columnas, no una frase con flechas: lo que se
           compara es una contra otra, y en renglones envueltos no se sabe
           cuál es de cuál. La lista va entera, con scroll propio — recortada
@@ -917,8 +966,15 @@ function CuerpoDelPase({ lista, uno, dolar, enDolares, atarInicial, onAtar }) {
                   : `${p.nombre} · ${dif > 0 ? "más caro" : "más barato"} que el catálogo: ${ars(Math.abs(dif))} (${pct(Math.abs(dif) / p.actual, 1)})`
               }
             >
-              <span className="truncate" style={{ color: "var(--humo)" }}>
+              <span className="truncate" style={{ color: "var(--humo)", opacity: salteando && p.yaPasado ? 0.55 : 1 }}>
                 {p.nombre}
+                {p.yaPasado && (
+                  <span className="ml-1" style={{ color: "var(--oxido)" }}>
+                    (ya pasado el {fechaCorta(p.yaPasado.fecha)}
+                    {p.yaPasado.modo === "promediar" ? ", promediado" : ""}
+                    {salteando ? " · se saltea" : ""})
+                  </span>
+                )}
                 {atando && (
                   <span className="ml-1 k-num" style={{ color: "var(--humo-claro)" }}>
                     US$ {c.nuevoUSD.toFixed(2).replace(".", ",")}
@@ -995,9 +1051,10 @@ function CostoConPase({ valor, candidato, recienPasado, onPasar }) {
         <button
           onClick={() => onPasar([candidato])}
           title={
-            candidato.actual > 0
+            (candidato.actual > 0
               ? `Pasar al catálogo · hoy ${ars(candidato.actual)}${distinto ? "" : " (el mismo)"}`
-              : "Pasar al catálogo · todavía no tiene costo"
+              : "Pasar al catálogo · todavía no tiene costo") +
+            (candidato.yaPasado ? ` · ya lo pasaste desde este pedido el ${fechaCorta(candidato.yaPasado.fecha)}` : "")
           }
           aria-label={`Pasar el costo de ${candidato.nombre} al catálogo`}
           className="opacity-0 transition group-hover:opacity-100 focus:opacity-100"
@@ -1049,9 +1106,29 @@ const ALTO_BARRA = 12;
    encadenar estos valores con los de la barra espejo: viven en sistemas de
    coordenadas distintos. */
 const ALTO_GRUPOS = 32;
-// Columnas de la tabla del pedido: 4 + 5 + 2 + 2 de los grupos, más acciones.
+// Columnas de la tabla del pedido: 4 + 6 + 2 + 2 de los grupos, más acciones.
 // La usan el estado vacío y el pie; si se agrega una columna, se cambia acá.
-const COLUMNAS_PEDIDO = 14;
+const COLUMNAS_PEDIDO = 15;
+
+/* El costo que tiene hoy el perfume en el catálogo, al lado del Precio s/Ganancia
+   de la fila: se comparan de un vistazo sin pasar el mouse por la flecha del
+   pase. Debajo, "igual" si ya coinciden y "pasado dd/mm" si esta fila ya se pasó
+   desde este pedido. Solo lectura: el costo se cambia en el catálogo o con el pase. */
+function CostoDelCatalogo({ perfume, valor, yaPasado }) {
+  const costo = Number(perfume?.costo) || 0;
+  if (!perfume || !(costo > 0)) return <CalcCell>—</CalcCell>;
+  const igual = Math.round(costo) === Math.round(Number(valor) || 0);
+  return (
+    <div className="text-right">
+      <CalcCell>{ars(costo)}</CalcCell>
+      {(igual || yaPasado) && (
+        <small className="-mt-1.5 block px-2 pb-1 text-[10.5px]" style={{ color: "var(--humo-claro)" }}>
+          {[igual && "igual", yaPasado && `pasado ${fechaCorta(yaPasado.fecha)}`].filter(Boolean).join(" · ")}
+        </small>
+      )}
+    </div>
+  );
+}
 
 function GroupHead({ label, span, accent }) {
   return (
@@ -1540,17 +1617,19 @@ export default function App() {
   /* Cerrar y reabrir, los dos con confirmación: cerrar apaga la escritura sobre
      un pedido entero, y reabrir la vuelve a encender sobre algo que ya diste por
      terminado. Ninguna de las dos es un clic al pasar. */
-  const cambiarEstadoPedido = (nuevo) => {
+  const cambiarEstadoPedido = (nuevo, { sumarStock = true } = {}) => {
     forzarGuardado.current = true; // es la única escritura que un cerrado acepta
     yaGuarda.current = true;
     // En el mismo movimiento que el estado, así viajan juntos en la escritura.
     if (nuevo === "cerrado") {
       congelarPrecios();
-      /* Cerrar es cuando la mercadería llegó, así que acá entra al stock. Va al
-         CATÁLOGO y no al archivo del pedido: un cerrado acepta exactamente dos
-         escrituras, y marcarlo sería una tercera. El candado contra sumar dos
-         veces es `aportesStock`, en el perfume. */
-      setPerfumes((ps) => sumarAportes(ps, productos, perfumePorId, pedidoId));
+      /* Cerrar es cuando la mercadería llegó, así que acá entra al stock —si
+         Franco lo elige: también se puede cerrar sin sumar—. Va al CATÁLOGO y
+         no al archivo del pedido: un cerrado acepta exactamente dos escrituras,
+         y marcarlo sería una tercera. El candado contra sumar dos veces es
+         `aportesStock`, en el perfume. Cerrar sin sumar no deja marca: al volver
+         a cerrar se vuelve a ofrecer. */
+      if (sumarStock) setPerfumes((ps) => sumarAportes(ps, productos, perfumePorId, pedidoId));
     } else soltarPreciosCongelados();
     setEstadoPedido(nuevo);
   };
@@ -1596,16 +1675,20 @@ export default function App() {
         "fijos en el pedido, aunque después cambies el catálogo. Podés seguir exportando, sacando el PDF del " +
         "proveedor y pasando los costos al catálogo." +
         (unidades > 0
-          ? ` Además se suman al stock del catálogo ${unidades} ${
+          ? ` Podés sumar al stock del catálogo ${unidades} ${
               unidades === 1 ? "unidad" : "unidades"
             } en ${aportesAlCerrar.length} ${
               aportesAlCerrar.length === 1 ? "perfume" : "perfumes"
-            }: cerrar es cuando la mercadería llegó. Si lo reabrís y lo volvés a cerrar, no se suman de nuevo.`
+            } (cerrar es cuando la mercadería llegó), o cerrarlo sin tocar el stock. Si lo sumás y después lo ` +
+            "reabrís y volvés a cerrar, no se suma de nuevo; si no lo sumás, la próxima vez que lo cierres se vuelve a ofrecer."
           : perfumesDelPedido.size > 0
           ? " Las unidades de este pedido ya están sumadas al stock del catálogo, así que el stock no cambia."
           : ""),
-      etiquetaOk: "Cerrar pedido",
+      etiquetaOk: unidades > 0 ? "Cerrar y sumar al stock" : "Cerrar pedido",
       onAceptar: () => cambiarEstadoPedido("cerrado"),
+      ...(unidades > 0
+        ? { segunda: { etiqueta: "Cerrar sin sumar", onAceptar: () => cambiarEstadoPedido("cerrado", { sumarStock: false }) } }
+        : {}),
     });
   };
 
@@ -2073,17 +2156,26 @@ export default function App() {
 
   const dolarCatalogo = Number(ajustes.dolar?.valor) || 0;
   const paraElCatalogo = useMemo(
-    () => costosParaElCatalogo(R.filas.filter((f) => f.incluir), perfumePorId, globals.monedaPedido, dolarCatalogo),
-    [R.filas, perfumePorId, globals.monedaPedido, dolarCatalogo]
+    () => costosParaElCatalogo(R.filas.filter((f) => f.incluir), perfumePorId, globals.monedaPedido, dolarCatalogo, pedidoId),
+    [R.filas, perfumePorId, globals.monedaPedido, dolarCatalogo, pedidoId]
   );
-  // La casilla del diálogo; la lee `aplicarAlCatalogo` al confirmar.
+  // Las casillas del diálogo; las lee `aplicarAlCatalogo` al confirmar.
   const atarAlPasar = useRef(false);
+  const saltearAlPasar = useRef(true);
 
   /* Tanto el botón de la banda (todas las incluidas) como el de cada fila pasan
      por acá: la lista es el parámetro, y el diálogo es el mismo. Atado al dólar,
      el costo sale de sus dólares; sin atar, en pesos como siempre (y si estaba
      atado, se desata: el costo nuevo es en pesos fijos). */
-  const aplicarAlCatalogo = (lista, promediando) => {
+  const aplicarAlCatalogo = (todos, promediando) => {
+    // Los que ya se pasaron desde este pedido, salvo que se haya destildado.
+    const lista = saltearAlPasar.current ? todos.filter((p) => !p.yaPasado) : todos;
+    if (!lista.length) {
+      setPasadosAlCatalogo("Nada nuevo para pasar");
+      setTimeout(() => setPasadosAlCatalogo(""), 4000);
+      return;
+    }
+    const fecha = new Date().toISOString();
     const atar = atarAlPasar.current && dolarCatalogo > 0;
     const nuevos = new Map(
       lista.map((p) => {
@@ -2096,7 +2188,14 @@ export default function App() {
       ps.map((p) => {
         if (!nuevos.has(p.id)) return p;
         const { costo, usd } = nuevos.get(p.id);
-        const conCosto = registrarCosto(p, costo);
+        /* El asiento del pase va en el perfume (como `aportesStock`): un pedido
+           cerrado no acepta otra escritura. Es lo que permite avisar y saltear
+           si se aprieta de nuevo. */
+        const pases = Array.isArray(p.pasesDeCosto) ? p.pasesDeCosto : [];
+        const conCosto = {
+          ...registrarCosto(p, costo),
+          pasesDeCosto: [...pases, { pedido: pedidoId, fecha, costo, modo: promediando ? "promediar" : "reemplazar" }],
+        };
         return usd ? { ...conCosto, costoUSD: usd } : desatar(conCosto);
       })
     );
@@ -2118,6 +2217,7 @@ export default function App() {
     // La casilla arranca tildada en pedidos en dólares y destildada en pesos.
     const atarInicial = globals.monedaPedido === "USD" && dolarCatalogo > 0;
     atarAlPasar.current = atarInicial;
+    saltearAlPasar.current = true;
     setDialogo({
       titulo: uno ? `Pasar el costo de ${lista[0].nombre}` : "Pasar los costos al catálogo",
       ancho: uno ? "max-w-lg" : "max-w-2xl",
@@ -2129,6 +2229,7 @@ export default function App() {
           enDolares={globals.monedaPedido === "USD"}
           atarInicial={atarInicial}
           onAtar={(v) => (atarAlPasar.current = v)}
+          onSaltear={(v) => (saltearAlPasar.current = v)}
         />
       ),
       etiquetaOk: "Reemplazar",
@@ -2548,7 +2649,7 @@ export default function App() {
                 {/* Los tonos de los grupos son los mismos tramos de la barra de
                     arriba: costo, lo que se lleva ML, y en ámbar lo que queda. */}
                 <GroupHead label="Producto" span={4} accent="var(--tinta)" />
-                <GroupHead label="Costo" span={5} accent="#4A4F45" />
+                <GroupHead label="Costo" span={6} accent="#4A4F45" />
                 <GroupHead label="Venta directa" span={2} accent="#5A5F55" />
                 <GroupHead label="Resultado" span={2} accent={AMBER} />
                 <th className="sticky top-0 z-20" style={{ background: "var(--tinta)" }} />
@@ -2562,6 +2663,7 @@ export default function App() {
                 <ColHead w={90}>Costo Total {monedaCosto}</ColHead>
                 <ColHead w={100}>Costos Extra</ColHead>
                 <ColHead w={120}>Precio s/Ganancia</ColHead>
+                <ColHead w={110}>Costo catálogo</ColHead>
                 <ColHead w={90}>s/Gan. {monedaCosto}</ColHead>
                 <ColHead w={130}>Precio Final</ColHead>
                 <ColHead w={90}>Margen</ColHead>
@@ -2621,9 +2723,16 @@ export default function App() {
                   <td className="px-2 py-1.5 border-b border-[#EFEDE7]">
                     <CostoConPase
                       valor={f.precioSinGanPesos}
-                      candidato={costosParaElCatalogo([f], perfumePorId, globals.monedaPedido, dolarCatalogo)[0]}
+                      candidato={costosParaElCatalogo([f], perfumePorId, globals.monedaPedido, dolarCatalogo, pedidoId)[0]}
                       recienPasado={pasadoEnFila === f.perfumeId}
                       onPasar={pasarAlCatalogo}
+                    />
+                  </td>
+                  <td className="px-2 py-1.5 border-b border-[#EFEDE7]">
+                    <CostoDelCatalogo
+                      perfume={perfumePorId.get(f.perfumeId)}
+                      valor={f.precioSinGanPesos}
+                      yaPasado={f.perfumeId ? ultimoPase(perfumePorId.get(f.perfumeId), pedidoId) : null}
                     />
                   </td>
                   <td className="px-2 py-1.5 border-b border-[#EFEDE7]"><CalcCell>{montoCosto(f.precioSinGanUsdt)}</CalcCell></td>

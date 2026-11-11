@@ -228,6 +228,13 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   sumar dos veces es `aportesStock`, por **pedido + fila** (por fila, para que si
   reabrís y agregás una, al volver a cerrar entre solo la nueva). Reabrir **no
   resta** y volver a cerrar no vuelve a sumar; los dos diálogos lo dicen.
+- **Sumar al cerrar es opcional** (pedido de Franco). Con unidades pendientes,
+  el diálogo de cerrar trae dos salidas: **"Cerrar y sumar al stock"** (la
+  principal) y **"Cerrar sin sumar"** (la `segunda` de `Dialogo`), que es
+  `cambiarEstadoPedido("cerrado", { sumarStock: false })`. Cerrar sin sumar **no
+  deja marca**: si se reabre y se vuelve a cerrar, se vuelve a ofrecer sumar.
+  Probado en la copia: sin sumar, `perfumes.json` quedó con el mismo md5; al
+  volver a cerrar sumando, 25 unidades en 19 perfumes del Fraganti.
 - Los pedidos cerrados antes de que esto existiera **no aportan nada** y sus
   archivos no se tocan. El stock inicial se carga a mano. No hay migración.
 - **Asignarle stock a un canal lo descuenta de la base**, con el delta contra lo
@@ -659,6 +666,18 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - Si el mismo perfume aparece en dos filas del pedido, se promedia **por unidad**
   (ponderado por cantidad) antes de llegar al catálogo: el costo del catálogo es
   por unidad, no por fila. Las filas huérfanas se saltean solas.
+- **El pase deja asiento y no se repite por error** (pedido de Franco: se
+  confundía, apretaba de nuevo y con Promediar volvía a promediar). Cada pase
+  agrega a `pasesDeCosto: [{pedido, fecha, costo, modo}]` del **perfume del
+  catálogo** (no del pedido: un cerrado no acepta otra escritura, igual que
+  `aportesStock`), en el mismo `setPerfumes` que el costo. `costosParaElCatalogo`
+  recibe el `pedidoId` y devuelve `yaPasado` (el último pase de ese pedido).
+  El diálogo marca esos renglones "ya pasado el dd/mm" y trae tildado **"Saltear
+  los N que ya pasaste"**: por defecto solo pasan los nuevos; destildando se
+  repite a propósito. La casilla llega a `aplicarAlCatalogo` por un ref
+  (`saltearAlPasar`, molde de `atarAlPasar`). Si no queda nada que pasar, el
+  botón de la banda dice "Nada nuevo para pasar" y no escribe. Sin la clave =
+  nunca pasado, sin migración.
 - El diálogo muestra **todos** los perfumes que va a tocar, en una caja con
   scroll propio (`max-h-[42vh]`), no una muestra de los primeros: es la
   referencia para decidir, y recortada obliga a aceptar a ciegas.
@@ -1535,12 +1554,18 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   Tailwind real las arbitrarias funcionan, pero el `CheckCell` usa inline por historia.
 
 ## Al tocar la tabla
-- Tiene **14 columnas**: Producto (Incluir, Producto, Foto, Cantidad), Costo (5),
+- Tiene **15 columnas**: Producto (Incluir, Producto, Foto, Cantidad), Costo (6,
+  con **Costo catálogo** después de Precio s/Ganancia),
   **Venta directa** (Precio Final, Margen), Resultado (Ganancia, Ganancia total)
   y acciones. `ParPrecioMargen` renderiza el par de Venta directa. Si agregás o
   sacás una columna hay que actualizar, además del `<ColHead>` y el `<td>`, los
-  `span` de `<GroupHead>` (4 + 5 + 2 + 2) y `COLUMNAS_PEDIDO` (el `colSpan` del
+  `span` de `<GroupHead>` (4 + 6 + 2 + 2) y `COLUMNAS_PEDIDO` (el `colSpan` del
   estado vacío y del pie).
+- **Costo catálogo** (`CostoDelCatalogo`, pedido de Franco): el `costo` que tiene
+  hoy el perfume en el catálogo, en vivo, para compararlo con el Precio
+  s/Ganancia sin pasar el mouse por la flecha del pase. Debajo, en chico, "igual"
+  si coinciden y "pasado dd/mm" si esa fila ya se pasó desde este pedido. Solo
+  lectura; sin perfume, huérfana o sin costo: "—".
 - **Mercado Libre salió de la mesa** (pedido de Franco: tiene su pestaña). Se
   fueron Vende ML, Comisión ML, Otras %, Envío ML, Costo Venta ML, el campo
   global "Comisión ML" y, como sin ML la ganancia bruta es el mismo Precio
