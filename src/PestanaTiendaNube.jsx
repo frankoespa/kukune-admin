@@ -729,9 +729,15 @@ function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, onFijarObjetivo
                     }`) +
                 /* El retiro en mano no paga envío, así que deja esos pesos de
                    más. El número de la celda sigue siendo el conservador. */
-                (envioTN > 0
-                  ? ` Si el cliente retira en Rosario no pagás envío: te quedan ${pesos(tn.gananciaManda + envioTN)}.`
-                  : "")
+                (() => {
+                  // Retirando no hay envío: ni el que pagás vos ni la comisión sobre el del cliente.
+                  const comEnvio = tn.manda >= 0 ? tn.formas[tn.manda].comisionEnvio || 0 : 0;
+                  const sinEnvio = envioTN + comEnvio;
+                  return (
+                    (comEnvio > 0 ? ` Ya descuenta ${pesos(comEnvio)} de comisión sobre el envío que paga el cliente.` : "") +
+                    (sinEnvio > 0 ? ` Si el cliente retira en Rosario no hay envío: te quedan ${pesos(tn.gananciaManda + sinEnvio)}.` : "")
+                  );
+                })()
           }
         >
           {otraDejaMenos && (

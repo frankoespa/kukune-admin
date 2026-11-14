@@ -331,6 +331,12 @@ export function resolverPreciosDelCatalogo(perfumes, ajustes = {}) {
 
    · La comisión que se carga es la que muestra la pantalla del medio de pago,
      SIN IVA. El IVA (21%) va sobre la comisión: `real = comisión × 1,21`.
+   · El costo por transacción de TIENDANUBE (2/1/0,7% según el plan, bonificado
+     con Pago Nube) NO lleva IVA: el Centro de Ayuda ("¿Cómo se calculan los
+     costos por transacción?") da 1% de $100 = $1, al lado de Mercado Pago
+     "4,15% + IVA". Va por forma de pago (`forma.costoTN`, fracción) porque
+     depende de la pasarela, más el general de `ajustesTN.comision`. Los dos se
+     suman a la comisión sin IVA: `real = comisión × 1,21 + costo TN`.
    · Una forma con monto mínimo (6 cuotas desde $70.000) solo aplica si la
      compra —el precio con su descuento— llega a ese monto.
    · El envío gratis lo paga el negocio: entra en la cuenta, a diferencia del
@@ -341,9 +347,15 @@ export function resolverPreciosDelCatalogo(perfumes, ajustes = {}) {
 
 export const IVA = 0.21;
 
-/* La comisión real de una forma de pago: la suya más la de Tiendanube, con IVA. */
+/* Lo que cobra Tiendanube por transacción con esa forma: el general más el
+   propio de la forma. Sin IVA. */
+export const costoTNDeForma = (forma, ajustesTN = {}) =>
+  (Number(ajustesTN.comision) || 0) + (Number(forma?.costoTN) || 0);
+
+/* La comisión real de una forma de pago: la suya con IVA, más el costo por
+   transacción de Tiendanube (sin IVA). */
 export function comisionRealTN(forma, ajustesTN = {}) {
-  return ((Number(forma.comision) || 0) + (Number(ajustesTN.comision) || 0)) * (1 + IVA);
+  return (Number(forma.comision) || 0) * (1 + IVA) + costoTNDeForma(forma, ajustesTN);
 }
 
 const aplicaTN = (forma, precio) => {
@@ -413,6 +425,14 @@ export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon, forma
      el cliente no lo paga, sale de lo que llega. */
   const { envio, desde: umbralEnvio, califica: envioCalifica, aplicado: envioAplicado } =
     envioDelCarrito(ajustesTN, subtotal);
+  /* Cuando el envío lo paga el CLIENTE, entra en el total que se cobra, y la
+     pasarela y el costo por transacción de Tiendanube se calculan sobre todo
+     ese total (Centro de Ayuda: "sobre el total de la orden, incluyendo el
+     envío"). El envío en sí es plata del correo, pero la comisión sobre él sale
+     de lo tuyo. Se estima con el mismo `envioGratis` (el envío más caro: queda
+     del lado seguro) y una vez por carrito. Con envío gratis no hay: el envío no
+     figura en la orden. */
+  const envioCliente = envioCalifica ? 0 : envio;
   const cuponPct = Math.min(1, Math.max(0, Number(cupon?.porcentaje) || 0));
   const cuponMonto = Math.max(0, Number(cupon?.monto) || 0);
   const cuponMinimo = Math.max(0, Number(cupon?.minimo) || 0);
@@ -424,8 +444,10 @@ export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon, forma
 
   const formas = (ajustesTN.formas ?? []).map((forma) => {
     const descuento = Number(forma.descuento) || 0;
-    const base = (Number(forma.comision) || 0) + tn;
-    const real = base * (1 + IVA);
+    // La comisión de la pasarela lleva IVA; el costo de Tiendanube, no.
+    const pasarela = Number(forma.comision) || 0;
+    const base = pasarela + tn + (Number(forma.costoTN) || 0);
+    const real = comisionRealTN(forma, ajustesTN);
     // Después, el descuento del medio de pago —si se combina con el cupón—.
     const aplicaDescuento = !conCupon || combinable;
     const paga = conElCupon * (1 - (aplicaDescuento ? descuento : 0));
@@ -433,8 +455,10 @@ export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon, forma
     const minimo = Number(forma.minimo) || 0;
     const aplica = minimo <= 0 || paga >= minimo;
     const comision = paga * base;
-    const iva = comision * IVA;
+    const iva = paga * pasarela * IVA;
     const llega = paga - comision - iva;
+    // La comisión total de la forma, con IVA y costo TN, sobre el envío del cliente.
+    const comisionEnvio = envioCliente * real;
     return {
       forma,
       valida,
@@ -449,8 +473,9 @@ export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon, forma
       tasaBase: base,
       tasaReal: real,
       llega,
-      ganancia: c > 0 && p > 0 ? llega - c - envioAplicado : null,
-      gananciaPorUnidad: c > 0 && p > 0 ? (llega - c - envioAplicado) / unidades : null,
+      comisionEnvio,
+      ganancia: c > 0 && p > 0 ? llega - c - envioAplicado - comisionEnvio : null,
+      gananciaPorUnidad: c > 0 && p > 0 ? (llega - c - envioAplicado - comisionEnvio) / unidades : null,
     };
   });
 
@@ -482,6 +507,7 @@ export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon, forma
     envio,
     umbralEnvio,
     envioAplicado,
+    envioCliente,
     envioCalifica,
   };
 }
@@ -683,9 +709,13 @@ export function precioTiendaNubeDesdeObjetivo({
 
   const fija = indiceFormaTN(formaId, ajustesTN);
 
-  const despejar = (objetivo) => {
+  /* Abajo del monto el envío lo paga el cliente y cada forma deja además su
+     comisión sobre ese envío: el objetivo de cada forma suma eso. */
+  const { envio: envioTN } = envioDelCarrito(ajustesTN);
+  const despejar = (objetivoBase, conComisionEnvio = false) => {
+    const objetivoDe = (i) => objetivoBase + (conComisionEnvio ? envioTN * comisionRealTN(formas[i], ajustesTN) : 0);
     if (fija >= 0) {
-      const precio = redondearPrecio(objetivo / k[fija], { redondeo, k: k[fija], costo: c });
+      const precio = redondearPrecio(objetivoDe(fija) / k[fija], { redondeo, k: k[fija], costo: c });
       return aplicaTN(formas[fija], precio) ? { precio, define: fija } : { precio, define: fija, noAplica: true };
     }
 
@@ -694,7 +724,7 @@ export function precioTiendaNubeDesdeObjetivo({
       let define = -1;
       k.forEach((x, i) => {
         if (!activas[i]) return;
-        const p = objetivo / x;
+        const p = objetivoDe(i) / x;
         if (p > necesario) {
           necesario = p;
           define = i;
@@ -721,7 +751,7 @@ export function precioTiendaNubeDesdeObjetivo({
   // Sin monto mínimo (o sin envío) el camino es el de siempre, bit por bit.
   if (!(desde > 0) || !(envio > 0)) return despejar(c + envio + extra);
 
-  const sin = despejar(c + extra);
+  const sin = despejar(c + extra, true);
   // `envioAlCliente`: este precio no llega al monto, así que el envío lo paga el
   // cliente y la ganancia pedida queda entera.
   if (sin && !sin.noAplica && sin.precio < desde) return { ...sin, envioAlCliente: true };

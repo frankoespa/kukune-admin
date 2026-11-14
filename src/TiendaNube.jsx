@@ -138,7 +138,7 @@ export function AjustesTiendaNube({ tn, onCambiar, onConfirmar, categorias = nul
             />
           </div>
         </div>
-        <div className="block" title="Se suma a la comision de cada forma de pago, y lleva IVA">
+        <div className="block" title="Costo por transaccion de Tiendanube para todas las formas de pago. No lleva IVA. Si depende de la forma (con Pago Nube esta bonificado), cargalo en la columna Costo TN de cada forma.">
           {rotulo("Comision TN")}
           <div className="w-[88px]">
             <CampoProtegido
@@ -222,15 +222,17 @@ export function AjustesTiendaNube({ tn, onCambiar, onConfirmar, categorias = nul
         <div className="mt-3 border-t pt-2" style={{ borderColor: "var(--zona-tn-honda)" }}>
           <p className="mb-2 max-w-[560px] text-[11px]" style={{ color: "var(--humo)" }}>
             Comision como figura en la pantalla del medio de pago, <b>sin IVA</b> (se suma sola).
-            Si hay varias —comision + financiacion o CPT— sumalas. "Desde" es la compra minima
-            para que aplique (0 = siempre).
+            Si hay varias —comision + financiacion o CPT— sumalas. <b>Costo TN</b> es el costo por
+            transaccion de Tiendanube con esa forma (2% en tu plan si no es Pago Nube, donde esta
+            bonificado): <b>no lleva IVA</b>. "Desde" es la compra minima para que aplique (0 = siempre).
           </p>
           <div
             className="grid items-end gap-x-2 gap-y-2"
-            style={{ gridTemplateColumns: "minmax(220px,1fr) 88px 80px 104px 28px" }}
+            style={{ gridTemplateColumns: "minmax(220px,1fr) 88px 80px 80px 104px 28px" }}
           >
             {rotulo("Forma de pago")}
             {rotulo("Comision")}
+            {rotulo("Costo TN")}
             {rotulo("Descuento")}
             {rotulo("Desde")}
             <span />
@@ -287,13 +289,23 @@ function FilaForma({ forma, tn, nueva, onCambiar, onQuitar }) {
         etiqueta="el nombre de la forma de pago"
         abiertoAlInicio={nueva}
       />
-      <div title={`Con IVA: ${porcentaje(comisionRealTN(forma, tn))}`}>
+      <div title={`Con IVA y el costo de Tiendanube: ${porcentaje(comisionRealTN(forma, tn))}`}>
         <CampoProtegido
           valor={+((forma.comision || 0) * 100).toFixed(2)}
           onCambiar={(v) => onCambiar({ comision: v / 100 })}
           mostrar={pct}
           suffix="%"
           etiqueta={`la comision de ${forma.nombre}`}
+        />
+      </div>
+      {/* Sin IVA, a diferencia de la comisión de al lado. 0 o ausente = nada. */}
+      <div title="Costo por transaccion de Tiendanube con esta forma de pago. No lleva IVA.">
+        <CampoProtegido
+          valor={+((forma.costoTN || 0) * 100).toFixed(2)}
+          onCambiar={(v) => onCambiar({ costoTN: Math.max(0, v) / 100 })}
+          mostrar={pct}
+          suffix="%"
+          etiqueta={`el costo de Tiendanube de ${forma.nombre}`}
         />
       </div>
       <CampoProtegido
@@ -319,10 +331,12 @@ function FilaForma({ forma, tn, nueva, onCambiar, onQuitar }) {
       >
         <X size={14} />
       </button>
-      {/* El IVA a la vista debajo de cada comisión: es el número que de verdad se cobra. */}
+      {/* Lo que de verdad se cobra, debajo de la comisión: con IVA y, si hay,
+          con el costo de Tiendanube (que no lleva IVA). */}
       <span />
-      <span className="k-num -mt-1.5 text-right text-[10.5px]" style={{ color: "var(--humo-claro)" }}>
-        = {porcentaje(comisionRealTN(forma, tn))} c/IVA
+      <span className="k-num col-span-2 -mt-1.5 text-left text-[10.5px]" style={{ color: "var(--humo-claro)" }}>
+        = {porcentaje(comisionRealTN(forma, tn))}{" "}
+        {(Number(forma.costoTN) || 0) + (Number(tn.comision) || 0) > 0 ? "total (c/IVA + TN)" : "c/IVA"}
       </span>
       <span className="col-span-3" />
     </>
@@ -501,7 +515,9 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
               <p className="mt-1 max-w-[640px] text-[12px]" style={{ color: "var(--humo)" }}>
                 Lo define "{define.forma.nombre}", la que más te cobra. Con esa te quedan{" "}
                 <span className="k-num">{pesos(define.llega)}</span> ({pesos(costo)} de costo
-                {envio > 0 ? ` + ${pesos(envio)} de envío` : ""} + {pesos(define.ganancia)} de ganancia).
+                {envio > 0 ? ` + ${pesos(envio)} de envío` : ""}
+                {define.comisionEnvio > 0 ? ` + ${pesos(define.comisionEnvio)} de comisión sobre el envío del cliente` : ""} +{" "}
+                {pesos(define.ganancia)} de ganancia).
               </p>
             )}
             {/* Quién paga el envío, en su propio renglón: vale para los dos
@@ -519,7 +535,9 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                   <>
                     Acá el envío lo paga el cliente: es gratis desde{" "}
                     <span className="k-num">{pesos(desdeEnvio)}</span>
-                    {r.unidades > 1 ? " de compra" : ", y un frasco solo no llega"}.
+                    {r.unidades > 1 ? " de compra" : ", y un frasco solo no llega"}. Pero ese envío entra en
+                    el total que se cobra, y la comisión de cada forma de pago sobre él (calculada con{" "}
+                    <span className="k-num">{pesos(r.envioCliente)}</span>) sale de lo tuyo: ya está descontada.
                   </>
                 )}
               </p>
@@ -986,6 +1004,15 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                     <small className="block text-[10.5px]" style={{ color: "var(--humo-claro)" }}>
                       {porcentaje(f.tasaBase)}
                     </small>
+                    {f.comisionEnvio > 0 && (
+                      <small
+                        className="block text-[10.5px]"
+                        style={{ color: "var(--humo)" }}
+                        title={`El envío que paga el cliente (${pesos(r.envioCliente)}) entra en el total cobrado: ${porcentaje(f.tasaReal)} de comisión sobre él.`}
+                      >
+                        −{pesos(f.comisionEnvio)} s/envío
+                      </small>
+                    )}
                   </td>
                   <td className={td} style={{ color: "var(--humo)" }}>
                     −{pesos(f.iva)}
@@ -1015,7 +1042,9 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                        envío—, así que va de renglón chico al lado y no de
                        columna. Solo cuando esta compra paga envío: si no, los
                        dos números son el mismo y repetirlo es ruido. */
-                    const siRetira = f.ganancia === null || envio <= 0 ? null : f.ganancia + envio;
+                    // Retirando no hay envío: ni el que pagás vos ni la comisión sobre el del cliente.
+                    const sinEnvio = envio + (f.comisionEnvio || 0);
+                    const siRetira = f.ganancia === null || sinEnvio <= 0 ? null : f.ganancia + sinEnvio;
                     if (!editable || f.ganancia === null)
                       return (
                         <>
@@ -1103,6 +1132,10 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
             ` El segundo número de cada fila es lo que te queda si el cliente retira en mano: ahí no pagás los ${pesos(
               envio
             )} de envío.`}
+          {r.envioCliente > 0 &&
+            ` "s/envío" es la comisión de esa forma sobre el envío que paga el cliente (calculado con ${pesos(
+              r.envioCliente
+            )}): el cliente paga el envío justo, pero la comisión sobre ese monto la absorbés vos. Si retira en mano no hay envío y el segundo número de la ganancia lo suma de vuelta.`}
           {editable && " Escribí el margen o la ganancia en una forma de pago para fijar el precio contra esa forma."}
           {onFijar && (conCupon || conPromo || conOferta) &&
             " Con una oferta, un cupón o una promo puestos no se edita: poné la oferta en 0% (sin guardar) o sacalos para cambiar el margen o la ganancia del precio normal."}

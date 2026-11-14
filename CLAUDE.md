@@ -809,8 +809,21 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   cada forma), `redondeo` y `formas: [{id, nombre, comision, descuento, minimo}]`.
 
 - La comisión de cada forma se carga **sin IVA**, como la muestra el medio de
-  pago; `comisionRealTN()` le aplica el 21%. Comisión + financiación o CPT se
-  suman a mano en el mismo número.
+  pago; `comisionRealTN()` le aplica el 21%. Comisión + financiación de la
+  pasarela se suman a mano en el mismo número.
+- **El costo por transacción de Tiendanube (CPT) NO lleva IVA y va aparte**:
+  columna **Costo TN** de cada forma (`forma.costoTN`, fracción; 2% en el plan
+  de Franco con pasarelas que no son Pago Nube, donde está bonificado). El Centro
+  de Ayuda ("¿Cómo se calculan los costos por transacción?") da 1% de $100 =
+  $1, al lado de Mercado Pago "4,15% + IVA". `comisionRealTN = comisión × 1,21 +
+  costoTNDeForma()`, que es `ajustesTN.comision` (el general, que tampoco lleva
+  IVA) + `forma.costoTN`. En `analisisTiendaNube` el IVA va solo sobre la
+  comisión de la pasarela. Ejemplo real: GOcuotas 9,10% + IVA y CPT 2% = 13,01%;
+  cargado todo junto en la comisión (11,10%) daba 13,43%.
+  Antes el CPT se sumaba a la comisión y llevaba IVA. Con los datos del
+  13/11/2026 no se movió ningún precio (general en 0 y sin `costoTN`). Las formas
+  que tienen el CPT sumado a mano en la comisión (la de Mercado Pago dice "3,46% +
+  CPT 2%" y tiene 5,46%) siguen con IVA de más hasta que Franco lo separe.
 - Redondea con `redondearPrecio()`, igual que directo y ML (ver "Precios del
   catálogo"), usando el `k` de la forma de pago que manda. Su default es $1.000.
   Antes "Sin redondear" subía al peso siguiente y el `=` podía mostrar 40,4%
@@ -995,6 +1008,30 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   que pasa en el otro caso. Un "% de retiros" no se agregó a propósito: con una
   venta no hay con qué estimarlo, y el dato sale solo de las órdenes de
   Tiendanube cuando haya unas cuantas.
+- **Comisión sobre el envío que paga el cliente** (pedido de Franco). Debajo del
+  monto el envío lo paga el cliente, pero entra en el total que se cobra, y la
+  pasarela y el costo por transacción de Tiendanube se calculan sobre todo ese
+  total (Centro de Ayuda: el CPT va "sobre el total de la orden, incluyendo el
+  costo de envío"; que la pasarela también lo cobre sobre el envío es lo
+  esperable y no está confirmado). El envío es plata del correo; **la comisión
+  sobre él sale de lo tuyo**. `analisisTiendaNube` devuelve `envioCliente`
+  (`envioGratis` si no califica, 0 si califica) y por forma `comisionEnvio =
+  envioCliente × comisionRealTN(forma)`, que se resta de la ganancia, **una vez
+  por carrito**. Se estima con el mismo `envioGratis` y no con un campo aparte
+  (decisión de Franco): ya está puesto para el envío más lejano, así que queda
+  del lado seguro, y un carrito de dos con envío más caro reparte ese envío
+  entre dos frascos. Con $10.000: transferencia $182, Mercado Pago $619, Go
+  Cuotas $1.301, 6 cuotas $2.963 por venta.
+  - El despeje de margen y ganancia fija lo incluye en el tramo de abajo
+    (`despejar(c + extra, true)`: el objetivo de cada forma suma su comisión
+    sobre el envío). Barrido de 2.178 casos (dos redondeos, monto de 0 a
+    300.000, margen/ganancia, con y sin forma): el objetivo se cumple siempre.
+    `igualarDirecto` no cambia (no mira comisiones): con los 33 reales, 0
+    precios movidos.
+  - En el detalle: "−$X s/envío" debajo de la comisión de cada forma, y el pie
+    lo explica. **"Si retira"** suma de vuelta el envío que pagás vos **y** la
+    comisión sobre el del cliente: retirando no hay envío de ningún tipo. El
+    `title` de la Ganancia de la fila dice lo mismo.
 - **Los que alcanzan el monto vendidos solos se marcan**, porque son los que hay
   que revisar de precio y en una tabla de 49 filas no se ven. Botón-contador
   "N con envío gratis" al lado del buscador, que filtra —molde y regla de los de
@@ -1026,12 +1063,13 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
     cruzan, la marca aparece sola y la ganancia baja a la vista.
 - Lo que la app **no** hace: escribir el monto en Tiendanube. La promoción de
   envío gratis se configura en el panel; la app dice qué número poner.
-  **Franco ya lo puso en $120.000** (06/11/2026, promoción 813555), así que
-  `ajustes.tiendaNube.envioGratisDesde` tiene que quedar en ese mismo número o
-  las dos cuentas no coinciden. Con $120.000: 34 perfumes quedan debajo —el
-  envío lo paga el cliente—, siguen con envío gratis vendidos solos Hawas Verde
-  ($120.000 justo, que entra por ser inclusivo), Rayhaan Italia y 9PM Night Out,
-  y la ganancia sube **+$340.000** contra el envío gratis siempre.
+  **Hoy está en $150.000** en la tienda y en la app (confirmado por Franco el
+  13/11/2026). `ajustes.tiendaNube.envioGratisDesde` tiene que quedar en el
+  mismo número que la promoción de envío gratis del panel o las dos cuentas no
+  coinciden. Antes estuvo en $120.000 (06/11/2026, promoción 813555); los
+  números de ese momento, por si sirven de referencia: 34 perfumes debajo, con
+  envío gratis vendidos solos Hawas Verde ($120.000 justo, inclusivo), Rayhaan
+  Italia y 9PM Night Out, y +$340.000 contra el envío gratis siempre.
 
 ## Conexión con Tiendanube
 - Mismo molde que ML: vincular cada perfume con su variante y mandarle precio y
