@@ -7,6 +7,7 @@ import { preciosDePlanes } from "./precios";
 import {
   cuotasDePublicacion,
   nombreDePlan,
+  publicarCondicionML,
   publicarEnML,
   validarPublicacionML,
   vinculosCatalogoDe,
@@ -16,6 +17,7 @@ import {
   CAMPOS_FICHA,
   VALORES_FACTURA,
   condicionesDe,
+  cuerpoDeCondicion,
   descripcionDesdeTxt,
   faltantes,
   fichaDesdeTxt,
@@ -46,12 +48,22 @@ export default function PublicarML({ perfume, ajustes, planes, onAjustes, onCamb
   const [verCondiciones, setVerCondiciones] = useState(false);
   const [validacion, setValidacion] = useState(null);
   const [publicacion, setPublicacion] = useState(null);
+  const [verJson, setVerJson] = useState(false);
   const [trabajando, setTrabajando] = useState(""); // "", "validando", "publicando"
   const [error, setError] = useState("");
 
   const condiciones = condicionesDe(ajustes);
   const precios = preciosDePlanes(perfume);
   const vinculos = vinculosDe(perfume);
+
+  /* Si el perfume YA tiene una publicación normal, el plan nuevo no se arma de
+     cero: se le cuelga del mismo User Product y hereda ficha, fotos, nombre y
+     stock. Entonces el panel arranca en el camino corto —plan y precio— y deja
+     "Cargar todo de cero" como salida. */
+  const hermana = planes.map((p) => vinculos[p]).find(Boolean) ?? null;
+  const planDeLaHermana = planes.find((p) => vinculos[p] === hermana) ?? null;
+  const [modo, setModo] = useState(hermana ? "condicion" : "completo");
+  const corto = modo === "condicion" && hermana;
 
   // Carpeta, fotos y texto: lo mismo que usa Actualizar (piezasPublicarML.jsx).
   const carpetas = useCarpetaML(perfume, onCambiar);
@@ -79,15 +91,22 @@ export default function PublicarML({ perfume, ajustes, planes, onAjustes, onCamb
   const elegidos = filasDePlan.filter((f) => planesElegidos.has(f.plan) && !f.vinculado && f.precio > 0);
 
   const falta = faltantes(ficha);
-  const problemas = [
-    !carpeta && "Elegí la carpeta del perfume",
-    carpeta && elegida && !elegida.existe && "La carpeta todavía no tiene la subcarpeta Mercadolibre",
-    carpeta && elegida?.existe && !fotosElegidas.length && "No hay fotos para publicar",
-    falta.length && `Falta en la ficha: ${falta.join(", ")}`,
-    !elegidos.length && "Elegí al menos un plan",
-    !familyName.trim() && "Poné el nombre de la publicación",
-    !(stock >= 1) && "El stock tiene que ser 1 o más",
-  ].filter(Boolean);
+  /* En el camino corto no se carga nada: la ficha, las fotos, el nombre y el
+     stock los hereda el ítem nuevo del User Product. Lo único que puede faltar
+     es elegir el plan. */
+  const problemas = (
+    corto
+      ? [!elegidos.length && "Elegí al menos un plan"]
+      : [
+          !carpeta && "Elegí la carpeta del perfume",
+          carpeta && elegida && !elegida.existe && "La carpeta todavía no tiene la subcarpeta Mercadolibre",
+          carpeta && elegida?.existe && !fotosElegidas.length && "No hay fotos para publicar",
+          falta.length && `Falta en la ficha: ${falta.join(", ")}`,
+          !elegidos.length && "Elegí al menos un plan",
+          !familyName.trim() && "Poné el nombre de la publicación",
+          !(stock >= 1) && "El stock tiene que ser 1 o más",
+        ]
+  ).filter(Boolean);
 
   const pedido = {
     carpeta,
@@ -121,6 +140,54 @@ export default function PublicarML({ perfume, ajustes, planes, onAjustes, onCamb
   };
 
   const todoValida = validacion && validacion.resultados.length && validacion.resultados.every((r) => r.ok);
+
+  /* El JSON exacto que se va a mandar. Se muestra porque este recurso de ML no
+     tiene `/validate`: no hay ensayo previo, así que lo que lo reemplaza es ver
+     los cinco campos antes de confirmar. */
+  const cuerposCortos = elegidos.map((f) => ({
+    plan: f.plan,
+    cuerpo: cuerpoDeCondicion({ plan: f.plan, precio: f.precio, condiciones }),
+  }));
+
+  /* Camino corto: le agrega el plan al producto que ya existe. Lo creado se
+     vincula igual que al publicar de cero. */
+  const agregarCondicion = () =>
+    onConfirmar({
+      titulo: "Agregar a Mercado Libre",
+      ancho: "max-w-lg",
+      texto: `Se ${elegidos.length === 1 ? "crea 1 publicación real y visible" : `crean ${elegidos.length} publicaciones reales y visibles`} de "${
+        perfume.nombre
+      }": ${elegidos.map((f) => `${nombreDePlan(f.plan)} a ${pesos(f.precio)}`).join(", ")}. Las fotos, la ficha, el nombre y el stock los hereda de ${hermana}, así que comparten stock. Mercado Libre no tiene modo de prueba.`,
+      etiquetaOk: `Agregar ${elegidos.length} en ML`,
+      onAceptar: async () => {
+        setTrabajando("publicando");
+        setError("");
+        try {
+          const r = await publicarCondicionML({
+            itemId: hermana,
+            condiciones,
+            planes: elegidos.map((f) => ({ plan: f.plan, precio: f.precio })),
+          });
+          setPublicacion(r);
+          const normales = { ...vinculosDe(perfume) };
+          const deCatalogo = { ...vinculosCatalogoDe(perfume) };
+          for (const x of r.resultados ?? []) {
+            if (x.itemId) normales[x.plan] = x.itemId;
+            if (x.catalogoId) deCatalogo[x.plan] = x.catalogoId;
+          }
+          if ((r.resultados ?? []).some((x) => x.itemId))
+            onCambiar(perfume.id, {
+              publicacionesML: normales,
+              publicacionesCatalogoML: Object.keys(deCatalogo).length ? deCatalogo : undefined,
+            });
+          onPublicado();
+        } catch (e) {
+          setError(e.message);
+        } finally {
+          setTrabajando("");
+        }
+      },
+    });
 
   const publicar = () =>
     onConfirmar({
@@ -185,12 +252,65 @@ export default function PublicarML({ perfume, ajustes, planes, onAjustes, onCamb
         </div>
 
         <div data-scroll className="flex-1 space-y-6 overflow-y-auto px-5 py-4">
+          {corto && (
+            <div className="rounded-[4px] border px-4 py-3" style={{ borderColor: "var(--linea)", background: "var(--zona-ml)" }}>
+              <p className="text-[12.5px]" style={{ color: "var(--tinta)" }}>
+                Este perfume <strong>ya está publicado</strong> en {nombreDePlan(planDeLaHermana)} (
+                <span className="k-num">{hermana}</span>). El plan nuevo se le cuelga al mismo producto
+                de Mercado Libre: <strong>la ficha, las fotos, el nombre y el stock los hereda</strong>,
+                no hay que cargarlos.
+              </p>
+              <p className="mt-1.5 text-[12px]" style={{ color: "var(--humo)" }}>
+                Va a tener su propio código MLA —en ML cada plan de cuotas es una publicación aparte—,
+                pero comparte el stock con la que ya tenés y ML le sincroniza fotos, ficha y nombre.
+                El precio sale del catálogo: se cambia en Precios.
+              </p>
+              <button
+                onClick={() => setModo("completo")}
+                disabled={!!trabajando || !!publicacion}
+                className="k-col mt-2 underline disabled:opacity-40"
+                style={{ color: "var(--humo)" }}
+              >
+                Cargar todo de cero
+              </button>
+            </div>
+          )}
+
+          {corto && (
+            <Paso n={1} titulo="Qué plan agregar">
+              <ListaDePlanes filas={filasDePlan} elegidos={planesElegidos} onCambiar={setPlanesElegidos} />
+              {cuerposCortos.length > 0 && (
+                <div className="mt-3">
+                  <button onClick={() => setVerJson((v) => !v)} className="k-col underline" style={{ color: "var(--humo)" }}>
+                    {verJson ? "Ocultar" : "Ver"} lo que se le manda a Mercado Libre
+                  </button>
+                  {/* Este recurso de ML no tiene validación previa, así que lo que
+                      reemplaza al ensayo es ver los campos antes de confirmar. */}
+                  {verJson && (
+                    <pre
+                      className="mt-2 overflow-x-auto rounded-[3px] border p-2 text-[11px]"
+                      style={{ borderColor: "var(--linea)", color: "var(--humo)" }}
+                    >
+                      {cuerposCortos
+                        .map((x) => `${nombreDePlan(x.plan)}:\n${JSON.stringify(x.cuerpo, null, 2)}`)
+                        .join("\n\n")}
+                    </pre>
+                  )}
+                </div>
+              )}
+            </Paso>
+          )}
+
           {/* ---- 1. Fotos ---- */}
+          {!corto && (
           <Paso n={1} titulo="Fotos">
             <SelectorDeFotos carpetas={carpetas} />
           </Paso>
 
+          )}
+
           {/* ---- 2. Ficha técnica ---- */}
+          {!corto && (
           <Paso n={2} titulo="Ficha técnica">
             <div className="grid gap-4 md:grid-cols-[1fr_240px]">
               <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
@@ -209,42 +329,12 @@ export default function PublicarML({ perfume, ajustes, planes, onAjustes, onCamb
             </div>
           </Paso>
 
+          )}
+
           {/* ---- 3. Qué se publica ---- */}
+          {!corto && (
           <Paso n={3} titulo="Qué se publica">
-            <ul className="mb-3 grid gap-1">
-              {filasDePlan.map((f) => {
-                const tipo = cuotasDePublicacion({ tipo: tipoDePlan(f.plan).listing_type_id, tags: tipoDePlan(f.plan).tags });
-                const motivo = f.vinculado ? `ya está vinculado a ${f.vinculado}` : !(f.precio > 0) ? "no tiene precio en la app" : "";
-                return (
-                  <li key={f.plan}>
-                    <label className={`flex items-center gap-3 rounded-[3px] border px-3 py-1.5 text-[12.5px] ${motivo ? "opacity-50" : "cursor-pointer"}`} style={{ borderColor: "var(--linea)", background: "var(--zona-ml)" }}>
-                      <input
-                        type="checkbox"
-                        disabled={!!motivo}
-                        checked={!motivo && planesElegidos.has(f.plan)}
-                        onChange={() =>
-                          setPlanesElegidos((s) => {
-                            const n = new Set(s);
-                            n.has(f.plan) ? n.delete(f.plan) : n.add(f.plan);
-                            return n;
-                          })
-                        }
-                      />
-                      <span className="w-[90px]" style={{ color: "var(--tinta)" }}>
-                        {nombreDePlan(f.plan)}
-                      </span>
-                      <span className="flex-1" style={{ color: "var(--humo)" }}>
-                        {tipo.texto}
-                        {motivo ? ` · ${motivo}` : ""}
-                      </span>
-                      <span className="k-num" style={{ color: "var(--tinta)" }}>
-                        {f.precio > 0 ? pesos(f.precio) : "—"}
-                      </span>
-                    </label>
-                  </li>
-                );
-              })}
-            </ul>
+            <ListaDePlanes filas={filasDePlan} elegidos={planesElegidos} onCambiar={setPlanesElegidos} />
             <label className="block">
               <span className="k-col mb-1 block" style={{ color: "var(--humo)" }}>
                 Nombre de la publicación ({familyName.trim().length}/120) · ML arma el título con esto
@@ -280,9 +370,10 @@ export default function PublicarML({ perfume, ajustes, planes, onAjustes, onCamb
             </button>
             {verCondiciones && <Condiciones condiciones={condiciones} onCambiar={(c) => onAjustes({ publicacionML: c })} />}
           </Paso>
+          )}
 
           {/* ---- 4. Validar y publicar ---- */}
-          <Paso n={4} titulo="Validar y publicar">
+          <Paso n={corto ? 2 : 4} titulo={corto ? "Agregar" : "Validar y publicar"}>
             {/* Después de publicar, los planes ya están vinculados y "elegí un
                 plan" sería un falso error. */}
             {problemas.length > 0 && !publicacion && (
@@ -300,24 +391,36 @@ export default function PublicarML({ perfume, ajustes, planes, onAjustes, onCamb
 
         <div className="flex items-center justify-end gap-2 border-t px-5 py-3" style={{ borderColor: "var(--linea)" }}>
           <span className="mr-auto text-[11.5px]" style={{ color: "var(--humo)" }}>
-            Validar no publica: le pregunta a Mercado Libre si aceptaría cada publicación.
+            {corto
+              ? "Mercado Libre no tiene ensayo para esto: mirá lo que se manda antes de confirmar."
+              : "Validar no publica: le pregunta a Mercado Libre si aceptaría cada publicación."}
           </span>
+          {/* En el camino corto no hay Validar: ML no expone validación para
+              `/user-products/<UP>/items`. Por eso el botón pide confirmación
+              igual que siempre, y al lado está el JSON que se manda. */}
+          {!corto && (
+            <button
+              onClick={validar}
+              disabled={!!trabajando || problemas.length > 0 || !!publicacion}
+              className="k-col flex items-center gap-1.5 rounded-[3px] border px-3 py-[7px] disabled:cursor-not-allowed disabled:opacity-40"
+              style={{ borderColor: "var(--tinta)", color: "var(--tinta)" }}
+            >
+              <RefreshCw size={13} className={trabajando === "validando" ? "animate-spin" : ""} /> {trabajando === "validando" ? "Validando…" : "Validar"}
+            </button>
+          )}
           <button
-            onClick={validar}
-            disabled={!!trabajando || problemas.length > 0 || !!publicacion}
-            className="k-col flex items-center gap-1.5 rounded-[3px] border px-3 py-[7px] disabled:cursor-not-allowed disabled:opacity-40"
-            style={{ borderColor: "var(--tinta)", color: "var(--tinta)" }}
-          >
-            <RefreshCw size={13} className={trabajando === "validando" ? "animate-spin" : ""} /> {trabajando === "validando" ? "Validando…" : "Validar"}
-          </button>
-          <button
-            onClick={publicar}
-            disabled={!!trabajando || !todoValida || !!publicacion}
-            title={todoValida ? "" : "Primero validá: se habilita cuando ML acepta todas"}
+            onClick={corto ? agregarCondicion : publicar}
+            disabled={!!trabajando || !!publicacion || (corto ? problemas.length > 0 : !todoValida)}
+            title={corto || todoValida ? "" : "Primero validá: se habilita cuando ML acepta todas"}
             className="flex items-center gap-1.5 rounded-[3px] px-3.5 py-[7px] text-[12.5px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
             style={{ background: "var(--tinta)" }}
           >
-            <Upload size={13} /> {trabajando === "publicando" ? "Publicando…" : `Publicar ${elegidos.length} en ML`}
+            <Upload size={13} />{" "}
+            {trabajando === "publicando"
+              ? corto
+                ? "Agregando…"
+                : "Publicando…"
+              : `${corto ? "Agregar" : "Publicar"} ${elegidos.length} en ML`}
           </button>
         </div>
       </div>
@@ -419,6 +522,48 @@ function ResultadosValidacion({ resultados }) {
 
 /* Lo que pasó al publicar, renglón por renglón, y si ML las dejó sincronizadas
    como el Musamam (mismo User Product, cada normal atada a su de catálogo). */
+/* Los planes publicables, con su tipo de publicación y su precio del catálogo.
+   La usan el camino completo y el corto: un plan ya vinculado o sin precio se
+   ve pero no se puede tildar, y el motivo va escrito al lado. */
+function ListaDePlanes({ filas, elegidos, onCambiar }) {
+  return (
+    <ul className="mb-3 grid gap-1">
+      {filas.map((f) => {
+        const tipo = cuotasDePublicacion({ tipo: tipoDePlan(f.plan).listing_type_id, tags: tipoDePlan(f.plan).tags });
+        const motivo = f.vinculado ? `ya está vinculado a ${f.vinculado}` : !(f.precio > 0) ? "no tiene precio en la app" : "";
+        return (
+          <li key={f.plan}>
+            <label className={`flex items-center gap-3 rounded-[3px] border px-3 py-1.5 text-[12.5px] ${motivo ? "opacity-50" : "cursor-pointer"}`} style={{ borderColor: "var(--linea)", background: "var(--zona-ml)" }}>
+              <input
+                type="checkbox"
+                disabled={!!motivo}
+                checked={!motivo && elegidos.has(f.plan)}
+                onChange={() =>
+                  onCambiar((s) => {
+                    const n = new Set(s);
+                    n.has(f.plan) ? n.delete(f.plan) : n.add(f.plan);
+                    return n;
+                  })
+                }
+              />
+              <span className="w-[90px]" style={{ color: "var(--tinta)" }}>
+                {nombreDePlan(f.plan)}
+              </span>
+              <span className="flex-1" style={{ color: "var(--humo)" }}>
+                {tipo.texto}
+                {motivo ? ` · ${motivo}` : ""}
+              </span>
+              <span className="k-num" style={{ color: "var(--tinta)" }}>
+                {f.precio > 0 ? pesos(f.precio) : "—"}
+              </span>
+            </label>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function ResultadosPublicacion({ r }) {
   if (r.validacion) return <ResultadosValidacion resultados={r.validacion} />;
   const s = r.sincronizacion;

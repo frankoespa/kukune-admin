@@ -81,12 +81,17 @@ export function CuerpoDescuento({ perfume, planes, pubPorId, promos, ajustes, es
             desde,
             hasta,
             lista,
-            // Para el aviso del padre; no viaja a ML.
+            /* ML no deja encimar dos descuentos propios: si ya hay uno, el
+               server lo quita antes de poner éste. */
+            reemplaza: yaTiene,
+            promocionId: yaTiene ? puesta.id : undefined,
+            ofertaId: yaTiene ? puesta.ofertaId : undefined,
+            // Para el aviso del padre; no viajan a ML.
             plan: elegido.plan,
             ganancia: r.ganancia,
           }
         : null;
-  }, [elegido, precio, desde, hasta, lista, problemas.length, r.ganancia, estado]);
+  }, [elegido, precio, desde, hasta, lista, problemas.length, r.ganancia, yaTiene, puesta, estado]);
 
   if (!opciones.length)
     return <p>Este perfume todavía no tiene ninguna publicación vinculada en Mercado Libre.</p>;
@@ -117,9 +122,11 @@ export function CuerpoDescuento({ perfume, planes, pubPorId, promos, ajustes, es
       )}
 
       {yaTiene && (
-        <p style={{ color: "var(--humo)" }}>
+        <p style={{ color: "var(--oxido)" }}>
           {nombreDePlan(elegido.plan)} ya tiene un descuento propio y el comprador paga{" "}
-          {pesos(puesta.paga)}. Mercado Libre no deja modificarlo: hay que quitarlo y volver a ponerlo.
+          {pesos(puesta.paga)}. Mercado Libre no deja modificarlo, así que al confirmar se{" "}
+          <strong>quita ése y se pone éste</strong>, en un solo paso. Si lo nuevo fallara después de
+          haberlo quitado, la publicación queda sin ningún descuento y lo dice.
         </p>
       )}
 

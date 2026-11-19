@@ -138,8 +138,14 @@ export default function ActualizarML({ perfume, planes, onCambiar, onConfirmar, 
         try {
           const r = await actualizarEnML(pedido);
           setResultado(r);
-          // La ficha nueva queda también en el perfume, como al publicar.
-          onCambiar(perfume.id, { fichaML: ficha });
+          /* La ficha y el nombre quedan también en el perfume, como al publicar:
+             guardar solo la ficha dejaba sin `familyNameML` a los que se habían
+             vinculado a mano, y el panel de publicar arrancaba con un nombre
+             inventado. */
+          onCambiar(perfume.id, {
+            fichaML: ficha,
+            ...(String(cambios.familyName ?? "").trim() ? { familyNameML: cambios.familyName.trim() } : {}),
+          });
           onActualizado();
           controlar({ ficha, familyName: cambios.familyName }, r.fotos, false);
         } catch (e) {

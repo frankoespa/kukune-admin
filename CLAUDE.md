@@ -1537,6 +1537,34 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   de ML van traducidos (`ERROR_CREDIBILITY_DISCOUNTED_PRICE` = "no lo considera
   creíble", `423` = "está trabada unos segundos"). El cuerpo del diálogo avisa a
   App por un ref (`estadoDescuento`), molde de `atarAlPasar`.
+- **Un descuento propio no se modifica: se reemplaza, y la app lo hace sola.**
+  Si el ítem ya tiene uno, ML rechaza el nuevo con **400 "No candidates found
+  for item"** (le pasó a Franco con el Armaf Odyssey Aqua, que tenía un −9%
+  puesto). La doc dice que para cambiarlo hay que eliminarlo y aplicarlo de
+  nuevo, así que eso hace el server: con `reemplaza: true` manda el `DELETE` y
+  enseguida el `POST`, en un solo movimiento. El diálogo lo dice **en óxido**
+  antes de confirmar, incluido el riesgo: si el borrado sale bien y la creación
+  falla, la publicación queda **sin ningún descuento**, y el error lo aclara.
+  Verificado en la copia: sin `reemplaza` sale el 400 traducido; con él,
+  `DELETE …?promotion_type=PRICE_DISCOUNT&promotion_id=…` y después el `POST`.
+- **Y borrar tampoco es instantáneo.** El ítem queda en `restore_requested`
+  mientras ML lo saca, y en ese rato sigue sin ser candidato: la primera versión
+  del reemplazo borraba y fallaba al crear, dejando la publicación **sin
+  descuento** (le pasó a Franco con el Aqua). Ahora, después del `DELETE`,
+  `esperarSinPromo()` sondea hasta que ya no queda ninguna en curso
+  (`started`/`pending`/`sync_requested`/`restore_requested`), y el `POST` se
+  **reintenta** mientras el error siga siendo "No candidates found"
+  (`esNoCandidato()`, `VUELTAS_PROMO` × `ESPERA_PROMO` = hasta 16 s). Mismo
+  criterio que la espera del `catalog_product_id` al publicar.
+  Si aun así no entra, el error dice que el viejo ya se quitó y que hay que
+  esperar un minuto y volver a ponerlo. Probado en la copia con un borrado que
+  tarda 5 s: reemplazó bien en 6,1 s; y forzando el rechazo del nuevo, el aviso
+  salió completo.
+  Ese mensaje de ML también aparece si falta reputación verde, la publicación no
+  está activa o es usada, o tiene exposición gratuita: la traducción los nombra
+  a todos porque desde la app no se distinguen.
+- **La traducción de errores busca la clave adentro del mensaje**, no solo
+  exacta: ML a veces lo envuelve ("Errors: … No candidates found for item").
 - **Las fechas van CON HORA y sin zona** (`2026-11-17T00:00:00`). Mandando solo
   el día, ML contesta **400 "Start and finish dates must be in local format"** —
   pasó con la cuenta real. `aFechaML()` las completa: 00:00:00 la de inicio y
@@ -1680,6 +1708,42 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - `mlCrudo()` en el plugin devuelve `{ok, status, datos}` sin tirar error (hace
   falta leer `cause` en los 400), y solo pone `content-type: json` si el cuerpo
   es texto: una foto va como `FormData` multipart.
+- **Agregarle otro plan de cuotas a un perfume ya publicado no arma el ítem de
+  cero.** Si el perfume tiene alguna publicación normal vinculada, el panel
+  arranca en el **camino corto**: elegir el plan y listo. Lo que lo hace posible
+  es `POST /user-products/<USER_PRODUCT_ID>/items` (doc "Precio por variación",
+  "Agregar condición de venta a un User Product"), que **hereda del producto**
+  `available_quantity` (de ahí que los planes compartan stock), `attributes` (la
+  ficha y las medidas del paquete), `pictures`, `domain_id`, `family_name`,
+  `title` y `condition`. **Mandar cualquiera de esos es un error**, así que
+  `cuerpoDeCondicion()` (`src/armadoML.js`, pura y probada desde Node) manda
+  **solo** `price`, `category_id`, `currency_id`, `buying_mode`,
+  `listing_type_id`, más `tags`, `shipping` y `sale_terms`. Hay un test que falla
+  si alguno de los heredados se cuela.
+  - El MLA nuevo existe igual: **en ML cada plan de cuotas es una publicación**
+    (el tipo —`gold_special` / `gold_pro`— es del ítem, no una variante que se le
+    cuelgue). El Musamam real tiene cuatro. Lo que se evita es recargar los datos;
+    el panel lo dice con todas las letras, porque Franco esperaba lo otro.
+  - El `user_product_id` sale de la publicación hermana, y de paso su
+    `catalog_product_id`: la de catálogo se crea **sin esperar**, al revés que al
+    publicar de cero, donde hay que darle tiempo a ML para que la asocie.
+  - Si la hermana **no tiene** `user_product_id` (publicación del modelo viejo),
+    el server responde 409 diciéndolo y queda el botón "Cargar todo de cero".
+  - **Este recurso no tiene `/validate`**: no hay ensayo previo como al publicar.
+    Lo que lo reemplaza es "Ver lo que se le manda a Mercado Libre", que muestra
+    el JSON exacto antes de confirmar. Son cinco campos: se lee de un vistazo.
+  - `terminosDeVenta()` (garantía, factura, máximo por compra) la comparten el
+    ítem completo y la condición suelta: si cambia la factura, cambia en los dos.
+  - El precio sale del catálogo y no se edita acá, igual que en el camino largo:
+    el precio de cada plan se toca en Precios.
+  - **Probado solo en la copia con ML falso**: el POST llevó exactamente
+    `{price, category_id, currency_id, buying_mode, listing_type_id, shipping,
+    sale_terms}` a `/user-products/MLAU222/items`, la de catálogo salió con el
+    producto de la hermana, y las dos quedaron en el mismo User Product. **La
+    primera real la hace Franco.**
+- **Actualizar también guarda el nombre** (`familyNameML`), no solo la ficha:
+  antes, un perfume vinculado a mano no tenía nombre guardado y el panel de
+  publicar arrancaba con uno inventado ("Perfume X").
 - **Probado solo en la copia, con ML falso.** La primera publicación real la hace
   Franco con un perfume que elija.
 

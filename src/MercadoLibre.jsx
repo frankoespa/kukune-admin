@@ -316,16 +316,18 @@ export default function MercadoLibre({
           return;
         }
         try {
-          await ponerPromoML(d.itemId, d);
+          const r = await ponerPromoML(d.itemId, d);
           releerPromos();
           releerTrasActualizar();
           avisarExito(
-            `Descuento puesto en ${perfume.nombre} · ${nombreDePlan(d.plan)}: el comprador paga ${pesos(
-              d.precio
-            )}. ML lo muestra en la publicación en unos segundos.`
+            `${r?.reemplazado ? "Descuento reemplazado" : "Descuento puesto"} en ${perfume.nombre} · ${nombreDePlan(
+              d.plan
+            )}: el comprador paga ${pesos(d.precio)}. ML lo muestra en la publicación en unos segundos.`
           );
         } catch (e) {
           setErrorML(`No se pudo poner el descuento (${e.message}).`);
+          // Quitar el viejo puede haber salido bien: hay que releer igual.
+          releerPromos();
         }
       },
     });

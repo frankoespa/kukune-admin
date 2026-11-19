@@ -1,7 +1,7 @@
 import { readFile, readdir, stat, writeFile, rename, mkdir, open } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { CATEGORIA_PERFUMES, NOMBRES_TXT, cuerpoDeItem, faltantes } from "./src/armadoML.js";
+import { CATEGORIA_PERFUMES, NOMBRES_TXT, cuerpoDeCondicion, cuerpoDeItem, faltantes } from "./src/armadoML.js";
 
 /* ============================================================
    Publicar en Mercado Libre, del lado del server. Lo engancha
@@ -12,6 +12,8 @@ import { CATEGORIA_PERFUMES, NOMBRES_TXT, cuerpoDeItem, faltantes } from "./src/
    · GET  /api/ml/ficha                    valores de las listas de MLA1271
    · POST /api/ml/publicar/validar         sube fotos y corre /items/validate
    · POST /api/ml/publicar                 crea las publicaciones (ESCRIBE EN ML)
+   · POST /api/ml/publicar/condicion       le agrega otro plan de cuotas a un
+                                           perfume ya publicado (ESCRIBE EN ML)
    · GET  /api/ml/publicacion/<MLA>        fotos, ficha, nombre y descripción de una
    · POST /api/ml/actualizar               cambia fotos, ficha, nombre o descripción
                                            de publicaciones normales (ESCRIBE EN ML)
@@ -290,6 +292,78 @@ export function crearPublicador({ ml, mlCrudo, raizDatos, base }) {
     return { resultados, sincronizacion: await sincronizacion(resultados) };
   };
 
+  /* ---- Agregar otra condición de venta (otro plan de cuotas) ----
+
+     Para un perfume que YA está publicado no hace falta armar el ítem entero:
+     ML tiene `POST /user-products/<UP>/items`, que hereda del producto la
+     ficha, las fotos, el nombre, el dominio y el stock (doc "Precio por
+     variación", "Agregar condición de venta a un User Product"). Por eso acá
+     solo viajan el plan y el precio.
+
+     El ítem nuevo tiene su propio MLA igual: en ML cada plan es una
+     publicación. Lo que comparte, por colgar del mismo User Product, es el
+     stock, y ML le sincroniza fotos, ficha y nombre.
+
+     OJO: este recurso NO tiene `/validate` documentado, así que no hay ensayo
+     previo como al publicar de cero. El panel muestra el JSON exacto antes de
+     confirmar. */
+  const condicionValida = (p) => {
+    const error = (m) => Object.assign(new Error(m), { codigo: 400 });
+    const itemId = String(p.itemId ?? "");
+    if (!ITEM.test(itemId)) throw error("Id de publicación inválido");
+    const planes = (p.planes ?? []).map((x) => ({ plan: Number(x.plan), precio: Number(x.precio) }));
+    if (!planes.length) throw error("Elegí al menos un plan");
+    if (planes.some((x) => ![1, 3, 6, 9, 12].includes(x.plan) || !(x.precio > 0)))
+      throw error("Hay un plan sin precio o que no existe");
+    return { ...p, itemId, planes };
+  };
+
+  const publicarCondicion = async (p) => {
+    const error = (codigo, m) => Object.assign(new Error(m), { codigo });
+
+    /* El User Product sale de la publicación hermana, la que ya existe. De paso
+       se trae su `catalog_product_id`: al publicar de cero hay que esperar a que
+       ML lo asigne, pero acá ya se sabe. */
+    const base = await mlCrudo(`/items/${p.itemId}?attributes=id,user_product_id,catalog_product_id,listing_type_id`);
+    if (!base.ok) throw error(base.status, `No se pudo leer ${p.itemId}: ${causas(base.datos).errores.join(" · ") || base.status}`);
+    const userProductId = base.datos?.user_product_id ?? null;
+    if (!userProductId)
+      throw error(409, `${p.itemId} no tiene producto de usuario: esa publicación es del modelo viejo y el plan nuevo hay que cargarlo entero.`);
+
+    const resultados = [];
+    for (const plan of p.planes) {
+      const fila = { plan: plan.plan, itemId: null, catalogoId: null, errores: [], advertencias: [], avisos: [] };
+      resultados.push(fila);
+      const cuerpo = cuerpoDeCondicion({ plan: plan.plan, precio: plan.precio, condiciones: p.condiciones });
+      const r = await mlCrudo(`/user-products/${userProductId}/items`, {
+        method: "POST",
+        body: JSON.stringify(cuerpo),
+      });
+      if (!r.ok || !r.datos?.id) {
+        Object.assign(fila, causas(r.datos));
+        continue;
+      }
+      fila.itemId = r.datos.id;
+      fila.advertencias.push(...(r.datos.warnings ?? []).map((w) => w.message || w.code));
+
+      /* La de catálogo, con el producto que ya tiene la hermana: acá no hay que
+         esperar a que ML lo asigne. */
+      const producto = base.datos?.catalog_product_id ?? r.datos?.catalog_product_id ?? null;
+      if (!producto) {
+        fila.avisos.push("La publicación que ya tenías no está en un producto de catálogo, así que no se creó la de catálogo.");
+        continue;
+      }
+      const c = await mlCrudo("/items/catalog_listings", {
+        method: "POST",
+        body: JSON.stringify({ item_id: fila.itemId, catalog_product_id: producto }),
+      });
+      if (c.ok && c.datos?.id) fila.catalogoId = c.datos.id;
+      else fila.avisos.push(`No se pudo crear la de catálogo: ${causas(c.datos).errores.join(" · ") || c.status}`);
+    }
+
+    return { resultados, userProductId, sincronizacion: await sincronizacion(resultados) };
+  };
+
   /* Cómo quedaron, releído de ML: el caso bueno es el del Musamam, todas en el
      mismo User Product y cada normal atada a su de catálogo. Solo informa. */
   const sincronizacion = async (resultados) => {
@@ -435,6 +509,8 @@ export function crearPublicador({ ml, mlCrudo, raizDatos, base }) {
     }
     if (req.method === "POST" && ruta === "/publicar/validar")
       return responder(res, await validar(pedidoValido(await cuerpo(req)))), true;
+    if (req.method === "POST" && ruta === "/publicar/condicion")
+      return responder(res, await publicarCondicion(condicionValida(await cuerpo(req)))), true;
     if (req.method === "POST" && ruta === "/publicar")
       return responder(res, await publicar(pedidoValido(await cuerpo(req)))), true;
     return false;

@@ -47,6 +47,14 @@ const TOPE_PAGINAS = 20; // 1000 órdenes
 const A_LA_VEZ = 5;
 const API_MP = "https://api.mercadopago.com";
 const TOPE_PROMOS = 200;
+/* Borrar un descuento no es instantáneo: el ítem queda en `restore_requested`
+   mientras ML lo saca, y hasta que termina contesta "No candidates found for
+   item" a cualquier intento de poner otro. Por eso se espera a que vuelva a ser
+   candidato antes de crear el nuevo, igual que se espera el `catalog_product_id`
+   al publicar. */
+const ESPERA_PROMO = 2000;
+const VUELTAS_PROMO = 8;
+const ESTADOS_EN_CURSO = ["started", "pending", "sync_requested", "restore_requested"];
 const TOPE_PAGINAS_PROMO = 40; // 2000 ítems por campaña
 const TIPO_PROMO_VALIDO = /^[A-Z_]{3,40}$/;
 const ATRIBUTOS =
@@ -291,7 +299,26 @@ const ERRORES_DE_PROMO = {
   discount_below_10_percent_difference:
     "Con más de 35% de descuento, el precio para los mejores compradores tiene que ser al menos 10% más bajo.",
   "423_ENTITY_LOCKED": "La publicación está trabada unos segundos. Probá de nuevo.",
+  /* Lo tira cuando el ítem no es candidato a ese descuento. La causa más común,
+     y la que vio Franco, es que YA tiene uno puesto: ML no deja encimar y hay
+     que quitarlo primero (por eso el panel ofrece reemplazar). También pide
+     reputación verde, publicación activa y nueva, y exposición no gratuita. */
+  "No candidates found for item":
+    "Mercado Libre no lo acepta para un descuento ahora mismo. Si ya tiene uno puesto hay que quitarlo primero; además pide reputación verde, la publicación activa y nueva, y exposición no gratuita.",
 };
+
+/* "No candidates found for item": el ítem no es candidato. Justo después de
+   borrar un descuento es temporal, así que conviene reintentar. */
+export function esNoCandidato(datos) {
+  const texto = [
+    datos?.message,
+    datos?.error,
+    ...(Array.isArray(datos?.cause) ? datos.cause.map((c) => c.error_message || c.message || c.error_code) : []),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return texto.includes("No candidates found for item");
+}
 
 export function errorDePromoEnCastellano(datos, status) {
   const codigos = [
@@ -303,6 +330,11 @@ export function errorDePromoEnCastellano(datos, status) {
     const traducido = ERRORES_DE_PROMO[c] ?? ERRORES_DE_PROMO[String(c).trim()];
     if (traducido) return traducido;
   }
+  /* ML a veces envuelve el mensaje ("Errors: … No candidates found for item"),
+     así que si no hubo match exacto se busca la clave adentro del texto. */
+  const texto = codigos.map((c) => String(c)).join(" · ");
+  for (const [clave, traducido] of Object.entries(ERRORES_DE_PROMO))
+    if (clave.includes(" ") && texto.includes(clave)) return traducido;
   if (status === 423) return ERRORES_DE_PROMO["423_ENTITY_LOCKED"];
   if (status === 403) return "La app no tiene permiso para cambiar promociones.";
   const crudo = [datos?.message, ...(Array.isArray(datos?.cause) ? datos.cause.map((c) => c.error_message || c.message) : [])]
@@ -519,6 +551,22 @@ export default function pluginML() {
       return { items, sinPermiso: false, truncado: true };
     };
 
+    /* Espera a que ML termine de sacar el descuento viejo. Mientras queda en
+       `restore_requested` (o cualquier estado en curso), poner otro devuelve
+       "No candidates found for item". -> true si ya está libre. */
+    const esperarSinPromo = async (id, tipo) => {
+      for (let vuelta = 0; vuelta < VUELTAS_PROMO; vuelta++) {
+        await new Promise((r) => setTimeout(r, ESPERA_PROMO));
+        const r = await mlCrudo(`/seller-promotions/items/${id}?app_version=v2`);
+        if (!r.ok) continue;
+        const sigue = resumirPromos(r.datos).some(
+          (p) => p.tipo === tipo && ESTADOS_EN_CURSO.includes(p.estado)
+        );
+        if (!sigue) return true;
+      }
+      return false;
+    };
+
     /* Las promociones de cada publicación. Solo lectura, no escribe nada.
        Un 403 es el permiso de la app y no el ítem, así que se avisa aparte: la
        sección lo muestra y el resto de la pestaña sigue funcionando. */
@@ -684,16 +732,58 @@ export default function pluginML() {
 
           const pedido = await cuerpo(req);
           const { metodo, cuerpo: body } = pedidoDePromo(pedido);
-          const r = await mlCrudo(`/seller-promotions/items/${id}?app_version=v2`, {
+
+          /* Un descuento propio NO se modifica: ML contesta "No candidates found
+             for item" si el ítem ya tiene uno. La doc dice que para cambiarlo hay
+             que eliminarlo y aplicarlo de nuevo, así que eso es lo que se hace
+             acá, en un solo movimiento. Si el borrado sale bien y la creación
+             falla, el ítem queda SIN descuento: el diálogo lo avisa antes. */
+          let reemplazado = false;
+          if (pedido.reemplaza) {
+            const tipo = String(pedido.tipo || "").toUpperCase();
+            const q = new URLSearchParams({ promotion_type: tipo, app_version: "v2" });
+            if (pedido.promocionId) q.set("promotion_id", pedido.promocionId);
+            if (pedido.ofertaId) q.set("offer_id", pedido.ofertaId);
+            const d = await mlCrudo(`/seller-promotions/items/${id}?${q}`, { method: "DELETE" });
+            // Un 404 es "ya no estaba": no es un problema, se sigue.
+            if (!d.ok && d.status !== 404)
+              throw new ErrorML(d.status, `No se pudo quitar el descuento que tenía: ${errorDePromoEnCastellano(d.datos, d.status)}`);
+            reemplazado = true;
+            // ML tarda unos segundos en sacarlo; mientras tanto no es candidato.
+            await esperarSinPromo(id, tipo);
+          }
+
+          /* Aunque haya terminado de sacarlo, ML puede seguir contestando "no es
+             candidato" un rato más, así que se reintenta unas vueltas antes de
+             darlo por perdido. Sin esto el descuento viejo quedaba borrado y el
+             nuevo sin poner. */
+          let r = await mlCrudo(`/seller-promotions/items/${id}?app_version=v2`, {
             method: metodo,
             body: JSON.stringify(body),
           });
-          if (!r.ok) throw new ErrorML(r.status, errorDePromoEnCastellano(r.datos, r.status));
+          for (let vuelta = 0; !r.ok && reemplazado && vuelta < VUELTAS_PROMO; vuelta++) {
+            if (!esNoCandidato(r.datos)) break;
+            await new Promise((x) => setTimeout(x, ESPERA_PROMO));
+            r = await mlCrudo(`/seller-promotions/items/${id}?app_version=v2`, {
+              method: metodo,
+              body: JSON.stringify(body),
+            });
+          }
+          if (!r.ok)
+            throw new ErrorML(
+              r.status,
+              `${errorDePromoEnCastellano(r.datos, r.status)}${
+                reemplazado
+                  ? " OJO: el descuento que tenía YA SE QUITÓ, así que ahora está sin ninguno. Esperá un minuto y volvé a ponerlo."
+                  : ""
+              }`
+            );
           /* Se relee la publicación: con la promo puesta ML baja su `price` y la
              celda "En ML" tiene que comparar contra el de lista. */
           const promos = await mlCrudo(`/seller-promotions/items/${id}?app_version=v2`);
           return responder(res, {
             ok: true,
+            reemplazado,
             mandado: body,
             resultado: r.datos,
             promos: promos.ok ? resumirPromos(promos.datos) : null,

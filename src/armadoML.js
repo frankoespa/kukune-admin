@@ -145,15 +145,53 @@ export const condicionesDe = (ajustes) => ({
 
 /* El JSON de POST /items (y de /items/validate) para UN plan. `fotos` son los
    ids que devolvió /pictures/items/upload, en orden: la primera es la principal. */
-export function cuerpoDeItem({ ficha, plan, precio, stock, familyName, fotos, condiciones }) {
+/* Garantía, factura y máximo por compra. Los comparten el ítem completo y la
+   condición de venta suelta, así que vive acá y no duplicado: si alguna vez
+   cambia la factura, cambia en los dos caminos a la vez.
+   INVOICE es multivaluado y va como `values: [{id}]`; el resto, con
+   `value_name` (ver la nota de VALORES_FACTURA). */
+export function terminosDeVenta(condiciones) {
   const c = condiciones ?? CONDICIONES_POR_DEFECTO;
-  const { listing_type_id, tags } = tipoDePlan(plan);
-  const saleTerms = [
+  return [
     c.garantiaTipo && { id: "WARRANTY_TYPE", value_name: c.garantiaTipo },
     c.garantiaTiempo && { id: "WARRANTY_TIME", value_name: c.garantiaTiempo },
     idDeFactura(c.factura) && { id: "INVOICE", values: [{ id: idDeFactura(c.factura) }] },
     Number(c.maxPorCompra) > 0 && { id: "PURCHASE_MAX_QUANTITY", value_name: String(Number(c.maxPorCompra)) },
   ].filter(Boolean);
+}
+
+/* El JSON de POST /user-products/<UP>/items: otra condición de venta (otro plan
+   de cuotas) para un producto que YA existe.
+
+   Lo que ML hereda del User Product y por eso NO se manda:
+   `available_quantity` (de ahí que los planes compartan stock), `attributes`
+   (la ficha y las medidas del paquete), `pictures`, `domain_id`, `family_name`
+   y `title` —que ML arma solo; mandarlo da bad request—. Tampoco `condition`:
+   también es del producto.
+
+   Por eso agregar un plan a un perfume publicado es elegir el plan y el precio,
+   y nada más. El ítem nuevo tiene su propio MLA igual: en ML cada plan de
+   cuotas es una publicación aparte. */
+export function cuerpoDeCondicion({ plan, precio, condiciones }) {
+  const { listing_type_id, tags } = tipoDePlan(plan);
+  return {
+    price: Number(precio),
+    category_id: CATEGORIA_PERFUMES,
+    currency_id: "ARS",
+    buying_mode: "buy_it_now",
+    listing_type_id,
+    ...(tags.length ? { tags } : {}),
+    // Igual que al publicar de cero: sin esto ML prueba con me1, que la cuenta
+    // no tiene.
+    shipping: { mode: "me2", local_pick_up: false },
+    sale_terms: terminosDeVenta(condiciones),
+  };
+}
+
+export function cuerpoDeItem({ ficha, plan, precio, stock, familyName, fotos, condiciones }) {
+  const c = condiciones ?? CONDICIONES_POR_DEFECTO;
+  const { listing_type_id, tags } = tipoDePlan(plan);
+  const saleTerms = terminosDeVenta(c);
   const p = c.paquete ?? {};
   const paquete = [
     ["SELLER_PACKAGE_HEIGHT", p.alto, "cm"],

@@ -67,7 +67,11 @@ export const leerItemsDeCampanaML = (id, tipo) =>
 /* Escribe en Mercado Libre: suma la publicación a una campaña, cambia su precio
    en una tradicional, o le pone un descuento propio. Siempre después de una
    confirmación. `pedido` lo valida `pedidoDePromo` en el server.
-   -> { ok, mandado, resultado, promos } */
+
+   Con `reemplaza: true` el server quita primero el descuento que ya tenía: ML
+   no deja encimar dos (contesta "No candidates found for item") y la doc dice
+   que para cambiarlo hay que borrarlo y volver a crearlo.
+   -> { ok, reemplazado, mandado, resultado, promos } */
 export const ponerPromoML = (itemId, pedido) =>
   pedir(`/promociones/${itemId}`, { method: "POST", body: JSON.stringify(pedido) });
 
@@ -82,6 +86,13 @@ export const quitarPromoML = (itemId, { tipo, promocion, oferta } = {}) =>
     })}`,
     { method: "DELETE" }
   );
+
+/* Le agrega otro plan de cuotas a un perfume que YA está publicado: hereda del
+   User Product la ficha, las fotos, el nombre y el stock, así que solo viajan
+   el plan y el precio. ESCRIBE EN ML, siempre tras una confirmación.
+   -> { resultados, userProductId, sincronizacion } (como publicarEnML) */
+export const publicarCondicionML = (pedido) =>
+  pedir("/publicar/condicion", { method: "POST", body: JSON.stringify(pedido) });
 
 /* ---- Publicar (ver ml-publicar.js) ---- */
 
