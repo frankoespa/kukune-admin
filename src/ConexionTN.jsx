@@ -79,9 +79,11 @@ export function BandaConexionTN({ cuenta, productos, vinculados, trayendo, onCon
    Sin vínculo: un botón para elegir el producto. Con vínculo: lo que paga hoy
    el cliente, verde si es el precio de la app y óxido si no (compara, no es
    ganancia: nada de ámbar). Con promoción, abajo el tachado y el %. */
-export function CeldaTN({ perfume, conectado, productos, porVariante, usadas, onVincular, onStock, ajustesTN = {} }) {
+export function CeldaTN({ perfume, conectado, productos, porVariante, usadas, onVincular, onStock, onPublicarVariante, ajustesTN = {} }) {
   const [abierto, setAbierto] = useState(false);
   const v = vinculoTN(perfume);
+  // Un decant se publica como variante del producto de su frasco.
+  const frasco = perfume.decantDe ? vinculoTN(perfume.decantDe) : null;
   const variante = v ? porVariante.get(String(v.variantId)) : null;
   const precioApp = Number(perfume.precioTN) || 0;
   // En oferta, lo que tiene que pagar el cliente es el de oferta, con el normal tachado.
@@ -94,10 +96,16 @@ export function CeldaTN({ perfume, conectado, productos, porVariante, usadas, on
   if (!v) {
     contenido = (
       <span className="flex items-center justify-end gap-1">
-        <Link2 size={12} /> vincular
+        <Link2 size={12} /> {perfume.decantDe ? (frasco ? "publicar" : "vincular") : "vincular"}
       </span>
     );
-    titulo = conectado ? `Elegir el producto de Tiendanube de ${perfume.nombre}` : "Conectá Tiendanube para vincular";
+    titulo = !conectado
+      ? "Conectá Tiendanube para vincular"
+      : perfume.decantDe
+        ? frasco
+          ? `Publicar ${perfume.nombre} como variante del producto del frasco, o elegir una variante que ya exista`
+          : "Primero vinculá el frasco (modo Frascos): el decant va como variante de ese producto"
+        : `Elegir el producto de Tiendanube de ${perfume.nombre}`;
   } else if (!productos) {
     contenido = "vinculado";
     titulo = "Vinculado. Conectá Tiendanube para ver su precio.";
@@ -149,6 +157,15 @@ export function CeldaTN({ perfume, conectado, productos, porVariante, usadas, on
           variante={variante}
           productos={productos ?? []}
           usadas={usadas}
+          soloProducto={frasco?.productId ?? null}
+          onPublicar={
+            perfume.decantDe && frasco && !v && onPublicarVariante
+              ? (stock) => {
+                  setAbierto(false);
+                  onPublicarVariante(perfume, stock);
+                }
+              : null
+          }
           onElegir={(nuevo) => {
             setAbierto(false);
             onVincular(perfume, nuevo);
@@ -171,21 +188,25 @@ export function CeldaTN({ perfume, conectado, productos, porVariante, usadas, on
 const sinMedida = (s) => String(s).replace(/\b\d+(?:[.,]\d+)?\s*ml\b/gi, "").replace(/\s+/g, " ").trim();
 const paraBuscar = (s) => normalizarTexto(s).replace(/(\d)\s+ml\b/g, "$1ml");
 
-function BuscadorTN({ perfume, vinculo, variante, productos, usadas, onElegir, onStock, onCerrar }) {
-  const [consulta, setConsulta] = useState(() => sinMedida(perfume.nombre));
+/* `soloProducto` (decants): solo las variantes del producto del frasco, que es
+   donde va el decant. `onPublicar` agrega una variante nueva con su tamaño. */
+function BuscadorTN({ perfume, vinculo, variante, productos, usadas, soloProducto = null, onPublicar = null, onElegir, onStock, onCerrar }) {
+  const [consulta, setConsulta] = useState(() => (soloProducto ? "" : sinMedida(perfume.nombre)));
   const [verOcupadas, setVerOcupadas] = useState(false);
   const [stock, setStock] = useState(variante?.stock ?? 0);
+  const [stockNuevo, setStockNuevo] = useState("");
 
   // Una opción por variante: un perfume apunta a una variante, no al producto.
   const { opciones, ocultas } = useMemo(() => {
     const palabras = paraBuscar(consulta).split(/\s+/).filter(Boolean);
-    const todas = productos.flatMap((p) =>
+    const lista = soloProducto ? productos.filter((p) => String(p.id) === String(soloProducto)) : productos;
+    const todas = lista.flatMap((p) =>
       p.variantes.map((v) => ({ producto: p, variante: v, texto: `${p.nombre} ${v.valores} ${v.sku} ${p.id}` }))
     );
     const coinciden = palabras.length ? todas.filter((o) => palabras.every((w) => paraBuscar(o.texto).includes(w))) : todas;
     const libres = coinciden.filter((o) => String(o.variante.id) === String(vinculo?.variantId) || !usadas.has(String(o.variante.id)));
     return { opciones: (verOcupadas ? coinciden : libres).slice(0, 80), ocultas: coinciden.length - libres.length };
-  }, [consulta, productos, usadas, vinculo, verOcupadas]);
+  }, [consulta, productos, usadas, vinculo, verOcupadas, soloProducto]);
 
   return createPortal(
     <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/40 p-4" onClick={onCerrar}>
@@ -209,6 +230,30 @@ function BuscadorTN({ perfume, vinculo, variante, productos, usadas, onElegir, o
             style={{ borderColor: "var(--linea)", color: "var(--tinta)" }}
           />
         </div>
+
+        {onPublicar && (
+          <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2 text-[12px]" style={{ borderColor: "var(--linea)", background: "var(--zona-tn)" }}>
+            <span style={{ color: "var(--humo)" }}>Stock de la variante nueva</span>
+            <input
+              value={stockNuevo}
+              onChange={(e) => setStockNuevo(e.target.value.replace(/\D/g, ""))}
+              placeholder="sin límite"
+              inputMode="numeric"
+              className="k-num w-[84px] rounded-[3px] border px-2 py-1 text-right text-[12px]"
+              style={{ borderColor: "var(--linea)", color: "var(--tinta)" }}
+            />
+            <button
+              onClick={() => onPublicar(stockNuevo === "" ? null : Number(stockNuevo))}
+              className="k-col ml-auto rounded-[3px] border px-2 py-1"
+              style={{ borderColor: "var(--tinta)", color: "var(--tinta)" }}
+            >
+              Publicar como variante nueva
+            </button>
+            <span className="w-full text-[11px]" style={{ color: "var(--humo)" }}>
+              Vacío = sin llevar la cuenta de stock. Si la variante ya existe, elegila de la lista.
+            </span>
+          </div>
+        )}
 
         {vinculo && (
           <div className="flex items-center gap-2 border-b px-3 py-2 text-[12px]" style={{ borderColor: "var(--linea)", background: "var(--zona-tn)" }}>

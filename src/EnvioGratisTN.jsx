@@ -71,7 +71,11 @@ const Sugerencia = ({ texto, monto, onUsar }) =>
     </button>
   ) : null;
 
-export default function EnvioGratisTN({ perfumes, tn, onCambiar }) {
+/* `maxUnidades` baja a 3 cuando entran los decants: con ~100 ítems los
+   carritos de 4 son millones y la cuenta tarda segundos (medido: 4,9 s contra
+   0,2 s). Un carrito de 4 decants no llega a un monto de envío gratis de todos
+   modos; lo que se pierde son los de 4 frascos, y el panel lo dice. */
+export default function EnvioGratisTN({ perfumes, tn, onCambiar, maxUnidades = 4 }) {
   const guardado = Number(tn?.envioGratisDesde) || 0;
   const envio = Number(tn?.envioGratis) || 0;
   const [abierto, setAbierto] = useState(false);
@@ -82,12 +86,12 @@ export default function EnvioGratisTN({ perfumes, tn, onCambiar }) {
      catálogo y cada monto es una búsqueda. Solo con el panel abierto: son
      ~100.000 carritos y no hay por qué pagarlos con el panel cerrado. */
   const posibles = useMemo(
-    () => (abierto ? carritosPosibles(itemsDelCatalogo(perfumes), { ajustesTN: tn }) : null),
-    [abierto, perfumes, tn]
+    () => (abierto ? carritosPosibles(itemsDelCatalogo(perfumes), { ajustesTN: tn, maxUnidades }) : null),
+    [abierto, perfumes, tn, maxUnidades]
   );
   const r = useMemo(
-    () => (posibles ? analisisDelUmbral(perfumes, tn, tanteo, { gananciaMinima: minimo, posibles }) : null),
-    [posibles, perfumes, tn, tanteo, minimo]
+    () => (posibles ? analisisDelUmbral(perfumes, tn, tanteo, { gananciaMinima: minimo, posibles, maxUnidades }) : null),
+    [posibles, perfumes, tn, tanteo, minimo, maxUnidades]
   );
 
   const peor = r?.peorCarrito ?? null;
@@ -120,6 +124,13 @@ export default function EnvioGratisTN({ perfumes, tn, onCambiar }) {
           )}
         </span>
       </div>
+
+      {abierto && maxUnidades < 4 && (
+        <p className="mt-3 text-[12px]" style={{ color: "var(--humo)" }}>
+          Cuenta frascos y decants juntos, con carritos de hasta {maxUnidades} unidades: con los decants
+          adentro, los de 4 son millones y la cuenta tardaría varios segundos.
+        </p>
+      )}
 
       {abierto && envio <= 0 && (
         <p className="mt-3 text-[12.5px]" style={{ color: "var(--oxido)" }}>

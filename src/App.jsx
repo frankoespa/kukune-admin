@@ -45,6 +45,8 @@ import { aplicarDolar, atarAlDolar, conCostoEnPesos, costoAlDolar, costoUSDParaP
 import MercadoLibre from "./MercadoLibre";
 import PestanaTiendaNube from "./PestanaTiendaNube";
 import { gananciaDeBanda, resolverPrecios, resolverPreciosDelCatalogo } from "./precios";
+import { aplicarAVendibles, asignarTipo, nombreConMedida, pasesDeMedida, resolverDecantsDelCatalogo, soltarEnDecant } from "./cuentasDecant";
+import PestanaDecants from "./PestanaDecants";
 import { NumberCell } from "./NumberCell";
 import { ContextoBloqueo, useBloqueo } from "./bloqueo";
 
@@ -720,10 +722,11 @@ function Dialogo({ dialogo, onCerrar }) {
         <h3 className="mb-2 text-[15px] font-semibold" style={{ color: "var(--tinta)" }}>
           {dialogo.titulo}
         </h3>
+        {/* Un div y no un <p>: el texto puede traer una lista (párrafos, grillas). */}
         {dialogo.texto && (
-          <p className="mb-3 text-[12.5px]" style={{ color: "var(--humo)" }}>
+          <div className="mb-3 text-[12.5px]" style={{ color: "var(--humo)" }}>
             {dialogo.texto}
-          </p>
+          </div>
         )}
         {dialogo.conCampo && (
           <input
@@ -1228,8 +1231,10 @@ export default function App() {
      estado crudo, o el precio calculado nunca llega al archivo.
      `resolverPreciosDelCatalogo` devuelve el mismo array si no cambió nada, así
      que abrir la pantalla no dispara ningún guardado. */
+  /* Los decants se resuelven después, sobre la lista ya resuelta: su costo
+     cuelga del costo del perfume. También devuelve el mismo array si nada cambió. */
   const perfumesResueltos = useMemo(
-    () => resolverPreciosDelCatalogo(perfumes, ajustes),
+    () => resolverDecantsDelCatalogo(resolverPreciosDelCatalogo(perfumes, ajustes), ajustes),
     [perfumes, ajustes]
   );
 
@@ -1603,7 +1608,8 @@ export default function App() {
         .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
       const items = await Promise.all(
         conPrecio.map(async (p) => ({
-          nombre: p.nombre,
+          // La medida ya no va en el nombre: el cliente la necesita ver.
+          nombre: nombreConMedida(p),
           precioPublico: p.precioPublico,
           foto: await fotoComoDataUrl(p.foto),
         }))
@@ -1794,7 +1800,7 @@ export default function App() {
         paraProveedor.map(async (p) => {
           const perfume = perfumePorId.get(p.perfumeId);
           return {
-            producto: perfume?.nombre ?? p.producto,
+            producto: perfume ? nombreConMedida(perfume) : p.producto,
             cantidad: p.cantidad,
             foto: await fotoComoDataUrl(perfume?.foto),
           };
@@ -1934,13 +1940,19 @@ export default function App() {
   /* Soltar el objetivo de Tiendanube: mismo cuidado — margen o ganancia, la forma
      fijada y el precio resuelto van juntos, o el perfume vuelve al precio viejo
      del estado crudo. */
+  /* En un decant (id compuesto) cae en su entrada: con objetivo propio vuelve a
+     heredar del tipo, heredando pasa a precio a mano (`soltarEnDecant`). */
   const soltarMargenTNDelCatalogo = (id, precioResuelto) =>
     setPerfumes((ps) =>
-      ps.map((p) => {
-        if (p.id !== id) return p;
-        const { gananciaTN, formaTN, igualarDirectoTN, ...resto } = p;
-        return { ...resto, margenTN: null, precioTN: precioResuelto };
-      })
+      aplicarAVendibles(
+        ps,
+        [id],
+        (p) => {
+          const { gananciaTN, formaTN, igualarDirectoTN, ...resto } = p;
+          return { ...resto, margenTN: null, precioTN: precioResuelto };
+        },
+        (e) => soltarEnDecant(e, "tn", precioResuelto)
+      )
     );
 
   /* Fijar el objetivo de Tiendanube en uno o varios perfumes, en un solo
@@ -1950,11 +1962,11 @@ export default function App() {
      la que menos deja; `undefined` = la que ya tenía). Igualar necesita forma sí
      o sí: sin ella `objetivoTN` no lo lee y el precio quedaría a mano.
      Lo usan el popup y "Aplicar a todos". */
+  /* Los ids pueden ser de decants (`aplicarAVendibles`): la misma cuenta cae en
+     su entrada, que pasa a tener objetivo propio y deja de heredar del tipo. */
   const fijarObjetivoTN = (ids, { margen, ganancia, igualarDirecto, formaId }) => {
-    const cuales = new Set(ids);
     setPerfumes((ps) =>
-      ps.map((p) => {
-        if (!cuales.has(p.id)) return p;
+      aplicarAVendibles(ps, ids, (p) => {
         const { gananciaTN, formaTN, igualarDirectoTN, ...resto } = p;
         const forma = formaId === undefined ? formaTN : formaId;
         return {
@@ -1974,11 +1986,15 @@ export default function App() {
      resuelto va en el mismo movimiento, o el perfume vuelve al precio viejo. */
   const soltarMargenDelCatalogo = (id, precioResuelto) =>
     setPerfumes((ps) =>
-      ps.map((p) => {
-        if (p.id !== id) return p;
-        const { gananciaObjetivo, ...resto } = p;
-        return { ...resto, margenObjetivo: null, precioPublico: precioResuelto };
-      })
+      aplicarAVendibles(
+        ps,
+        [id],
+        (p) => {
+          const { gananciaObjetivo, ...resto } = p;
+          return { ...resto, margenObjetivo: null, precioPublico: precioResuelto };
+        },
+        (e) => soltarEnDecant(e, "directo", precioResuelto)
+      )
     );
 
   /* Fijar el objetivo de la venta directa en uno o varios perfumes, en un solo
@@ -1992,35 +2008,58 @@ export default function App() {
      La banda usada se guarda en `ajustes.bandaDirecta` para no retipear los tres
      números y para poder marcar después a los que se salieron. */
   const fijarObjetivoDirecto = (ids, { margen, ganancia, banda }) => {
-    const cuales = new Set(ids);
+    const fijar = (o) => {
+      const { gananciaObjetivo, ...resto } = o;
+      return ganancia != null
+        ? { ...resto, margenObjetivo: null, gananciaObjetivo: ganancia }
+        : { ...resto, margenObjetivo: margen };
+    };
     setPerfumes((ps) =>
-      ps.map((p) => {
-        if (!cuales.has(p.id)) return p;
-        const { gananciaObjetivo, ...resto } = p;
-        if (banda) {
+      aplicarAVendibles(
+        ps,
+        ids,
+        (p) => {
+          if (!banda) return fijar(p);
+          const { gananciaObjetivo, ...resto } = p;
           const g = gananciaDeBanda(p.costo, banda);
           // Sin costo no hay banda que aplicar: la fila queda como estaba.
           return g == null ? p : { ...resto, margenObjetivo: null, gananciaObjetivo: g };
-        }
-        return ganancia != null
-          ? { ...resto, margenObjetivo: null, gananciaObjetivo: ganancia }
-          : { ...resto, margenObjetivo: margen };
-      })
+        },
+        // La banda es del frasco: en un decant no se aplica.
+        (e) => (banda ? e : fijar(e))
+      )
     );
     if (banda) setAjustes((a) => ({ ...a, bandaDirecta: banda }));
   };
 
   /* El costo pasa por `registrarCosto`: deja asentado desde cuándo rige, para
      que las ventas de ML se midan contra el costo de su momento. */
+  /* Con el id de un decant, los campos caen en su entrada (precio, oferta,
+     vínculo con la variante). Un decant no tiene costo propio. */
   const cambiarPerfume = (id, { costo, ...campos }) =>
     setPerfumes((ps) =>
-      ps.map((p) => {
-        if (p.id !== id) return p;
-        const conCampos = { ...p, ...campos };
-        // Un atado al dólar sigue atado: su costo en USD se mueve con el de pesos.
-        return costo === undefined ? conCampos : conCostoEnPesos(conCampos, costo, ajustes.dolar?.valor);
-      })
+      aplicarAVendibles(
+        ps,
+        [id],
+        (p) => {
+          const conCampos = { ...p, ...campos };
+          // Un atado al dólar sigue atado: su costo en USD se mueve con el de pesos.
+          return costo === undefined ? conCampos : conCostoEnPesos(conCampos, costo, ajustes.dolar?.valor);
+        },
+        (e) => ({ ...e, ...campos })
+      )
     );
+
+  /* Ofrecer o dejar de ofrecer un tipo de decant en varios perfumes. */
+  const asignarDecant = (ids, tipoId, ofrecer) => setPerfumes((ps) => asignarTipo(ps, ids, tipoId, ofrecer));
+
+  /* El pase único de los nombres viejos: la medida sale del nombre y queda en
+     `ml`. Los que ya tienen `ml` distinto se saltean. Un solo `setPerfumes`. */
+  const pasarMedidas = () =>
+    setPerfumes((ps) => {
+      const porId = new Map(pasesDeMedida(ps).filter((x) => !x.conflicto).map((x) => [x.id, x]));
+      return porId.size ? ps.map((p) => (porId.has(p.id) ? { ...p, nombre: porId.get(p.id).nombre, ml: porId.get(p.id).ml } : p)) : ps;
+    });
 
   /* Asignarle unidades a ML o a Tiendanube las saca del stock base: son las que
      dejaste de tener sin publicar. El `anterior` lo lee quien llama de la
@@ -2253,6 +2292,7 @@ export default function App() {
               {[
                 ["pedido", "Mesa de precios"],
                 ["catalogo", "Catálogo"],
+                ["decants", "Decants"],
                 ["mercadolibre", "Mercado Libre"],
                 ["tiendanube", "Tiendanube"],
               ].map(([id, texto]) => (
@@ -2404,6 +2444,20 @@ export default function App() {
           onAtar={atarPerfume}
           onDesatar={desatarPerfume}
           onStockBase={asignarStockACanal}
+          onPasarMedidas={pasarMedidas}
+        />
+      )}
+
+      {vista === "decants" && (
+        <PestanaDecants
+          perfumes={perfumesResueltos}
+          ajustes={ajustes}
+          onAjustes={(campos) => setAjustes((a) => ({ ...a, ...campos }))}
+          onCambiar={cambiarPerfume}
+          onAsignar={asignarDecant}
+          onFijarObjetivo={fijarObjetivoDirecto}
+          onSoltarMargen={soltarMargenDelCatalogo}
+          onConfirmar={setDialogo}
         />
       )}
 

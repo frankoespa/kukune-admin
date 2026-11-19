@@ -5,11 +5,13 @@ import { analisisDePrecio, analisisTiendaNube, objetivoTN, ofertaDeTN, precioTie
 import { AjustesTiendaNube, DetalleTiendaNube } from "./TiendaNube";
 import { NumberCell } from "./NumberCell";
 import { buscarPerfumes, ConVistaPrevia, margenReal, pesos } from "./Catalogo";
-import { actualizarVarianteTN, cambiosParaTN, enviarCodigoTN, estadoTN, leerCategoriasTN, leerCuponesTN, leerProductosTN, pedirAutorizacionTN, vinculoTN } from "./clienteTN";
+import { actualizarVarianteTN, cambiosParaTN, crearVarianteTN, enviarCodigoTN, estadoTN, leerCategoriasTN, leerCuponesTN, leerProductosTN, pedirAutorizacionTN, vinculoTN } from "./clienteTN";
+import { ajustesTNDeDecants, decantsComoVendibles, nombreDeTipo, tiposDeDecant } from "./cuentasDecant";
 import { BandaConexionTN, CeldaTN, PanelActualizarTN } from "./ConexionTN";
 import CuponesTN from "./CuponesTN";
 import AplicarATodos from "./AplicarATodos";
 import EnvioGratisTN from "./EnvioGratisTN";
+import SimuladorCarrito from "./SimuladorCarrito";
 import { zonaEnvioTN } from "./umbralEnvioTN";
 
 /* ============================================================
@@ -39,7 +41,58 @@ import { zonaEnvioTN } from "./umbralEnvioTN";
 const COLUMNAS_TN = "52px minmax(200px,1fr) 100px 100px 124px 88px 100px 132px";
 const ANCHO_MINIMO = 52 + 200 + 200 + 312 + 132;
 
-export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCambiar, onSoltarMargenTN, onFijarObjetivoTN, onStockBase, onConfirmar }) {
+/* Frascos o decants: nunca mezclados en la tabla (pedido de Franco, más
+   práctico). Se recuerda entre visitas; es una preferencia de pantalla. */
+const CLAVE_MODO = "kukune:modo-tn";
+const leerModo = () => {
+  try {
+    return localStorage.getItem(CLAVE_MODO) === "decants" ? "decants" : "frascos";
+  } catch {
+    return "frascos";
+  }
+};
+
+export default function PestanaTiendaNube({ perfumes: frascos, ajustes: ajustesTodos, onAjustes, onCambiar, onSoltarMargenTN, onFijarObjetivoTN, onStockBase, onConfirmar }) {
+  const [modo, setModoEstado] = useState(leerModo);
+  const setModo = (m) => {
+    setModoEstado(m);
+    try {
+      localStorage.setItem(CLAVE_MODO, m);
+    } catch {
+      /* sin almacenamiento: el modo dura lo que la pantalla */
+    }
+  };
+  const [tipoFiltro, setTipoFiltro] = useState("");
+  const enDecants = modo === "decants";
+
+  /* Los decants como si fueran perfumes (`decantsComoVendibles`): así la fila,
+     el detalle, Aplicar a todos y Actualizar precios sirven igual. Las
+     escrituras llevan su id compuesto y App las enruta a la entrada del decant. */
+  const decants = useMemo(() => decantsComoVendibles(frascos, ajustesTodos), [frascos, ajustesTodos]);
+  const tipos = tiposDeDecant(ajustesTodos);
+  // Lo que mira la tienda entera (cupones, envío gratis, vínculos) va con los dos.
+  const todos = useMemo(() => [...frascos, ...decants], [frascos, decants]);
+  // Los de la tabla: los del modo.
+  const perfumes = useMemo(
+    () => (enDecants ? (tipoFiltro ? decants.filter((d) => d.tipo.id === tipoFiltro) : decants) : frascos),
+    [enDecants, decants, frascos, tipoFiltro]
+  );
+  /* Los decants redondean con el suyo: todo lo que cuenta en la tabla usa los
+     ajustes del modo. La caja de ajustes, en modo Decants, guarda el redondeo
+     en `ajustes.decants.redondeoTN` y el resto en la tienda. */
+  const ajustes = useMemo(
+    () => (enDecants ? { ...ajustesTodos, tiendaNube: ajustesTNDeDecants(ajustesTodos) } : ajustesTodos),
+    [enDecants, ajustesTodos]
+  );
+  const cambiarAjustesTN = (tn) => {
+    if (!enDecants) return onAjustes({ tiendaNube: tn });
+    const { redondeo, ...resto } = tn;
+    onAjustes({
+      tiendaNube: { ...resto, redondeo: ajustesTodos.tiendaNube?.redondeo },
+      decants: { ...(ajustesTodos.decants ?? {}), redondeoTN: redondeo },
+    });
+  };
+
   const [consulta, setConsulta] = useState("");
   const [soloEnvioGratis, setSoloEnvioGratis] = useState(false);
   const [soloOferta, setSoloOferta] = useState(false);
@@ -156,13 +209,44 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
   // A qué perfume está vinculada cada variante: el buscador no las ofrece dos veces.
   const usadas = useMemo(() => {
     const m = new Map();
-    for (const p of perfumes) {
+    for (const p of todos) {
       const v = vinculoTN(p);
       if (v) m.set(String(v.variantId), p.nombre);
     }
     return m;
-  }, [perfumes]);
-  const vinculados = usadas.size;
+  }, [todos]);
+  // Los del modo: Actualizar precios trabaja sobre ellos.
+  const vinculados = perfumes.filter((p) => vinculoTN(p)).length;
+
+  /* Publicar un decant como variante del producto del frasco. Escribe en la
+     tienda real: con confirmación, diciendo producto, tamaño, precio y stock. */
+  const publicarVariante = (decant, stock) => {
+    const frasco = vinculoTN(decant.decantDe);
+    const producto = (productos ?? []).find((x) => String(x.id) === String(frasco?.productId));
+    const valor = nombreDeTipo(decant.tipo);
+    const precio = Number(decant.precioTN) || 0;
+    if (!frasco || !(precio > 0)) {
+      setErrorTN(!frasco ? "Primero vinculá el frasco." : `"${decant.nombre}" no tiene precio de Tiendanube todavía.`);
+      return;
+    }
+    onConfirmar({
+      titulo: "Publicar el decant en Tiendanube",
+      texto: `Se agrega la variante "${valor}" al producto "${producto?.nombre ?? frasco.productId}", a ${pesos(precio)}${
+        stock == null ? ", sin llevar la cuenta de stock" : `, con ${stock} de stock`
+      }. Es la tienda real: la variante queda visible. La publicación del frasco no se toca. Si ya hay una variante "${valor}", se vincula esa y no se crea otra.`,
+      etiquetaOk: "Publicar",
+      onAceptar: async () => {
+        try {
+          const r = await crearVarianteTN(frasco.productId, { valor, precio, stock });
+          onCambiar(decant.id, { publicacionTN: { productId: frasco.productId, variantId: r.variante.id } });
+          if (r.yaExistia) setErrorTN(`Ya había una variante "${valor}" en ese producto: quedó vinculada. Revisá su precio con Actualizar precios.`);
+          traerProductos();
+        } catch (e) {
+          setErrorTN(`No se pudo publicar el decant (${e.message}).`);
+        }
+      },
+    });
+  };
 
   // Lo único que esta pantalla agrega a perfumes.json, y solo cuando se elige.
   const vincular = (perfume, vinculo) => onCambiar(perfume.id, { publicacionTN: vinculo ?? undefined });
@@ -189,7 +273,10 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
         `"${variante.productoNombre}"${variante.valores ? ` (${variante.valores})` : ""}: de ${
           infinito ? "infinito" : variante.stock
         } a ${stock} unidades. Se cambia en la tienda real.` +
-        (delta !== 0
+        // Un decant no tiene stock base en el catálogo: no hay nada que mover.
+        (perfume.decantDe
+          ? ""
+          : delta !== 0
           ? ` En el catálogo, el stock sin publicar de "${perfume.nombre}" ${delta > 0 ? "baja" : "sube"} ${Math.abs(delta)}.`
           : infinito
             ? " Venía sin llevar la cuenta, así que el stock sin publicar del catálogo no cambia: ajustalo a mano."
@@ -199,7 +286,7 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
         try {
           await actualizarVarianteTN(vinculoTN(perfume).productId, variante.id, { stock });
           traerProductos();
-          if (delta !== 0) onStockBase?.(perfume.id, variante.stock, stock);
+          if (delta !== 0 && !perfume.decantDe) onStockBase?.(perfume.id, variante.stock, stock);
         } catch (e) {
           setErrorTN(`No se pudo cambiar el stock (${e.message}).`);
         }
@@ -222,7 +309,7 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
         clave,
         ids: filtrados
           .slice()
-          .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"))
+          .sort((a, b) => a.nombre.localeCompare(b.nombre, "es", { numeric: true }))
           .map((p) => p.id),
       };
     }
@@ -253,12 +340,33 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
 
   return (
     <section className="mx-auto max-w-[1480px] px-6 py-8">
-      <div className="mb-6">
-        <h2 className="k-rotulo mb-1">Tiendanube</h2>
-        <p className="text-[12.5px]" style={{ color: "var(--humo)" }}>
-          Un solo precio que deja la ganancia pague como pague el cliente. El nombre, la foto y el
-          costo se cargan en el catálogo.
-        </p>
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2 className="k-rotulo mb-1">Tiendanube</h2>
+          <p className="text-[12.5px]" style={{ color: "var(--humo)" }}>
+            {enDecants
+              ? "Los decants, cada uno con su precio. Van como variante del producto del frasco. El tipo, el costo y la venta directa se arman en la pestaña Decants."
+              : "Un solo precio que deja la ganancia pague como pague el cliente. El nombre, la foto y el costo se cargan en el catálogo."}
+          </p>
+        </div>
+        {/* Molde del Precios | Ventas de ML. Nunca se mezclan en la tabla. */}
+        <div className="flex overflow-hidden rounded-[3px] border" style={{ borderColor: "var(--linea)" }} role="tablist">
+          {[
+            ["frascos", `Frascos (${frascos.length})`],
+            ["decants", `Decants (${decants.length})`],
+          ].map(([id, texto]) => (
+            <button
+              key={id}
+              role="tab"
+              aria-selected={modo === id}
+              onClick={() => setModo(id)}
+              className="k-col px-3 py-[7px] transition"
+              style={{ background: modo === id ? "var(--tinta)" : "var(--papel)", color: modo === id ? "#fff" : "var(--humo)" }}
+            >
+              {texto}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -276,6 +384,22 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
             style={{ background: "var(--papel)", borderColor: "var(--linea)", color: "var(--tinta)" }}
           />
         </div>
+        {enDecants && tipos.length > 1 && (
+          <select
+            value={tipoFiltro}
+            onChange={(e) => setTipoFiltro(e.target.value)}
+            className="k-col rounded-[3px] border px-2 py-[7px]"
+            style={{ background: "var(--papel)", borderColor: "var(--linea)", color: "var(--tinta)" }}
+            aria-label="Filtrar por tipo de decant"
+          >
+            <option value="">Todos los tamaños</option>
+            {tipos.map((t) => (
+              <option key={t.id} value={t.id}>
+                {nombreDeTipo(t)}
+              </option>
+            ))}
+          </select>
+        )}
         {/* Los que alcanzan el monto vendidos solos: ahí el envío lo pagás vos.
             Mismo molde que "N sin foto" y "N fuera de banda" del catálogo, con
             su misma regla: no desaparece mientras el filtro esté puesto aunque
@@ -347,8 +471,8 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
           cupones={cupones}
           error={errorCupones}
           cargando={leyendoCupones}
-          perfumes={perfumes}
-          ajustesTN={ajustes.tiendaNube}
+          perfumes={todos}
+          ajustesTN={ajustesTodos.tiendaNube}
           productos={productos ?? []}
           onRecargar={traerCupones}
           onConfirmar={onConfirmar}
@@ -359,7 +483,7 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
       <div className="mb-5">
         <AjustesTiendaNube
           tn={ajustes.tiendaNube}
-          onCambiar={(tn) => onAjustes({ tiendaNube: tn })}
+          onCambiar={cambiarAjustesTN}
           onConfirmar={onConfirmar}
           categorias={cuenta?.conectado ? categorias : null}
         />
@@ -368,10 +492,14 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
       {/* El catálogo entero, no `visibles`: el envío lo paga todo lo que se
           vende, no los resultados de la búsqueda. */}
       <EnvioGratisTN
-        perfumes={perfumes}
-        tn={ajustes.tiendaNube}
-        onCambiar={(envioGratisDesde) => onAjustes({ tiendaNube: { ...ajustes.tiendaNube, envioGratisDesde } })}
+        perfumes={todos}
+        tn={ajustesTodos.tiendaNube}
+        maxUnidades={decants.length ? 3 : 4}
+        onCambiar={(envioGratisDesde) => onAjustes({ tiendaNube: { ...ajustesTodos.tiendaNube, envioGratisDesde } })}
       />
+
+      {/* También la tienda entera: un carrito mezcla frascos y decants. */}
+      <SimuladorCarrito perfumes={todos} tn={ajustesTodos.tiendaNube} cuponesTienda={cupones ?? []} productosTN={productos ?? []} />
 
       <AplicarATodos
         perfumes={alaVista}
@@ -387,7 +515,9 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
       {alaVista.length === 0 ? (
         <p className="py-12 text-center text-[13px]" style={{ color: "var(--humo-claro)" }}>
           {perfumes.length === 0
-            ? "El catálogo está vacío. Los perfumes se agregan en la pestaña Catálogo."
+            ? enDecants
+              ? "No hay decants asignados. Se arman en la pestaña Decants."
+              : "El catálogo está vacío. Los perfumes se agregan en la pestaña Catálogo."
             : soloOferta && enOferta.size === 0
               ? "No queda ninguno en oferta."
               : soloEnvioGratis
@@ -407,7 +537,7 @@ export default function PestanaTiendaNube({ perfumes, ajustes, onAjustes, onCamb
                   onCambiar={onCambiar}
                   onSoltarMargenTN={onSoltarMargenTN}
                   onFijarObjetivoTN={onFijarObjetivoTN}
-                  conexion={{ conectado: !!cuenta?.conectado, productos, porVariante, usadas, onVincular: vincular, onStock: cambiarStock, ajustesTN: ajustes.tiendaNube ?? {} }}
+                  conexion={{ conectado: !!cuenta?.conectado, productos, porVariante, usadas, onVincular: vincular, onStock: cambiarStock, onPublicarVariante: publicarVariante, ajustesTN: ajustes.tiendaNube ?? {} }}
                   cuponesTienda={cupones ?? []}
                   productosTN={productos ?? []}
                 />

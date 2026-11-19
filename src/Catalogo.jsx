@@ -10,6 +10,7 @@ import { NumberCell } from "./NumberCell";
 import { CampoProtegido } from "./CampoProtegido";
 import { pctSinMiles as pctCorto } from "./numeros";
 import { estaSinStock, stockPorPerfume, totalEnMano } from "./stock";
+import { pasesDeMedida } from "./cuentasDecant";
 import { actualizarPublicacionML, estadoML, leerPublicacionesML } from "./clienteML";
 import { actualizarVarianteTN, estadoTN, leerProductosTN, vinculoTN } from "./clienteTN";
 
@@ -30,7 +31,8 @@ import { actualizarVarianteTN, estadoTN, leerProductosTN, vinculoTN } from "./cl
    así el color de cada canal es una franja continua. */
 const COLUMNAS_CATALOGO =
   [
-    "52px minmax(180px,1fr) 100px",
+    // ml del frasco al lado del nombre: la medida ya no va en el nombre.
+    "52px minmax(180px,1fr) 64px 100px",
     // Precio y Margen pegados: son un par que se maneja junto, igual que en la
     // tabla del pedido. Con envío y Ganancia salen de ellos.
     "104px 88px 96px 100px",
@@ -347,16 +349,22 @@ export default function Catalogo({
   onAtar,
   onDesatar,
   onStockBase,
+  onPasarMedidas,
 }) {
   const [consulta, setConsulta] = useState("");
   const [soloSinFoto, setSoloSinFoto] = useState(false);
   const [soloFueraDeBanda, setSoloFueraDeBanda] = useState(false);
   const [soloSinStock, setSoloSinStock] = useState(false);
+  const [soloSinMl, setSoloSinMl] = useState(false);
   const [porMargen, setPorMargen] = useState(false);
   const [nuevo, setNuevo] = useState("");
   const columnas = COLUMNAS_CATALOGO;
 
   const sinFoto = perfumes.filter((p) => !p.foto).length;
+  // Sin los ml del frasco no hay costo de decant.
+  const sinMl = perfumes.filter((p) => !(Number(p.ml) > 0)).length;
+  // Los que todavía traen la medida en el nombre: el pase único la muda a `ml`.
+  const pases = useMemo(() => pasesDeMedida(perfumes), [perfumes]);
 
   // Cuánto hay en cada canal. No se guarda: se lee en vivo (ver el hook).
   const [enCanales, anotarCanal] = useStockDeCanales(perfumes);
@@ -434,7 +442,8 @@ export default function Catalogo({
   const visibles = useMemo(() => {
     const conFiltro = soloFueraDeBanda ? perfumes.filter((p) => fueraDeBanda.has(p.id)) : perfumes;
     const conStock = soloSinStock ? conFiltro.filter((p) => sinStock.has(p.id)) : conFiltro;
-    const base = soloSinFoto ? conStock.filter((p) => !p.foto) : conStock;
+    const conMl = soloSinMl ? conStock.filter((p) => !(Number(p.ml) > 0)) : conStock;
+    const base = soloSinFoto ? conMl.filter((p) => !p.foto) : conMl;
     const filtrados = buscarPerfumes(base, consulta);
     const porId = new Map(filtrados.map((p) => [p.id, p]));
 
@@ -462,7 +471,43 @@ export default function Catalogo({
       };
     }
     return orden.current.ids.map((id) => porId.get(id)).filter(Boolean);
-  }, [perfumes, consulta, soloSinFoto, porMargen, soloFueraDeBanda, fueraDeBanda, soloSinStock, sinStock]);
+  }, [perfumes, consulta, soloSinFoto, porMargen, soloFueraDeBanda, fueraDeBanda, soloSinStock, sinStock, soloSinMl]);
+
+  /* Confirmación con la lista entera: es el nombre que ven los pedidos, los
+     PDF y los buscadores, y conviene leerlo antes de aceptar. */
+  const pasarMedidas = (lista) => {
+    const conflictos = lista.filter((x) => x.conflicto);
+    const van = lista.filter((x) => !x.conflicto);
+    onConfirmar({
+      titulo: `Pasar la medida de ${van.length} nombre${van.length === 1 ? "" : "s"} a la columna ml`,
+      ancho: "max-w-2xl",
+      texto: (
+        <div>
+          <p className="mb-2">
+            Se saca la medida del nombre y queda en la columna ml. El catálogo, los pedidos y los
+            buscadores pasan a mostrar el nombre sin la medida; los PDF la siguen mostrando.
+            {conflictos.length > 0 &&
+              ` ${conflictos.length} ya tienen otros ml cargados y no se tocan (marcados abajo).`}
+          </p>
+          <div data-scroll className="max-h-[42vh] overflow-y-auto rounded-[3px] border" style={{ borderColor: "var(--linea)" }}>
+            {lista.map((x) => (
+              <div
+                key={x.id}
+                className="grid grid-cols-[1fr_1fr_56px] gap-2 border-b px-2 py-1 text-[12px]"
+                style={{ borderColor: "var(--linea)", color: x.conflicto ? "var(--oxido)" : "var(--tinta)" }}
+              >
+                <span className="truncate" style={{ color: "var(--humo)" }} title={x.antes}>{x.antes}</span>
+                <span className="truncate" title={x.nombre}>{x.nombre}</span>
+                <span className="k-num text-right">{x.conflicto ? "no" : `${x.ml} ml`}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ),
+      etiquetaOk: "Pasar",
+      onAceptar: onPasarMedidas,
+    });
+  };
 
   const crear = () => {
     const nombre = nuevo.trim();
@@ -490,7 +535,7 @@ export default function Catalogo({
               value={nuevo}
               onChange={(e) => setNuevo(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && crear()}
-              placeholder="Marca + nombre + ml"
+              placeholder="Marca + nombre (los ml van aparte)"
               className="w-[280px] rounded-[3px] border px-2 py-1.5 text-[12.5px]"
               style={{ background: "var(--papel)", borderColor: "var(--linea)", color: "var(--tinta)" }}
             />
@@ -578,6 +623,38 @@ export default function Catalogo({
             }}
           >
             {soloSinStock && sinStock.size === 0 ? "Ver todos" : `${sinStock.size} sin stock`}
+          </button>
+        )}
+
+        {/* Sin los ml del frasco el decant no tiene costo. Misma regla que los
+            otros: no desaparece con el filtro puesto. Humo: falta un dato, no
+            es un error. */}
+        {(sinMl > 0 || soloSinMl) && (
+          <button
+            onClick={() => setSoloSinMl((v) => !v)}
+            aria-pressed={soloSinMl}
+            title="No tienen cargados los ml del frasco: sus decants no tienen costo hasta que los cargues."
+            className="k-col rounded-[3px] border px-3 py-[7px] transition"
+            style={{
+              borderColor: soloSinMl ? "var(--tinta)" : "var(--linea)",
+              color: soloSinMl ? "var(--tinta)" : "var(--humo)",
+              background: soloSinMl ? "var(--vidrio-hondo)" : "transparent",
+            }}
+          >
+            {soloSinMl && sinMl === 0 ? "Ver todos" : `${sinMl} sin ml`}
+          </button>
+        )}
+
+        {/* El pase único: los nombres viejos traen "100ml" y la medida ahora
+            vive en su propio campo. Desaparece cuando no queda ninguno. */}
+        {pases.length > 0 && (
+          <button
+            onClick={() => pasarMedidas(pases)}
+            title="Saca la medida del nombre y la carga en la columna ml. Antes te muestra la lista entera."
+            className="k-col rounded-[3px] border px-3 py-[7px] transition"
+            style={{ borderColor: "var(--linea)", color: "var(--tinta)" }}
+          >
+            Pasar la medida del nombre a ml ({pases.length})
           </button>
         )}
 
@@ -753,7 +830,7 @@ function EncabezadoCatalogo({ columnas }) {
   return (
     <div className="sticky top-0 z-[5] pb-1.5 pt-1" style={{ background: "var(--vidrio)" }}>
       <div className="grid items-center border border-transparent" style={{ gridTemplateColumns: columnas }}>
-        <span className="col-span-3 k-col px-2 py-1.5" style={{ color: "var(--humo)" }}>
+        <span className="col-span-4 k-col px-2 py-1.5" style={{ color: "var(--humo)" }}>
           Perfume
         </span>
         {grupo("Venta directa", "var(--zona-directa-honda)", 4)}
@@ -763,6 +840,7 @@ function EncabezadoCatalogo({ columnas }) {
       <div className="grid items-center border border-transparent" style={{ gridTemplateColumns: columnas }}>
         <span />
         {col("Perfume", "transparent", "text-left")}
+        {col("ml", "transparent")}
         {col("Costo", "transparent")}
         {col("Precio", "var(--zona-directa)")}
         {col("Margen", "var(--zona-directa)")}
@@ -1246,9 +1324,19 @@ function FilaPerfume({
         <input
           value={perfume.nombre}
           onChange={(e) => onCambiar(perfume.id, { nombre: e.target.value })}
-          placeholder="Marca + nombre + ml"
+          placeholder="Marca + nombre"
           className="w-full rounded-[3px] border px-2 py-1.5 text-[13px]"
           style={{ background: "var(--papel)", borderColor: "var(--linea)", color: "var(--tinta)" }}
+        />
+      </div>
+
+      {/* Los ml del frasco entero. Sin cargar, el decant no tiene costo: la caja
+          con borde punteado lo dice sin inventar un número. */}
+      <div className="px-1" title="Los ml del frasco entero. De acá sale el costo por ml de los decants.">
+        <NumberCell
+          value={Number(perfume.ml) > 0 ? Number(perfume.ml) : ""}
+          onChange={(v) => onCambiar(perfume.id, { ml: v > 0 ? v : undefined })}
+          style={Number(perfume.ml) > 0 ? undefined : { borderStyle: "dashed" }}
         />
       </div>
 

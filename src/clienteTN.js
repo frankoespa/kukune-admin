@@ -49,6 +49,12 @@ export const leerProductosTN = async () => (await pedir("/productos")).productos
 export const actualizarVarianteTN = (productId, variantId, cambios) =>
   pedir(`/variantes/${productId}/${variantId}`, { method: "PUT", body: JSON.stringify(cambios) });
 
+/* ESCRIBE EN TIENDANUBE: agrega la variante de un decant ("10 ml") al producto
+   del frasco. Si ya existía con ese tamaño, la devuelve sin crear otra.
+   -> { variante, yaExistia }. Solo después de una confirmación. */
+export const crearVarianteTN = (productId, { valor, precio, stock = null }) =>
+  pedir(`/productos/${productId}/variantes`, { method: "POST", body: JSON.stringify({ valor, precio, stock }) });
+
 /* Las categorías de la tienda, solo lectura: [{ id, nombre }]. */
 export const leerCategoriasTN = async () => (await pedir("/categorias")).categorias;
 

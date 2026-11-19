@@ -173,8 +173,10 @@ export function analisisDelUmbral(
     const objetivo = objetivoTN(p);
     if (!objetivo || objetivo.igualarDirecto || !(Number(p.costo) > 0)) continue;
     const args = { costo: p.costo, precioDirecto: p.precioPublico, ...objetivo };
-    const hoy = precioTiendaNubeDesdeObjetivo({ ...args, ajustesTN: sinMonto });
-    const queda = precioTiendaNubeDesdeObjetivo({ ...args, ajustesTN: conMonto });
+    // Un decant redondea con el suyo (`redondeoTN` del vendible), no con el de los frascos.
+    const propio = p.redondeoTN != null ? { redondeo: p.redondeoTN } : null;
+    const hoy = precioTiendaNubeDesdeObjetivo({ ...args, ajustesTN: { ...sinMonto, ...propio } });
+    const queda = precioTiendaNubeDesdeObjetivo({ ...args, ajustesTN: { ...conMonto, ...propio } });
     if (!hoy || !queda || hoy.noAplica || queda.noAplica) continue;
     if (hoy.precio !== queda.precio)
       seMueven.push({

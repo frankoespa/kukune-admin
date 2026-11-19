@@ -79,6 +79,42 @@ export const resumirProducto = (p) => ({
   categorias: (p.categories ?? []).map((c) => (typeof c === "object" ? c.id : c)),
 });
 
+/* Crear la variante de un decant (doc "Product Variant" 2025-03): `POST
+   /products/<p>/variants` con `values` (uno por cada propiedad del producto) y
+   `price`. Sin `stock` nace sin llevar la cuenta (infinito). Pura y exportada
+   para probarla desde Node.
+
+   El producto tiene que tener UNA sola propiedad y que sea "Tamaño" (Franco ya
+   la tiene en todos, con la variante del frasco entero). Si no, no se crea
+   nada: tocar las propiedades le cambiaría la publicación al frasco. Si ya hay
+   una variante con ese valor, se devuelve para vincularla en vez de repetirla
+   (Tiendanube respondería 422 "Variants cannot be repeated").
+   -> { existente: variante } | { cuerpo }. Tira Error con el motivo. */
+const sinTildes = (s) => String(s ?? "").normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+const mismoValor = (a, b) => sinTildes(a).replace(/\s+/g, "") === sinTildes(b).replace(/\s+/g, "");
+
+export function pedidoDeVariante({ producto, valor, precio, stock = null }) {
+  const atributos = (producto?.attributes ?? []).map(nombreDe);
+  if (atributos.length !== 1 || sinTildes(atributos[0]) !== "tamano")
+    throw new Error(
+      atributos.length === 0
+        ? 'El producto no tiene la propiedad "Tamaño". Agregala en el panel de Tiendanube (con la variante del frasco entero) y volvé a probar.'
+        : `El producto tiene las propiedades ${atributos.map((a) => `"${a}"`).join(", ")}: la app solo sabe agregar variantes cuando la única es "Tamaño".`
+    );
+  const texto = String(valor ?? "").trim();
+  if (!texto) throw new Error("Falta el tamaño de la variante");
+  if (!(Number(precio) > 0)) throw new Error("Precio inválido");
+  const existente = (producto.variants ?? []).find((v) => (v.values ?? []).length === 1 && mismoValor(nombreDe(v.values[0]), texto));
+  if (existente) return { existente };
+  const cuerpo = { values: [{ es: texto }], price: Number(precio) };
+  if (stock != null && stock !== "") {
+    const n = Number(stock);
+    if (!Number.isInteger(n) || n < 0) throw new Error("Stock inválido");
+    cuerpo.stock = n;
+  }
+  return { cuerpo };
+}
+
 /* Lo que se le manda a Tiendanube para crear o cambiar un cupón, revisado antes
    (doc "Coupons" 2025-03). Con `actual` (editar) devuelve solo lo que cambió.
    Pura y exportada para probarla desde Node. Tira Error con el motivo. */
@@ -364,6 +400,24 @@ export default function pluginTN() {
         if (req.method === "GET" && ruta === "/categorias") return responder(res, { categorias: await categorias() });
         const mcat = ruta.match(/^\/productos\/(\d+)\/categorias$/);
         if (req.method === "PUT" && mcat) return responder(res, await moverCategoria(mcat[1], await cuerpo(req)));
+
+        /* Agregar la variante de un decant al producto del frasco. Se relee el
+           producto (propiedades y variantes) justo antes: lo que se decide sale
+           de cómo está HOY en la tienda, no de la lista que tiene la pantalla. */
+        const mv = ruta.match(/^\/productos\/(\d+)\/variantes$/);
+        if (req.method === "POST" && mv) {
+          const pedido = await cuerpo(req);
+          const producto = await tn(`/products/${mv[1]}`);
+          let plan;
+          try {
+            plan = pedidoDeVariante({ producto, valor: pedido.valor, precio: pedido.precio, stock: pedido.stock });
+          } catch (e) {
+            throw new ErrorTN(409, e.message);
+          }
+          if (plan.existente) return responder(res, { variante: resumirVariante(plan.existente), yaExistia: true });
+          const r = await tn(`/products/${mv[1]}/variants`, { method: "POST", body: JSON.stringify(plan.cuerpo) });
+          return responder(res, { variante: resumirVariante(r), yaExistia: false }, 201);
+        }
 
         const m = ruta.match(/^\/variantes\/(\d+)\/(\d+)$/);
         if (req.method === "PUT" && m) {

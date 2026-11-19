@@ -24,7 +24,7 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   `src/main.jsx` solo monta `<App />`.
 - Piezas separadas de `App.jsx`: `src/pdf.js` (catálogo PDF), `src/precios.js`
   (precio sugerido por margen), `src/almacenamiento.js` (cliente de los archivos)
-  y las pantallas `src/Catalogo.jsx`, `src/MercadoLibre.jsx` y `src/PestanaTiendaNube.jsx`. La navegación entre pantallas
+  y las pantallas `src/Catalogo.jsx`, `src/PestanaDecants.jsx`, `src/MercadoLibre.jsx` y `src/PestanaTiendaNube.jsx`. La navegación entre pantallas
   es un `useState` (`vista`), no hay router.
 - `src/stock.js`: el stock base y sus movimientos (ver "Stock"). Puro y sin
   imports, probado desde Node.
@@ -248,6 +248,86 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - Botón-filtro **"N sin stock"** en el catálogo, con la regla de los otros tres:
   no desaparece con el filtro puesto (ahí dice "Ver todos"). En humo, no en
   óxido: no tener stock cargado no es un error, y al principio son todos.
+
+## Decants
+- Porciones chicas de un perfume (5 ml, 10 ml…) en su frasquito con caja, que
+  se venden directo y en Tiendanube. Cuentas puras en **`src/cuentasDecant.js`**
+  (probadas desde Node). **No se puede llamar `decants.js`**: choca en Windows
+  con un `Decants.jsx`, como `clienteML.js` con `MercadoLibre.jsx`.
+- **La medida del frasco vive en `perfume.ml`, no en el nombre** (pedido de
+  Franco). Columna "ml" en el catálogo, al lado del costo, y filtro "N sin ml".
+  Los nombres viejos traían "100ml": el botón **"Pasar la medida del nombre a
+  ml (N)"** (`pasesDeMedida` / `separarMedida`) la muda con un `Dialogo` que
+  muestra la lista entera, y desaparece cuando no queda ninguno. Los que ya
+  tienen otros `ml` no se tocan. Los PDF vuelven a mostrarla con
+  `nombreConMedida()`. Sin `ml` el decant **no tiene costo** (`—`): no se lee la
+  medida del nombre para hacer cuentas.
+- **Tipos** en `ajustes.decants = { tipos, redondeoDirecto, redondeoTN }` (no
+  está en `AJUSTES_POR_DEFECTO`: abrir no escribe). Cada tipo: `{id, ml,
+  costoFrasco, costoCaja}` + su objetivo de precio con **las mismas claves que un
+  perfume** (`margenObjetivo`, `gananciaObjetivo`, `margenTN`, `gananciaTN`,
+  `igualarDirectoTN`, `formaTN`). El frasco y la caja son por tipo (decisión de
+  Franco). Redondeo propio: el $1.000 de los frascos es grueso para un decant.
+- **Costo** = `round(costo ÷ ml × ml del decant + frasco + caja)`
+  (`costoDecant`). No se guarda: sigue al costo del perfume y al dólar.
+- **Asignación**: `perfume.decants = [{tipo, …, precioPublico, precioTN,
+  publicacionTN, ofertaTN}]`. Sin la clave = sin decants, sin migración.
+- **Herencia del objetivo, por grupo** (directo y Tiendanube aparte): si la
+  entrada no tiene ninguna clave del grupo, hereda del tipo; si tiene alguna
+  —aunque sea `null`— manda la suya ("presente" = distinto de `undefined`). Por
+  eso la X tiene dos destinos (`soltarEnDecant`): con objetivo propio **vuelve al
+  tipo**; heredando, **pasa a precio a mano** (`margenTN: null`). El precio
+  resuelto va en el mismo movimiento, la trampa de siempre.
+- `resolverDecantsDelCatalogo()` corre **después** de
+  `resolverPreciosDelCatalogo()` en el `useMemo` de App (no adentro: sería un
+  import circular con `precios.js`). Reusa `objetivoDirecto`, `objetivoTN` y
+  `precioTiendaNubeDesdeObjetivo` sin fórmulas nuevas, y devuelve el mismo array
+  si nada cambió.
+- **Un decant es un "vendible" con forma de perfume** (`vendibleDeDecant`): id
+  compuesto `<perfumeId>:decant:<tipoId>`, nombre "X · 10 ml", `costo` del
+  decant, las claves de objetivo efectivas, `decantDe`, `tipo` y `hereda`. Así
+  **todo lo de Tiendanube vale igual para los decants sin duplicar
+  componentes**: detalle por forma de pago, cupón y promo simulados, oferta, `=`,
+  Aplicar a todos, Actualizar precios, cupones reales, zona de envío. Las
+  escrituras de App (`cambiarPerfume`, `fijarObjetivoTN`,
+  `soltarMargenTNDelCatalogo`, `fijarObjetivoDirecto`, `soltarMargenDelCatalogo`)
+  pasan por **`aplicarAVendibles`**, que manda cada id al frasco o a la entrada
+  del decant. La banda de ganancia no se aplica a decants.
+- **Pestaña Decants** (`vista === "decants"`): caja de tipos (números con
+  `CampoProtegido`; quitar un tipo avisa cuántos perfumes y variantes publicadas
+  tiene, y la variante queda en la tienda), botones "Ofrecer 10 ml en N" / "sacar"
+  sobre los que se ven, y por perfume y tipo: casilla, costo y el par
+  precio/margen/ganancia de **venta directa**. Lo de Tiendanube no va acá.
+- **Tiendanube tiene dos modos: Frascos | Decants** (pedido de Franco: más
+  práctico que mezclarlos), recordado en `localStorage` (`kukune:modo-tn`).
+  Buscador, filtros, Aplicar a todos y Actualizar precios trabajan **solo sobre
+  el modo**: verificado en la copia que aplicar en Decants dejó los frascos
+  idénticos. En modo Decants la caja de ajustes guarda el redondeo en
+  `ajustes.decants.redondeoTN` y el resto en la tienda. **Lo que mira la tienda
+  entera va con los dos**: cupones reales, vínculos usados y la calculadora del
+  envío gratis.
+- **Calculadora del envío gratis con decants: carritos de hasta 3**, no 4
+  (`maxUnidades`, y el panel lo dice). Medido con 33 frascos + 2 tipos en todos:
+  99 ítems, 4,9 s con 4 contra 0,2 s con 3. Un carrito de 4 decants no llega a
+  un monto de envío gratis; lo que se pierde son los de 4 frascos.
+- **Comisión sobre el envío del cliente pesa mucho en un decant**: un decant solo
+  nunca llega al monto, así que paga el envío el cliente y la comisión sobre ese
+  envío sale de lo tuyo (con 6 cuotas, $2.963 sobre un decant de $26.800). La
+  cuenta es la de siempre; se ve en el detalle.
+- **Publicar como variante** (`POST /api/tn/productos/<p>/variantes`,
+  `pedidoDeVariante()` pura en `vite-plugin-tn.js`, doc "Product Variant"
+  2025-03): desde la celda "En Tiendanube" del decant, que filtra el buscador al
+  producto del frasco. Se relee el producto: tiene que tener **una sola
+  propiedad, "Tamaño"** (Franco la tiene en todos con la variante del frasco
+  entero); si no, error y no se crea nada —**la publicación del frasco no se
+  toca nunca**—. Si ya hay una variante con ese tamaño se vincula esa
+  (Tiendanube daría 422 "Variants cannot be repeated"). Cuerpo: `{values:
+  [{es: "10 ml"}], price, stock?}`; sin stock nace sin llevar la cuenta. Con
+  `Dialogo`. El vínculo queda en la entrada del decant. Un decant no tiene stock
+  base: cambiar el stock de su variante no mueve nada del catálogo.
+- **Probado solo en la copia con Tiendanube falsa** (`POST` con `{"values":
+  [{"es":"10 ml"}],"price":24800,"stock":3}`, el error sin "Tamaño", `PUT` del
+  precio). La primera variante real la crea Franco.
 
 ## Catálogo de perfumes
 - El nombre y la foto de cada perfume viven **una sola vez** en
@@ -1071,6 +1151,42 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   envío gratis vendidos solos Hawas Verde ($120.000 justo, inclusivo), Rayhaan
   Italia y 9PM Night Out, y +$340.000 contra el envío gratis siempre.
 
+## Simulador de carrito (Tiendanube)
+- Banda **"Simular carrito"** en la pestaña Tiendanube (`src/SimuladorCarrito.jsx`),
+  debajo de la del envío gratis. Cuentas puras en **`src/cuentasCarrito.js`**
+  (probadas desde Node contra `analisisTiendaNube`: un frasco solo, 2 iguales
+  con promo progresiva y un cupón a todo dan exactamente lo mismo). Pedido de
+  Franco: las dudas de cuotas, mínimos y decants eran preguntas sobre carritos,
+  y el detalle de un precio mira un perfume solo.
+- **Estado de la banda, nada más**: no escribe, no se guarda, se pierde al salir
+  de la pestaña. Las líneas guardan solo `{id, cantidad, enPromo}` y el ítem se
+  busca en vivo, así siguen a los precios. Mira **la tienda entera** (frascos y
+  decants juntos), como los cupones y el envío gratis, sin importar el modo.
+- **Sin fórmulas nuevas**: el carrito pasa **una vez** por `analisisTiendaNube`
+  con costo y precio totales (como `gananciaDelCarrito`), así que mínimos de
+  las formas contra el total, envío desde un monto, comisión sobre el envío del
+  cliente (una vez por carrito) y descuento del medio de pago salen solos. El
+  precio de cada ítem es `pagaEnTN` (la oferta, si hay; un decant con su
+  redondeo).
+- Lo que se arma en el módulo porque esa función no lo sabe hacer con un
+  carrito mezclado:
+  - **Promo por cantidad por unidades concretas**: en "Llevá X pagá Y" van
+    gratis **las más baratas** de las que entran (supuesto, no confirmado en la
+    ayuda de Tiendanube; el panel lo dice). Progresivo: % sobre las que entran
+    si llegan a N. Una casilla por línea dice si entra. Se pasa como descuento
+    equivalente (va 2°, antes del cupón).
+  - **Cupón por línea**: uno real limitado a productos/categorías
+    (`aQuienAplica`) se calcula solo sobre las líneas a las que aplica y se pasa
+    como monto fijo. Su mínimo, contra el subtotal con la promo.
+- **"Suma a tu ganancia"** por línea = ganancia del carrito − la del carrito sin
+  esa línea, con la forma elegida (clic en una fila de formas; por defecto la que
+  menos deja). Es marginal a propósito: el envío y las comisiones fijas ya los
+  paga el resto, así que **los aportes no suman el total**. `—` si sin la línea
+  esa forma no se ofrece (mínimo). Con un 3x2 puede dar números grandes: sacar
+  los decants hace que el regalado pase a ser un frasco, y eso es real.
+- El buscador se **cierra al agregar**: abierto tapaba los +/− de las líneas y
+  un clic en "+" agregaba otro perfume.
+
 ## Conexión con Tiendanube
 - Mismo molde que ML: vincular cada perfume con su variante y mandarle precio y
   stock, siempre con confirmación. Piezas: `vite-plugin-tn.js` (dev y preview,
@@ -1811,6 +1927,9 @@ veces por probar encima.
   `npm run dev` regenera el CSS.
 
 ## Ideas pendientes (no implementadas)
+- **Decants: lo que quedó afuera a propósito.** Stock (ml disponibles de un
+  frasco abierto: Franco eligió no llevarlo por ahora), decants en el PDF de
+  precios y en Mercado Libre.
 - **Ventas directas.** Es la pieza que cierra el hueco del stock: hoy una venta
   en mano no descuenta nada. Diseño hablado con Franco, no empezado:
   `datos/ventas/<AAAA-MM>.json` (un archivo por mes: uno por venta serían

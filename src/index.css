@@ -32,6 +32,8 @@
   --zona-ml-honda: #d9e1ea;
   --zona-tn: #eeebf1;
   --zona-tn-honda: #e1dce8;
+  --zona-decant: #e6eeec; /* decants: verde agua, lejos del ámbar */
+  --zona-decant-honda: #d6e3e0;
 
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
   --sans: "Montserrat", ui-sans-serif, system-ui, sans-serif;
