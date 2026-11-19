@@ -11,15 +11,22 @@ import {
   cambiosParaML,
   enviarCodigoML,
   estadoML,
+  leerPromocionesML,
   leerPublicacionesML,
   nombreDePlan,
+  nombreDeTipoPromo,
   pedirAutorizacionML,
+  ponerPromoML,
+  promosPorPlan,
+  quitarPromoML,
   CAMPO_DE_VINCULO,
   vinculosCatalogoDe,
   vinculosDe,
 } from "./clienteML";
 import { BandaConexion, CeldaPublicacion, PanelActualizar } from "./MLConexion";
 import VentasML from "./VentasML";
+import PromocionesML from "./PromocionesML";
+import { CuerpoDescuento } from "./DescuentoML";
 import PublicarML from "./PublicarML";
 import ActualizarML from "./ActualizarML";
 
@@ -64,6 +71,16 @@ export default function MercadoLibre({
   const [seccion, setSeccion] = useState("precios");
   const [cuenta, setCuenta] = useState(null); // null = preguntando
   const [publicaciones, setPublicaciones] = useState(null);
+  /* Las promos que ML tiene puestas hoy, por publicación. `null` = sin leer.
+     No se guardan en el catálogo: viven en ML y se leen en vivo, igual que el
+     stock de los canales. */
+  const [promos, setPromos] = useState(null);
+  const [avisoPromos, setAvisoPromos] = useState("");
+  const [soloPromo, setSoloPromo] = useState(false);
+  // Se sube de a uno para volver a preguntarle las promos a ML después de tocar una.
+  const [recargaPromos, setRecargaPromos] = useState(0);
+  // Lo que salió bien, para avisarlo: una escritura sin respuesta parece que no pasó.
+  const [exito, setExito] = useState("");
   const [errorML, setErrorML] = useState("");
   const [trayendo, setTrayendo] = useState(false);
   const [panel, setPanel] = useState(null); // { cambios, perdidos }
@@ -165,6 +182,43 @@ export default function MercadoLibre({
     [publicaciones]
   );
 
+  /* Las promociones de las publicaciones vinculadas. La clave son los ids
+     ordenados y no `perfumes`: así tipear un precio no vuelve a preguntarle a
+     ML, y vincular o desvincular sí. En desarrollo se pide dos veces al entrar:
+     es StrictMode, como en Ventas. */
+  const idsVinculados = useMemo(
+    () => [...new Set(perfumes.flatMap((p) => Object.values(vinculosDe(p))))].sort().join(","),
+    [perfumes]
+  );
+  useEffect(() => {
+    if (!cuenta?.conectado || !idsVinculados) return undefined;
+    let vigente = true;
+    leerPromocionesML(idsVinculados.split(","))
+      .then((r) => {
+        if (!vigente) return;
+        setPromos(r.promos ?? {});
+        setAvisoPromos(
+          r.sinPermiso
+            ? "La app no puede ver tus promociones: a la aplicación de Mercado Libre le falta el permiso. Tocá Volver a conectar para pedirlo. El resto de la pestaña funciona igual."
+            : ""
+        );
+      })
+      .catch((e) => vigente && setAvisoPromos(`No se pudieron traer las promociones (${e.message}).`));
+    return () => {
+      vigente = false;
+    };
+  }, [cuenta?.conectado, idsVinculados, recargaPromos]);
+
+  /* La promo vigente de cada plan, por perfume. Sale del vínculo guardado. */
+  const promosDePerfume = useMemo(() => {
+    const m = new Map();
+    for (const p of perfumes) m.set(p.id, promosPorPlan(p, promos));
+    return m;
+  }, [perfumes, promos]);
+
+  const tienePromo = (p) => Object.keys(promosDePerfume.get(p.id) ?? {}).length > 0;
+  const enPromo = useMemo(() => perfumes.filter(tienePromo).length, [perfumes, promosDePerfume]);
+
   /* A qué perfume y plan está vinculada cada publicación: el buscador lo marca
      para no vincular la misma dos veces sin darse cuenta. */
   const usadas = useMemo(() => {
@@ -192,6 +246,89 @@ export default function MercadoLibre({
     if (itemId) resto[plan] = itemId;
     else delete resto[plan];
     onCambiar(perfume.id, { [campo]: Object.keys(resto).length ? resto : undefined });
+  };
+
+  /* ML no aplica la promo en el mismo momento: la escritura vuelve con 200 y la
+     publicación tarda unos segundos en mostrarla. Por eso se relee enseguida y
+     otra vez a los RELEER_TRAS_ACTUALIZAR, igual que con el precio de la de
+     catálogo. Sin la segunda lectura había que recargar la página para verla. */
+  const segundaDePromos = useRef(null);
+  useEffect(() => () => clearTimeout(segundaDePromos.current), []);
+  const releerPromos = useCallback(() => {
+    setRecargaPromos((n) => n + 1);
+    clearTimeout(segundaDePromos.current);
+    segundaDePromos.current = setTimeout(() => setRecargaPromos((n) => n + 1), RELEER_TRAS_ACTUALIZAR);
+  }, []);
+
+  /* Lo que salió bien se dice y se borra solo: el diálogo se cierra al aceptar y
+     sin esto no queda ninguna señal de que la escritura funcionó. */
+  const avisarExito = useCallback((texto) => {
+    setExito(texto);
+    setTimeout(() => setExito(""), 8000);
+  }, []);
+
+  /* El descuento propio: se arma en el cuerpo del `Dialogo` y se manda al
+     aceptar. El ref es porque `onAceptar` solo devuelve un campo de texto, el
+     mismo gesto que `atarAlPasar` en "pasar costos al catálogo". */
+  const estadoDescuento = useRef(null);
+  const abrirDescuento = (perfume) => {
+    estadoDescuento.current = null;
+    const puestas = promosDePerfume.get(perfume.id) ?? {};
+    // Si algún plan ya tiene uno propio se ofrece quitarlo: ML no deja cambiarlo.
+    const propia = Object.entries(puestas).find(([, p]) => p.tipo === "PRICE_DISCOUNT");
+    onConfirmar({
+      titulo: `Descuento propio de ${perfume.nombre}`,
+      ancho: "max-w-2xl",
+      texto: (
+        <CuerpoDescuento
+          perfume={perfume}
+          planes={planes}
+          pubPorId={pubPorId}
+          promos={promos}
+          ajustes={ajustes}
+          estado={estadoDescuento}
+        />
+      ),
+      etiquetaOk: "Poner el descuento",
+      ...(propia
+        ? {
+            segunda: {
+              etiqueta: `Quitar el de ${nombreDePlan(propia[0])}`,
+              onAceptar: async () => {
+                try {
+                  await quitarPromoML(vinculosDe(perfume)[propia[0]], { tipo: "PRICE_DISCOUNT" });
+                  releerPromos();
+                  releerTrasActualizar();
+                  avisarExito(
+                    `Se quitó el descuento de ${perfume.nombre} · ${nombreDePlan(propia[0])}. ML lo saca de la publicación en unos segundos.`
+                  );
+                } catch (e) {
+                  setErrorML(`No se pudo quitar el descuento (${e.message}).`);
+                }
+              },
+            },
+          }
+        : {}),
+      onAceptar: async () => {
+        const d = estadoDescuento.current;
+        if (!d) {
+          setErrorML("El descuento no se mandó: revisá el precio y las fechas.");
+          return;
+        }
+        try {
+          await ponerPromoML(d.itemId, d);
+          releerPromos();
+          releerTrasActualizar();
+          avisarExito(
+            `Descuento puesto en ${perfume.nombre} · ${nombreDePlan(d.plan)}: el comprador paga ${pesos(
+              d.precio
+            )}. ML lo muestra en la publicación en unos segundos.`
+          );
+        } catch (e) {
+          setErrorML(`No se pudo poner el descuento (${e.message}).`);
+        }
+      },
+    });
   };
 
   const abrirActualizar = async () => {
@@ -233,7 +370,7 @@ export default function MercadoLibre({
      escriben nombres, pero sí precios, y la lista no debe moverse por eso. */
   const orden = useRef({ clave: null, ids: [] });
   const visibles = useMemo(() => {
-    const filtrados = buscarPerfumes(perfumes, consulta);
+    const filtrados = buscarPerfumes(perfumes, consulta).filter((p) => !soloPromo || tienePromo(p));
     const porId = new Map(filtrados.map((p) => [p.id, p]));
     const clave = filtrados
       .map((p) => p.id)
@@ -249,7 +386,7 @@ export default function MercadoLibre({
       };
     }
     return orden.current.ids.map((id) => porId.get(id)).filter(Boolean);
-  }, [perfumes, consulta]);
+  }, [perfumes, consulta, soloPromo, promosDePerfume]);
 
   return (
     <section className="mx-auto max-w-[1480px] px-6 py-8">
@@ -259,13 +396,16 @@ export default function MercadoLibre({
           <p className="text-[12.5px]" style={{ color: "var(--humo)" }}>
             {seccion === "precios"
               ? "Un precio por plan de pago: cada plan es una publicación aparte. El nombre, la foto y el costo se cargan en el catálogo."
-              : "Lo vendido en Mercado Libre y lo que dejó, con la comisión y el envío que cobró ML y el costo de cada perfume cuando se vendió. Solo lectura."}
+              : seccion === "ventas"
+              ? "Lo vendido en Mercado Libre y lo que dejó, con la comisión y el envío que cobró ML y el costo de cada perfume cuando se vendió. Solo lectura."
+              : "Las campañas a las que ML te invita y qué te deja cada perfume si entra, antes de aceptar nada. Solo lectura."}
           </p>
         </div>
         <div className="flex overflow-hidden rounded-[3px] border" style={{ borderColor: "var(--linea)" }}>
           {[
             ["precios", "Precios"],
             ["ventas", "Ventas"],
+            ["promociones", "Promociones"],
           ].map(([id, texto]) => (
             <button
               key={id}
@@ -300,6 +440,25 @@ export default function MercadoLibre({
               style={{ background: "var(--papel)", borderColor: "var(--linea)", color: "var(--tinta)" }}
             />
           </div>
+          {/* Los que ML tiene en promoción ahora mismo. Misma regla que los
+              filtros del catálogo: no desaparece mientras el filtro esté puesto,
+              porque si no quedaría activo sin forma de apagarlo. En humo y no en
+              óxido: tener una promo no es un error. */}
+          {(enPromo > 0 || soloPromo) && (
+            <button
+              onClick={() => setSoloPromo((v) => !v)}
+              aria-pressed={soloPromo}
+              title="Publicaciones con una promoción corriendo en Mercado Libre. La ganancia que deja la promo se ve debajo de la ganancia de cada plan."
+              className="k-col rounded-[3px] border px-3 py-[7px] transition"
+              style={{
+                borderColor: soloPromo ? "var(--tinta)" : "var(--linea)",
+                color: soloPromo ? "var(--tinta)" : "var(--humo)",
+                background: soloPromo ? "var(--vidrio-hondo)" : "transparent",
+              }}
+            >
+              {soloPromo && enPromo === 0 ? "Ver todos" : `${enPromo} en promo`}
+            </button>
+          )}
         </div>
       )}
 
@@ -317,9 +476,31 @@ export default function MercadoLibre({
           {errorML}
         </p>
       )}
+      {exito && (
+        <p className="mb-4 text-[12.5px]" style={{ color: "var(--verde)" }}>
+          {exito}
+        </p>
+      )}
+      {seccion === "precios" && avisoPromos && (
+        <p className="mb-4 text-[12.5px]" style={{ color: "var(--humo)" }}>
+          {avisoPromos}
+        </p>
+      )}
+      {/* Escrito y no en un `title`: con una campaña co-fondeada lo que paga el
+          comprador y lo que te llega son dos números distintos, y si no se dice
+          la columna parece mal calculada. */}
+      {seccion === "precios" && enPromo > 0 && (
+        <p className="mb-4 text-[12.5px]" style={{ color: "var(--humo)" }}>
+          Hay {enPromo === 1 ? "un perfume" : `${enPromo} perfumes`} con promoción en Mercado Libre. En las
+          campañas co-fondeadas ML paga parte del descuento, así que te llega más de lo que paga el
+          comprador: la ganancia de abajo ya lo tiene en cuenta.
+        </p>
+      )}
 
       {seccion === "ventas" ? (
         <VentasML perfumes={perfumes} cuenta={cuenta} />
+      ) : seccion === "promociones" ? (
+        <PromocionesML perfumes={perfumes} ajustes={ajustes} cuenta={cuenta} onConfirmar={onConfirmar} />
       ) : (
         <>
           <AjustesML ajustes={ajustes} onAjustes={onAjustes} />
@@ -370,6 +551,7 @@ export default function MercadoLibre({
                       ajustes={ajustes}
                       planes={planes}
                       columnas={columnas}
+                      promosPorPlan={promosDePerfume.get(p.id)}
                       onCambiar={onCambiar}
                       onSoltarMargenML={onSoltarMargenML}
                       conectado={!!cuenta?.conectado}
@@ -380,6 +562,7 @@ export default function MercadoLibre({
                       onStock={(pub, stock) => cambiarStock(p, pub, stock)}
                       onPublicar={() => setPublicandoId(p.id)}
                       onActualizar={() => setActualizandoId(p.id)}
+                      onDescuento={() => abrirDescuento(p)}
                     />
                   ))}
                 </ul>
@@ -516,11 +699,29 @@ function EncabezadoML({ planes, columnas }) {
 const colorGanancia = (g) =>
   g === null ? "var(--humo-claro)" : g >= 0 ? "var(--ambar)" : "var(--oxido)";
 
+/* Qué dice el `title` de la ganancia cuando hay una promo puesta. Lo importante
+   es que en una co-fondeada lo que paga el comprador NO es lo que te llega. */
+function explicarPromo(promo) {
+  const partes = [
+    `Ahora tiene una promoción (${nombreDeTipoPromo(promo.tipo)}${
+      promo.nombre ? `: "${promo.nombre}"` : ""
+    }): el comprador paga ${pesos(promo.paga)}`,
+  ];
+  if (promo.coFondeada && promo.poneML > 0)
+    partes.push(`de los cuales ML pone ${pesos(promo.poneML)}, así que a vos te llegan ${pesos(promo.recibe)}`);
+  else partes.push("y el descuento lo pagás vos entero");
+  if (promo.ganancia != null) partes.push(`con lo que te quedan ${pesos(promo.ganancia)}`);
+  if (promo.topPaga)
+    partes.push(`Los compradores con Mercado Puntos nivel 3 a 6 pagan ${pesos(promo.topPaga)}`);
+  return `${partes.join(", ").replace(", Los compradores", ". Los compradores")}.`;
+}
+
 function FilaML({
   perfume,
   ajustes,
   planes,
   columnas,
+  promosPorPlan: promosDePlanes,
   onCambiar,
   onSoltarMargenML,
   conectado,
@@ -531,6 +732,7 @@ function FilaML({
   onStock,
   onPublicar,
   onActualizar,
+  onDescuento,
 }) {
   const r = analisisDePrecio({
     costo: perfume.costo,
@@ -542,10 +744,11 @@ function FilaML({
     cuotasML: ajustes.cuotasML,
     planes,
     redondeoML: ajustes.redondeoML,
+    promosPorPlan: promosDePlanes,
   });
   const sinCosto = !(Number(perfume.costo) > 0);
 
-  const cifra = (contenido, { fondo, color, titulo, fuerte }) => (
+  const cifra = (contenido, { fondo, color, titulo, fuerte, debajo }) => (
     <div className="px-2 text-right" style={{ background: fondo }} title={titulo}>
       <span
         className={`k-num text-[13px] ${fuerte ? "font-semibold" : ""}`}
@@ -553,6 +756,7 @@ function FilaML({
       >
         {contenido}
       </span>
+      {debajo}
     </div>
   );
 
@@ -625,6 +829,19 @@ function FilaML({
             style={{ borderColor: "var(--linea)", color: "var(--humo)" }}
           >
             Actualizar
+          </button>
+        )}
+        {/* Poner o quitar un descuento propio (el que no es de ninguna campaña
+            de ML). Las campañas se manejan en la sección Promociones. */}
+        {conectado && planes.some((plan) => vinculosDe(perfume)[plan]) && (
+          <button
+            type="button"
+            onClick={onDescuento}
+            title={`Poner o quitar un descuento propio de ${perfume.nombre} en Mercado Libre`}
+            className="k-col shrink-0 rounded-[3px] border px-1.5 py-0.5 opacity-0 transition group-hover:opacity-100 focus:opacity-100"
+            style={{ borderColor: "var(--linea)", color: "var(--humo)" }}
+          >
+            Descuento
           </button>
         )}
       </div>
@@ -722,19 +939,33 @@ function FilaML({
             fondo: "var(--zona-ml)",
             color: colorGanancia(x.ganancia),
             fuerte: true,
+            /* El número grande es siempre el del precio de lista: es el que
+               compara planes y el que usan el `=` y el margen clavado. La promo
+               va de renglón chico abajo, porque es lo que está pasando hoy. */
+            debajo:
+              x.promo?.ganancia == null ? null : (
+                <div
+                  className="k-num text-[10px] leading-tight"
+                  style={{ color: x.promo.ganancia > 0 ? "var(--ambar)" : "var(--oxido)" }}
+                >
+                  en promo {pesos(x.promo.ganancia)}
+                </div>
+              ),
             titulo:
-              x.ganancia === null
+              (x.ganancia === null
                 ? `Poné costo y precio para ver qué te deja en ${nombreDePlan(x.plan)}`
                 : `En ${nombreDePlan(x.plan)}, después de la comisión (${pctCorto(
                     x.comision
                   )}) y el envío de ML: ${pesos(x.ganancia)}.` +
                   (x.sugerido === null
                     ? ""
-                    : ` Para igualar la venta directa habría que publicar ${pesos(x.sugerido)}.`),
+                    : ` Para igualar la venta directa habría que publicar ${pesos(x.sugerido)}.`)) +
+              (x.promo ? ` ${explicarPromo(x.promo)}` : ""),
           })}
           <CeldaPublicacion
             perfume={perfume}
             plan={x.plan}
+            promo={x.promo}
             precioCatalogo={x.precio}
             itemId={vinculosDe(perfume)[x.plan]}
             itemCatalogo={vinculosCatalogoDe(perfume)[x.plan]}

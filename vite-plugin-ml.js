@@ -46,8 +46,11 @@ const POR_PAGINA = 50;
 const TOPE_PAGINAS = 20; // 1000 órdenes
 const A_LA_VEZ = 5;
 const API_MP = "https://api.mercadopago.com";
+const TOPE_PROMOS = 200;
+const TOPE_PAGINAS_PROMO = 40; // 2000 ítems por campaña
+const TIPO_PROMO_VALIDO = /^[A-Z_]{3,40}$/;
 const ATRIBUTOS =
-  "id,title,price,available_quantity,status,permalink,thumbnail,listing_type_id,variations,catalog_listing,catalog_product_id,tags";
+  "id,title,price,original_price,available_quantity,status,permalink,thumbnail,listing_type_id,variations,catalog_listing,catalog_product_id,tags";
 
 /* Lo que se pega puede ser la dirección entera (…?code=TG-…&state=…) o solo el
    código. Pura y exportada para probarla desde Node. */
@@ -60,6 +63,259 @@ export function extraerCodigo(pegado) {
 
 const base64Url = (buf) =>
   buf.toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+
+/* ---------- Promociones (seller-promotions) ----------
+
+   Lo delicado, y la razón de que esto sea una función aparte: una promo tiene
+   DOS precios distintos.
+
+   · `price` es lo que PAGA EL COMPRADOR, y es la base de la comisión de ML.
+   · Lo que RECIBE el vendedor depende de quién financia el descuento:
+     - las que paga el vendedor (PRICE_DISCOUNT, DEAL, SELLER_CAMPAIGN, DOD,
+       LIGHTNING) -> recibe el mismo `price`: el descuento se lo come entero;
+     - las co-fondeadas -> ML pone `meli_percentage` y el vendedor
+       `seller_percentage`, así que recibe `original_price × (1 − vendedor/100)`,
+       que es MÁS que lo que paga el comprador (doc: lista 1000, el comprador
+       paga 700, ML aporta 5 y el vendedor 25 -> le quedan 750, no 700).
+   · El boost (`boosted_offer`) lo absorbe ML: baja lo que paga el comprador y
+     no toca lo del vendedor.
+
+   Puras y exportadas para probarlas desde Node. */
+export const CO_FONDEADAS = [
+  "MARKETPLACE_CAMPAIGN",
+  "SMART",
+  "PRICE_MATCHING",
+  "PRE_NEGOTIATED",
+  "VOLUME",
+  "UNHEALTHY_STOCK",
+];
+
+export const esCoFondeada = (tipo) => CO_FONDEADAS.includes(String(tipo || "").toUpperCase());
+
+const positivo = (v) => (Number(v) > 0 ? Number(v) : null);
+
+/* Una promo de la API a la forma que usa la app. `tipoPorDefecto` es para la
+   consulta por campaña, donde el tipo es de la campaña y no viene en cada fila. */
+export function resumirPromo(x, tipoPorDefecto = null) {
+  if (!x) return null;
+  const tipo = String(x.type || tipoPorDefecto || "").toUpperCase() || null;
+  const estado = String(x.status?.id ?? x.status ?? "").toLowerCase() || null;
+  const lista = positivo(x.original_price);
+  /* Un ítem candidato viene con `price: 0`. Cero no es un precio: es "todavía no
+     entró". Tomarlo como precio sería mostrar un 100% de descuento inventado. */
+  const base = positivo(x.price);
+  // El boost mueve lo que paga el comprador, no lo que recibe el vendedor.
+  const paga = x.boosted_offer ? positivo(x.total_price_for_boosted_offer) ?? base : base;
+  const vendedorPct = x.seller_percentage == null ? null : Number(x.seller_percentage);
+  const coFondeada = esCoFondeada(tipo);
+  /* Sin el porcentaje del vendedor no hay forma de saber cuánto pone ML, así que
+     se supone lo peor —que el descuento lo paga todo el vendedor— y el número
+     que se muestra queda del lado seguro. */
+  const recibe = coFondeada && lista && vendedorPct != null ? lista * (1 - vendedorPct / 100) : paga;
+  return {
+    id: x.id ?? null,
+    tipo,
+    subTipo: x.sub_type ?? null,
+    nombre: x.name || null,
+    estado,
+    activa: estado === "started",
+    coFondeada,
+    lista,
+    paga,
+    recibe,
+    // Segundo precio, solo para compradores con Mercado Puntos nivel 3 a 6.
+    topPaga: positivo(x.top_deal_price ?? x.top_price),
+    meliPct: x.meli_percentage == null ? null : Number(x.meli_percentage),
+    vendedorPct,
+    poneML: paga != null && recibe != null ? Math.max(0, recibe - paga) : null,
+    boost: !!x.boosted_offer,
+    /* Sugerencias de ML para decidir el precio. Solo vienen en DEAL,
+       PRICE_DISCOUNT y SELLER_CAMPAIGN, y NO para ofertas ya creadas. */
+    minimo: positivo(x.min_discounted_price),
+    maximo: positivo(x.max_discounted_price),
+    sugerido: positivo(x.suggested_discounted_price),
+    descuento: lista && paga ? 1 - paga / lista : null,
+    ofertaId: x.offer_id ?? x.ref_id ?? null,
+    desde: x.start_date ?? null,
+    hasta: x.finish_date ?? x.end_date ?? null,
+  };
+}
+
+/* Las invitaciones a campañas del vendedor (GET /seller-promotions/users/<id>).
+   `deadline_date` es el plazo para aceptar, que es el dato que apura. */
+export function resumirCampana(x) {
+  if (!x) return null;
+  const b = x.benefits ?? {};
+  return {
+    id: x.id ?? null,
+    tipo: String(x.type || "").toUpperCase() || null,
+    nombre: x.name || null,
+    estado: String(x.status ?? "").toLowerCase() || null,
+    coFondeada: esCoFondeada(x.type),
+    desde: x.start_date ?? null,
+    hasta: x.finish_date ?? null,
+    limite: x.deadline_date ?? null,
+    beneficio: b.type ?? null,
+    meliPct: b.meli_percent == null ? null : Number(b.meli_percent),
+    vendedorPct: b.seller_percent == null ? null : Number(b.seller_percent),
+    // Descuento por cantidad (3x2 y similares): viene en los beneficios.
+    llevaPaga:
+      b.buy_quantity && b.pay_quantity
+        ? { lleva: Number(b.buy_quantity), paga: Number(b.pay_quantity), nombre: b.name ?? null }
+        : null,
+  };
+}
+
+export function resumirCampanas(lista) {
+  const crudas = Array.isArray(lista) ? lista : lista?.results ?? [];
+  return crudas.map(resumirCampana).filter(Boolean);
+}
+
+/* ---------- Escribir promociones ----------
+
+   Qué se puede y qué no, según la doc:
+   · Entrar a una campaña (co-fondeada o tradicional): POST, y en la tradicional
+     el precio lo pone el vendedor.
+   · Modificar: SOLO las tradicionales (DEAL) tienen PUT. Las co-fondeadas hay
+     que salir y volver a entrar —y si el precio subió, ML ya no te deja—, y los
+     descuentos individuales se borran y se rehacen.
+   · Crear un descuento propio: PRICE_DISCOUNT, con fechas.
+
+   Las validaciones van ACÁ y no en la pantalla porque son las reglas de ML, no
+   de la UI, y porque sus errores vienen crudos: es mejor no llegar a pedírselo.
+   Pura y exportada para probarla desde Node. */
+export const TIPOS_CON_PRECIO = ["DEAL", "PRICE_DISCOUNT", "SELLER_CAMPAIGN", "DOD", "LIGHTNING"];
+
+const DIA_MS = 86400000;
+const PLAZO_MAXIMO_DIAS = 14;
+
+/* ML pide las fechas en "formato local": con hora y SIN zona. Mandando solo el
+   día ("2026-11-17") contesta 400 "Start and finish dates must be in local
+   format" — pasó con la cuenta real. La doc igual ignora la hora: el descuento
+   corre de las 00:00:00 del día de inicio a las 23:59:59 del de fin, así que se
+   completa con esas dos y no con la hora de ahora. */
+const aFechaML = (valor, finDelDia = false) => {
+  const texto = String(valor ?? "").trim();
+  if (!texto) return texto;
+  const soloDia = texto.slice(0, 10);
+  return `${soloDia}T${finDelDia ? "23:59:59" : "00:00:00"}`;
+};
+
+const falla = (mensaje) => {
+  throw new ErrorML(400, mensaje);
+};
+
+/* El cuerpo del pedido a ML, ya validado.
+   -> { metodo, cuerpo } */
+export function pedidoDePromo({
+  accion,
+  tipo,
+  promocionId = null,
+  precio = null,
+  precioTop = null,
+  desde = null,
+  hasta = null,
+  lista = null,
+}) {
+  const t = String(tipo || "").toUpperCase();
+  if (!t) falla("Falta el tipo de promoción");
+  const p = Number(precio) || 0;
+  const top = precioTop == null || precioTop === "" ? null : Number(precioTop) || 0;
+  const l = Number(lista) || 0;
+
+  if (accion === "entrar" && !TIPOS_CON_PRECIO.includes(t)) {
+    // Co-fondeadas: el precio lo define ML, solo se acepta la invitación.
+    if (!promocionId) falla("Falta la campaña");
+    return { metodo: "POST", cuerpo: { promotion_id: promocionId, promotion_type: t } };
+  }
+
+  if (!(p > 0)) falla("Falta el precio de la promoción");
+  if (l > 0 && p >= l) falla("El precio de la promoción tiene que ser menor al precio publicado");
+
+  /* El descuento tiene que estar entre 5% y 80%, y si hay precio para los
+     mejores compradores (Mercado Puntos nivel 3 a 6) tiene que ser al menos 5%
+     más bajo que el general — 10% si el descuento general pasa el 35%. */
+  const descuento = l > 0 ? 1 - p / l : null;
+  if (descuento != null && (descuento < 0.05 || descuento > 0.8))
+    falla(`El descuento tiene que estar entre 5% y 80% (ese precio da ${(descuento * 100).toFixed(1)}%)`);
+  if (top != null) {
+    if (!(top > 0)) falla("El precio para los mejores compradores no es válido");
+    if (top >= p) falla("El precio para los mejores compradores tiene que ser menor al general");
+    const minimo = descuento != null && descuento > 0.35 ? 0.1 : 0.05;
+    if (1 - top / p < minimo)
+      falla(
+        `El precio para los mejores compradores tiene que ser al menos ${minimo * 100}% más bajo que el general`
+      );
+  }
+
+  const cuerpo = { promotion_type: t, deal_price: p };
+  if (top != null) cuerpo.top_deal_price = top;
+
+  if (accion === "descuento") {
+    if (t !== "PRICE_DISCOUNT") falla("Un descuento propio es de tipo PRICE_DISCOUNT");
+    if (!desde || !hasta) falla("Faltan las fechas del descuento");
+    const d = new Date(desde);
+    const h = new Date(hasta);
+    if (Number.isNaN(d.getTime()) || Number.isNaN(h.getTime())) falla("Fechas inválidas");
+    if (h < d) falla("La fecha de fin es anterior a la de inicio");
+    if ((h - d) / DIA_MS > PLAZO_MAXIMO_DIAS)
+      falla(`Un descuento propio dura ${PLAZO_MAXIMO_DIAS} días como máximo`);
+    cuerpo.start_date = aFechaML(desde);
+    cuerpo.finish_date = aFechaML(hasta, true);
+    return { metodo: "POST", cuerpo };
+  }
+
+  if (!promocionId) falla("Falta la campaña");
+  cuerpo.promotion_id = promocionId;
+  if (accion === "modificar") {
+    // Solo las tradicionales se modifican; el resto se borra y se rehace.
+    if (t !== "DEAL") falla("Esta promoción no se puede modificar: hay que quitarla y volver a ponerla");
+    return { metodo: "PUT", cuerpo };
+  }
+  if (accion !== "entrar") falla(`No sé hacer "${accion}"`);
+  return { metodo: "POST", cuerpo };
+}
+
+/* Los errores de ML vienen en inglés y por código. Traducidos, porque son los
+   que Franco va a leer cuando algo no entre. */
+const ERRORES_DE_PROMO = {
+  ERROR_CREDIBILITY_DISCOUNTED_PRICE:
+    "Mercado Libre no considera creíble ese descuento: tiene que ser más grande.",
+  error_credibility_price:
+    "Mercado Libre no considera creíble ese descuento: tiene que ser más grande.",
+  buyer_discount_not_in_range: "El descuento tiene que estar entre 5% y 80%.",
+  best_buyer_discount_not_in_range:
+    "El descuento para los mejores compradores tiene que estar entre 5% y 80%.",
+  discount_below_5_percent_difference:
+    "El precio para los mejores compradores tiene que ser al menos 5% más bajo que el general.",
+  discount_below_10_percent_difference:
+    "Con más de 35% de descuento, el precio para los mejores compradores tiene que ser al menos 10% más bajo.",
+  "423_ENTITY_LOCKED": "La publicación está trabada unos segundos. Probá de nuevo.",
+};
+
+export function errorDePromoEnCastellano(datos, status) {
+  const codigos = [
+    ...(Array.isArray(datos?.cause) ? datos.cause.map((c) => c.error_code || c.code || c.message) : []),
+    datos?.error,
+    datos?.message,
+  ].filter(Boolean);
+  for (const c of codigos) {
+    const traducido = ERRORES_DE_PROMO[c] ?? ERRORES_DE_PROMO[String(c).trim()];
+    if (traducido) return traducido;
+  }
+  if (status === 423) return ERRORES_DE_PROMO["423_ENTITY_LOCKED"];
+  if (status === 403) return "La app no tiene permiso para cambiar promociones.";
+  const crudo = [datos?.message, ...(Array.isArray(datos?.cause) ? datos.cause.map((c) => c.error_message || c.message) : [])]
+    .filter(Boolean)
+    .join(" — ");
+  return crudo || `Error ${status}`;
+}
+
+/* GET /seller-promotions/items/<MLA> devuelve una lista de promos del ítem. */
+export function resumirPromos(lista, tipoPorDefecto = null) {
+  const crudas = Array.isArray(lista) ? lista : lista?.results ?? [];
+  return crudas.map((x) => resumirPromo(x, tipoPorDefecto)).filter(Boolean);
+}
 
 export default function pluginML() {
   let secret = "";
@@ -230,6 +486,62 @@ export default function pluginML() {
       return { ordenes, envios, pagos, total, truncado: ordenes.length < total };
     };
 
+    /* Las invitaciones a campañas. Solo lectura. */
+    const campanas = async (userId) => {
+      const r = await mlCrudo(`/seller-promotions/users/${userId}?app_version=v2`);
+      if (r.status === 403) return { campanas: [], sinPermiso: true };
+      if (!r.ok) throw new ErrorML(r.status, r.datos?.message || `Error ${r.status}`);
+      return { campanas: resumirCampanas(r.datos), sinPermiso: false };
+    };
+
+    /* Los ítems de una campaña: los candidatos (que todavía no entraron) y los
+       que ya participan. Pagina con `search_after`, de a 50 como máximo, y ese
+       token VENCE A LOS 5 MINUTOS: se recorre de una pasada, sin pausas.
+       El `id` de cada fila es el de la PUBLICACIÓN, no el de la promo. */
+    const itemsDeCampana = async (promocionId, tipo) => {
+      const items = [];
+      let desde = null;
+      for (let vuelta = 0; vuelta < TOPE_PAGINAS_PROMO; vuelta++) {
+        const q = new URLSearchParams({ promotion_type: tipo, app_version: "v2", limit: "50" });
+        if (desde) q.set("search_after", desde);
+        const r = await mlCrudo(
+          `/seller-promotions/promotions/${encodeURIComponent(promocionId)}/items?${q}`
+        );
+        if (r.status === 403) return { items: [], sinPermiso: true, truncado: false };
+        if (!r.ok) throw new ErrorML(r.status, r.datos?.message || `Error ${r.status}`);
+        const lote = r.datos?.results ?? [];
+        items.push(
+          ...lote.map((x) => ({ ...resumirPromo(x, tipo), id: promocionId, itemId: x.id ?? null }))
+        );
+        desde = r.datos?.search_after ?? r.datos?.searchAfter ?? null;
+        if (!desde || !lote.length) return { items, sinPermiso: false, truncado: false };
+      }
+      return { items, sinPermiso: false, truncado: true };
+    };
+
+    /* Las promociones de cada publicación. Solo lectura, no escribe nada.
+       Un 403 es el permiso de la app y no el ítem, así que se avisa aparte: la
+       sección lo muestra y el resto de la pestaña sigue funcionando. */
+    const promocionesDeItems = async (ids) => {
+      let sinPermiso = false;
+      const crudas = await deAPocos(ids, async (id) => {
+        const r = await mlCrudo(`/seller-promotions/items/${id}?app_version=v2`);
+        if (r.status === 403) {
+          sinPermiso = true;
+          throw new ErrorML(403, "La app no tiene permiso para ver promociones");
+        }
+        if (!r.ok) throw new ErrorML(r.status, r.datos?.message || `Error ${r.status}`);
+        return resumirPromos(r.datos);
+      });
+      const promos = {};
+      const errores = {};
+      for (const [id, v] of Object.entries(crudas)) {
+        if (Array.isArray(v)) promos[id] = v;
+        else errores[id] = v.error;
+      }
+      return { promos, errores, sinPermiso };
+    };
+
     /* De a A_LA_VEZ en paralelo: con un mes de ventas son decenas de pedidos. Si
        uno falla queda `{ error }` y la venta se muestra igual, sin ese dato. */
     const deAPocos = async (ids, traer) => {
@@ -318,6 +630,30 @@ export default function pluginML() {
           return responder(res, { publicaciones: await publicaciones(yo.id) });
         }
 
+        if (req.method === "GET" && ruta === "/campanas") {
+          const yo = await ml("/users/me");
+          return responder(res, await campanas(yo.id));
+        }
+
+        const mCamp = ruta.match(/^\/campanas\/([^/]+)\/items$/);
+        if (req.method === "GET" && mCamp) {
+          const q = new URL(req.url, "http://x").searchParams;
+          const tipo = (q.get("tipo") ?? "").toUpperCase();
+          if (!TIPO_PROMO_VALIDO.test(tipo)) throw new ErrorML(400, "Tipo de campaña inválido");
+          return responder(res, await itemsDeCampana(decodeURIComponent(mCamp[1]), tipo));
+        }
+
+        if (req.method === "GET" && ruta === "/promociones") {
+          const q = new URL(req.url, "http://x").searchParams;
+          const ids = [...new Set((q.get("ids") ?? "").split(",").map((s) => s.trim()).filter(Boolean))];
+          if (!ids.length) throw new ErrorML(400, "Faltan los ids de las publicaciones");
+          const malo = ids.find((id) => !ITEM_VALIDO.test(id));
+          if (malo) throw new ErrorML(400, `Id de publicación inválido: ${malo}`);
+          if (ids.length > TOPE_PROMOS)
+            throw new ErrorML(400, `Máximo ${TOPE_PROMOS} publicaciones por pedido`);
+          return responder(res, await promocionesDeItems(ids));
+        }
+
         if (req.method === "GET" && ruta === "/ventas") {
           const q = new URL(req.url, "http://x").searchParams;
           const desde = q.get("desde") ?? "";
@@ -327,6 +663,41 @@ export default function pluginML() {
           if (desde > hasta) throw new ErrorML(400, "La fecha de inicio es posterior a la de fin");
           const yo = await ml("/users/me");
           return responder(res, { userId: yo.id, ...(await ventas(yo.id, desde, hasta)) });
+        }
+
+        const mPromo = ruta.match(/^\/promociones\/([^/]+)$/);
+        if (mPromo && (req.method === "POST" || req.method === "DELETE")) {
+          const id = mPromo[1];
+          if (!ITEM_VALIDO.test(id)) throw new ErrorML(400, "Id de publicación inválido");
+
+          if (req.method === "DELETE") {
+            const q = new URL(req.url, "http://x").searchParams;
+            const tipo = (q.get("tipo") ?? "").toUpperCase();
+            if (!TIPO_PROMO_VALIDO.test(tipo)) throw new ErrorML(400, "Tipo de promoción inválido");
+            const params = new URLSearchParams({ promotion_type: tipo, app_version: "v2" });
+            if (q.get("promocion")) params.set("promotion_id", q.get("promocion"));
+            if (q.get("oferta")) params.set("offer_id", q.get("oferta"));
+            const r = await mlCrudo(`/seller-promotions/items/${id}?${params}`, { method: "DELETE" });
+            if (!r.ok) throw new ErrorML(r.status, errorDePromoEnCastellano(r.datos, r.status));
+            return responder(res, { ok: true });
+          }
+
+          const pedido = await cuerpo(req);
+          const { metodo, cuerpo: body } = pedidoDePromo(pedido);
+          const r = await mlCrudo(`/seller-promotions/items/${id}?app_version=v2`, {
+            method: metodo,
+            body: JSON.stringify(body),
+          });
+          if (!r.ok) throw new ErrorML(r.status, errorDePromoEnCastellano(r.datos, r.status));
+          /* Se relee la publicación: con la promo puesta ML baja su `price` y la
+             celda "En ML" tiene que comparar contra el de lista. */
+          const promos = await mlCrudo(`/seller-promotions/items/${id}?app_version=v2`);
+          return responder(res, {
+            ok: true,
+            mandado: body,
+            resultado: r.datos,
+            promos: promos.ok ? resumirPromos(promos.datos) : null,
+          });
         }
 
         const m = ruta.match(/^\/publicaciones\/([^/]+)$/);
@@ -386,6 +757,11 @@ const resumir = (x) => ({
   id: x.id,
   titulo: x.title,
   precio: x.price,
+  /* El precio de LISTA. Con una promo activa ML baja `price` y deja el de lista
+     en `original_price`, así que comparar contra `price` haría figurar la
+     publicación como "precio distinto" y mandar el de lista le pisaría la promo.
+     Con `??` vale igual si ML no bajara `price`: ahí los dos son el mismo. */
+  precioLista: x.original_price ?? x.price,
   stock: x.available_quantity,
   estado: x.status,
   link: x.permalink,

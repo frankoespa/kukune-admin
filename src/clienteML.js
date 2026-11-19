@@ -48,6 +48,41 @@ export const actualizarPublicacionML = (id, cambios) =>
 export const leerVentasML = (desde, hasta) =>
   pedir(`/ventas?${new URLSearchParams({ desde, hasta })}`);
 
+/* Las promociones que ML tiene puestas en esas publicaciones. Solo lectura.
+   -> { promos: { MLA…: [promo] }, errores: { MLA…: mensaje }, sinPermiso }
+   (la forma de cada promo la arma `resumirPromo` en vite-plugin-ml.js). */
+export const leerPromocionesML = (ids) =>
+  pedir(`/promociones?${new URLSearchParams({ ids: (ids ?? []).join(",") })}`);
+
+/* Las invitaciones a campañas (Black Friday, Cyber Monday y las demás).
+   -> { campanas: [{ id, tipo, nombre, estado, coFondeada, desde, hasta, limite,
+                     meliPct, vendedorPct, llevaPaga }], sinPermiso } */
+export const leerCampanasML = () => pedir("/campanas");
+
+/* Las publicaciones candidatas y las que ya participan de una campaña.
+   -> { items, sinPermiso, truncado }; cada item trae `itemId` (el MLA). */
+export const leerItemsDeCampanaML = (id, tipo) =>
+  pedir(`/campanas/${encodeURIComponent(id)}/items?${new URLSearchParams({ tipo })}`);
+
+/* Escribe en Mercado Libre: suma la publicación a una campaña, cambia su precio
+   en una tradicional, o le pone un descuento propio. Siempre después de una
+   confirmación. `pedido` lo valida `pedidoDePromo` en el server.
+   -> { ok, mandado, resultado, promos } */
+export const ponerPromoML = (itemId, pedido) =>
+  pedir(`/promociones/${itemId}`, { method: "POST", body: JSON.stringify(pedido) });
+
+/* Saca la publicación de una promoción. `promocion` y `oferta` son opcionales
+   según el tipo (un descuento propio no tiene campaña). */
+export const quitarPromoML = (itemId, { tipo, promocion, oferta } = {}) =>
+  pedir(
+    `/promociones/${itemId}?${new URLSearchParams({
+      tipo,
+      ...(promocion ? { promocion } : {}),
+      ...(oferta ? { oferta } : {}),
+    })}`,
+    { method: "DELETE" }
+  );
+
 /* ---- Publicar (ver ml-publicar.js) ---- */
 
 /* -> { base, existe, carpetas: [{ nombre, existe, fotos: [{archivo, ancho, alto, bytes}], txt }] }
@@ -145,6 +180,51 @@ export const detallePublicacion = (x) =>
     .filter(Boolean)
     .join(" · ");
 
+/* Cómo se llama cada tipo de promo en pantalla. Lo que importa no es el nombre
+   técnico sino quién paga el descuento: las co-fondeadas las pone ML en parte. */
+const NOMBRES_DE_PROMO = {
+  PRICE_DISCOUNT: "descuento tuyo",
+  DEAL: "campaña de ML",
+  SELLER_CAMPAIGN: "campaña tuya",
+  DOD: "oferta del día",
+  LIGHTNING: "oferta relámpago",
+  MARKETPLACE_CAMPAIGN: "campaña co-fondeada",
+  SMART: "campaña co-fondeada automática",
+  PRICE_MATCHING: "precios competitivos",
+  PRE_NEGOTIATED: "descuento pre-acordado",
+  VOLUME: "descuento por cantidad",
+  UNHEALTHY_STOCK: "liquidación de stock Full",
+  SELLER_COUPON_CAMPAIGN: "cupones",
+};
+
+export const nombreDeTipoPromo = (tipo) => NOMBRES_DE_PROMO[tipo] ?? (tipo ? tipo.toLowerCase() : "promoción");
+
+/* La promo que manda para mostrar: la que está corriendo y tiene precio. Un
+   ítem puede tener varias (una activa y otras como candidato o programadas). */
+export const promoVigente = (promos) =>
+  (promos ?? []).find((p) => p.activa && p.paga != null) ?? null;
+
+/* La promo vigente de cada plan del perfume, cruzando por el vínculo guardado
+   —nunca por nombre, como en Ventas—.
+
+   Mira solo la publicación NORMAL: a la de catálogo no se le mandan precios (ML
+   la sincroniza sola), así que su promo no es una decisión que se tome acá.
+   -> { "1": promo, "6": promo } con los planes que tengan una. */
+export function promosPorPlan(perfume, promosPorItem) {
+  const salida = {};
+  for (const [plan, itemId] of Object.entries(vinculosDe(perfume))) {
+    const vigente = promoVigente(promosPorItem?.[itemId]);
+    if (vigente) salida[plan] = vigente;
+  }
+  return salida;
+}
+
+/* El precio de LISTA de una publicación, que es contra el que se compara el
+   del catálogo. Con una promo activa ML baja `precio` y deja el de lista en
+   `precioLista`; sin promo los dos son el mismo. Todo lugar que compare
+   precios tiene que pasar por acá y no por `pub.precio`. */
+export const precioListaDe = (pub) => Number(pub?.precioLista ?? pub?.precio) || 0;
+
 /* Qué precios del catálogo no coinciden con lo publicado.
 
    Recibe la lista RESUELTA (`perfumesResueltos`): ahí los planes clavados ya
@@ -171,7 +251,8 @@ export function cambiosParaML(perfumes, publicaciones, planes) {
         continue;
       }
       const precioCatalogo = Number(precios[plan]) || 0;
-      if (!(precioCatalogo > 0) || precioCatalogo === Number(pub.precio)) continue;
+      const precioML = precioListaDe(pub);
+      if (!(precioCatalogo > 0) || precioCatalogo === precioML) continue;
       cambios.push({
         perfumeId: p.id,
         nombre: p.nombre,
@@ -180,7 +261,7 @@ export function cambiosParaML(perfumes, publicaciones, planes) {
         titulo: pub.titulo,
         detalle: detallePublicacion(pub),
         variaciones: pub.variaciones,
-        precioML: Number(pub.precio),
+        precioML,
         precioCatalogo,
       });
     }

@@ -90,13 +90,20 @@ export function resolverPrecios(globals, productos) {
 
 /* Qué queda de un precio después de que el canal se lleve lo suyo.
    Tener esto suelto es lo que va a hacer barato sumar Tienda Nube: es otro
-   canal con su comisión y su envío, no otra fórmula. */
-export function resultadoDeCanal({ costo, precio, comision = 0, envio = 0 }) {
+   canal con su comisión y su envío, no otra fórmula.
+
+   `recibe` es para las promociones de ML, donde lo que llega NO es lo que paga
+   el comprador: en una campaña co-fondeada ML pone una parte, así que la
+   comisión se calcula sobre lo que paga y el resto sale de lo que llega (ver
+   `resumirPromo` en vite-plugin-ml.js). Sin promo se omite, los dos son el
+   mismo precio y la cuenta queda exactamente la de siempre. */
+export function resultadoDeCanal({ costo, precio, comision = 0, envio = 0, recibe }) {
   const c = Number(costo) || 0;
   const p = Number(precio) || 0;
   const k = 1 - (Number(comision) || 0);
   if (!(c > 0) || !(p > 0) || !(k > 0)) return { ganancia: null, margen: null };
-  const ganancia = p * k - (Number(envio) || 0) - c;
+  const llega = recibe == null ? p : Number(recibe) || 0;
+  const ganancia = llega - p * (1 - k) - (Number(envio) || 0) - c;
   return { ganancia, margen: ganancia / c };
 }
 
@@ -803,6 +810,7 @@ export function analisisDePrecio({
   cuotasML = {},
   planes,
   redondeoML = 1,
+  promosPorPlan = {},
 }) {
   const c = Number(costo) || 0;
   const p = Number(precioPublico) || 0;
@@ -817,10 +825,30 @@ export function analisisDePrecio({
   const ml = (planes ?? planesPublicables(cuotasML)).map((plan) => {
     const comision = (Number(comisionML) || 0) + (plan === 1 ? 0 : Number(cuotasML[plan]) || 0);
     const precio = Number(precios[plan]) || 0;
+    /* La promo que ML tiene puesta hoy en la publicación de este plan, si la hay,
+       con su propia ganancia. Va como un dato más y no reemplaza nada: la
+       `ganancia`, el `margen` y el `sugerido` del plan siguen siendo los del
+       precio de lista, que es lo que compara planes y lo que usan el `=` y los
+       márgenes clavados. */
+    const puesta = promosPorPlan[plan] ?? null;
+    const promo =
+      puesta && puesta.paga > 0
+        ? {
+            ...puesta,
+            ...resultadoDeCanal({
+              costo: c,
+              precio: puesta.paga,
+              comision,
+              envio: envioML,
+              recibe: puesta.recibe,
+            }),
+          }
+        : null;
     return {
       plan,
       precio,
       comision,
+      promo,
       // Clavado = el precio de este plan lo manda el margen, no la mano.
       margenObjetivo: margenes[plan] ?? null,
       ...resultadoDeCanal({ costo: c, precio, comision, envio: envioML }),

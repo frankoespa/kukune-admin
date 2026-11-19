@@ -1343,6 +1343,118 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
     primer cambio de costo de cada perfume.
 - En desarrollo la sección pide las ventas dos veces al entrar: es `StrictMode`.
 
+## Promociones de Mercado Libre
+- Tercera sección de la pestaña ML (selector Precios | Ventas | **Promociones**).
+  Piezas: `/api/ml/promociones`, `/api/ml/campanas[/<id>/items]` y las escrituras
+  en `vite-plugin-ml.js`; puras `resumirPromo` / `resumirPromos` /
+  `resumirCampanas` / `pedidoDePromo` / `errorDePromoEnCastellano` ahí mismo
+  (exportadas, probadas desde Node); `src/cuentasPromoML.js` (la ganancia de cada
+  candidata) y la pantalla `src/PromocionesML.jsx`. El descuento propio se pone
+  desde la fila de Precios con `src/DescuentoML.jsx`.
+  **`cuentasPromoML.js` no puede llamarse `promocionesML.js`**: chocaría con
+  `PromocionesML.jsx` en Windows, como `clienteML.js` con `MercadoLibre.jsx`.
+- **UNA PROMO TIENE DOS PRECIOS DISTINTOS, y es lo único que hay que entender.**
+  `price` es lo que **paga el comprador** y es la base de la comisión de ML. Lo
+  que **recibís** depende de quién financia el descuento:
+  - **Lo pagás vos** (`PRICE_DISCOUNT`, `DEAL`, `SELLER_CAMPAIGN`, `DOD`,
+    `LIGHTNING`): recibís el mismo `price`.
+  - **Co-fondeadas** (`MARKETPLACE_CAMPAIGN`, `SMART`, `PRICE_MATCHING`,
+    `PRE_NEGOTIATED`, `VOLUME`, `UNHEALTHY_STOCK`): ML pone `meli_percentage` y
+    vos `seller_percentage`, así que recibís `original_price × (1 − vendedor/100)`,
+    que es **más** que lo que paga el comprador (doc: lista 1000, paga 700, ML 5
+    y vos 25 → te quedan 750).
+  - El **boost** (`boosted_offer`) lo absorbe ML: baja lo que paga el comprador y
+    no toca lo tuyo.
+  La fórmula es `recibe − paga × comisión − envío − costo`, y entra en
+  `resultadoDeCanal` como un parámetro opcional **`recibe`** que por defecto es
+  el precio: sin promo la cuenta es exactamente la de siempre (verificado contra
+  los perfumes reales, ningún número se movió).
+- **Supuesto sin confirmar**: que la comisión se cobra sobre lo que paga el
+  comprador. La doc no lo dice para las co-fondeadas. Se confirma con una venta
+  real dentro de una, cruzando el `sale_fee` que ya trae **Ventas**.
+- **Dos trampas de la API, resueltas en `resumirPromo`**: un ítem `candidate`
+  viene con **`price: 0`**, que no es un precio (mostrarlo sería inventar un 100%
+  de descuento), y `min/max/suggested_discounted_price` **solo vienen** en `DEAL`,
+  `PRICE_DISCOUNT` y `SELLER_CAMPAIGN`, y **no para ofertas ya creadas**.
+- **El peligro que esto arregló**: con una promo activa `GET /items/<id>` baja
+  `price` y deja el de lista en `original_price`. `ATRIBUTOS` no lo pedía y
+  `cambiosParaML` comparaba contra `precio`, así que "Actualizar precios en ML"
+  ofrecía "corregir" esas publicaciones y **le habría pisado la promo**. Ahora
+  `resumir()` expone **`precioLista`** (`original_price ?? price`) y todo lo que
+  compare precios pasa por **`precioListaDe(pub)`** en `clienteML.js`, nunca por
+  `pub.precio`. Verificado en la copia: con dos promos puestas el panel dice
+  "Todas las publicaciones vinculadas ya tienen el precio del catálogo".
+  **ML saca sola de una campaña co-fondeada a la publicación cuyo precio suba**, y
+  después no la deja volver: por eso el diálogo de sacar lo avisa.
+- En **Precios** la promo no ocupa columna: va de renglón chico bajo la celda
+  "En ML" (`promo −10% · $108.000`, en humo, que no es un error) y bajo la
+  Ganancia del plan (`en promo $X`, en ámbar, óxido si no cubre el costo). El
+  número grande sigue siendo **el del precio de lista**: es el que compara planes
+  y el que usan el `=` y el margen clavado. Botón-filtro **"N en promo"**, con la
+  regla de los demás. Arriba de la tabla, **escrito y no en un `title`**, que en
+  las co-fondeadas el comprador paga menos de lo que te llega.
+- En **Promociones** están las invitaciones (`GET /seller-promotions/users/<id>`),
+  ordenadas por **plazo para aceptar** (`deadline_date`, que es el dato que
+  apura, mostrado en días). Al desplegar una se piden sus candidatas
+  (`/promotions/<id>/items`, que **pagina con `search_after` y el token vence a
+  los 5 minutos**: se recorre de una pasada) y se cruzan con el catálogo por el
+  vínculo guardado, nunca por nombre. La tabla va **de la que más pierde a la que
+  menos** (molde de `impactoDeCupon`), con *lista · paga el comprador · pone ML ·
+  te queda · margen · hoy sin promo · diferencia*, y arriba el total: cuánto
+  cambia la ganancia por unidad si entran todas. Lo que no está vinculado o no
+  tiene costo va aparte y **sin costo inventado**.
+- **En una campaña tradicional el precio lo pone el vendedor**, así que la celda
+  es editable (arranca en el sugerido de ML, con el rango permitido debajo) y la
+  ganancia se recalcula al tipear. En una co-fondeada el precio lo define ML y
+  solo se acepta la invitación.
+- **Escribir**: entrar (`POST`), cambiar el precio (`PUT`, **solo `DEAL`**) y
+  salir (`DELETE` con `promotion_type` + `promotion_id` + `offer_id`), todo de a
+  uno y con `Dialogo` que dice el precio, lo que te queda y que es real.
+  **Modificar no existe fuera de `DEAL`**: una co-fondeada hay que sacarla y
+  volver a entrar, y un `PRICE_DISCOUNT`, `DOD` o `LIGHTNING` se borra y se
+  rehace. No se usa el borrado masivo (`DELETE` sin `promotion_type`).
+- **El descuento propio** (`PRICE_DISCOUNT`) se pone desde el botón "Descuento"
+  de la fila de Precios: precio, desde y hasta, con la ganancia en vivo. Entre
+  **5% y 80%**, **14 días** como máximo, y el precio para Mercado Puntos nivel 3
+  a 6 al menos 5% más bajo (10% si el general pasa el 35%). Todo eso lo valida
+  **`pedidoDePromo`** en el server —son reglas de ML, no de la UI— y los errores
+  de ML van traducidos (`ERROR_CREDIBILITY_DISCOUNTED_PRICE` = "no lo considera
+  creíble", `423` = "está trabada unos segundos"). El cuerpo del diálogo avisa a
+  App por un ref (`estadoDescuento`), molde de `atarAlPasar`.
+- **Las fechas van CON HORA y sin zona** (`2026-11-17T00:00:00`). Mandando solo
+  el día, ML contesta **400 "Start and finish dates must be in local format"** —
+  pasó con la cuenta real. `aFechaML()` las completa: 00:00:00 la de inicio y
+  23:59:59 la de fin, que es justo lo que la doc dice que hace ML igual
+  (la hora informada la ignora). El campo del panel sigue siendo un día suelto.
+- **ML aplica la promo unos segundos DESPUÉS**: la escritura vuelve con 200 y la
+  publicación todavía no la muestra. Por eso se relee enseguida y otra vez a los
+  10 s (`releerPromos` en `MercadoLibre.jsx`, `RELEER_DE_NUEVO` en
+  `PromocionesML.jsx`), igual que con el precio de la de catálogo. Sin esa
+  segunda lectura había que recargar la página para ver el descuento recién
+  puesto.
+- **Lo que sale bien se avisa.** El `Dialogo` se cierra al aceptar, así que sin
+  un mensaje la escritura parece no haber pasado: va un renglón en verde arriba
+  de la tabla (Precios, se borra solo a los 8 s) o al lado del botón de la fila
+  (Promociones), diciendo además que ML tarda unos segundos en mostrarlo.
+- Un **403** es el permiso de la app, no el ítem: se avisa aparte ("Tocá Volver a
+  conectar") y el resto de la pestaña sigue funcionando, como los cupones de TN.
+- **Las promos no se guardan**: viven en ML y se leen en vivo, igual que el stock
+  de los canales. `perfumes.json` no cambió de forma y abrir la pestaña no
+  escribe. La lectura va de a `A_LA_VEZ` con `deAPocos`, como las ventas.
+- Las **ventas ya realizadas no necesitaban nada**: `Ventas` usa `unit_price` y
+  `sale_fee` reales, así que una venta en promo ya estaba bien contada.
+- **Probado solo en la copia, con ML falso** (`ml-falso.js`, que intercepta
+  `api.mercadolibre.com`): promo propia que baja el `price`, co-fondeada con ML
+  al 5%, candidata sin precio, 403, candidatas en dos páginas, y los
+  `POST`/`DELETE` (que salieron `{promotion_type:"DEAL",deal_price:114000,
+  promotion_id:"P-MLA-BF"}` y el `DELETE` con sus tres parámetros).
+  **La primera promo real la pone Franco.**
+- Lo que quedó afuera a propósito: la ganancia por carrito de `VOLUME` (3x2), el
+  umbral de envío gratis obligatorio de ML cuando un descuento lo cruza (la app
+  usa el `ajustes.envioML` parejo, que es el lado conservador; si se quisiera
+  exacto está `GET /sites/MLA/listing_prices?price=…`), y las notificaciones
+  `public_candidates` / `public_offers`, que necesitan una URL pública.
+
 ## Publicar en Mercado Libre
 - Botón **"Publicar"** en la fila del perfume (pestaña ML → Precios), al pasar
   el mouse, si algún plan no tiene publicación vinculada. Abre `PublicarML.jsx`

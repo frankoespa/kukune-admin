@@ -10,6 +10,8 @@ import {
   cuotasDePublicacion,
   detallePublicacion,
   nombreDePlan,
+  nombreDeTipoPromo,
+  precioListaDe,
 } from "./clienteML";
 
 /* ============================================================
@@ -99,6 +101,7 @@ export function BandaConexion({
 export function CeldaPublicacion({
   perfume,
   plan,
+  promo,
   precioCatalogo,
   itemId,
   itemCatalogo,
@@ -113,10 +116,10 @@ export function CeldaPublicacion({
   // Si la normal ya tiene el precio de la app y la de catálogo no, es que ML
   // todavía no la sincronizó: no es un error.
   const normal = itemId ? pubPorId.get(itemId) : null;
-  const normalAlDia = !!normal && Number(normal.precio) === Number(precioCatalogo);
+  const normalAlDia = !!normal && precioListaDe(normal) === Number(precioCatalogo);
   return (
     <div className="flex flex-col px-1.5" style={{ background: "var(--zona-ml)" }}>
-      <BotonPublicacion tipo="normal" itemId={itemId} {...comunes} />
+      <BotonPublicacion tipo="normal" itemId={itemId} promo={promo} {...comunes} />
       {/* Sin la normal no se ofrece la de catálogo: la de catálogo copia su precio. */}
       {(itemId || itemCatalogo) && (
         <BotonPublicacion tipo="catalogo" itemId={itemCatalogo} normalAlDia={normalAlDia} {...comunes} />
@@ -141,6 +144,7 @@ function BotonPublicacion({
   onVincular,
   onStock,
   normalAlDia = false,
+  promo = null,
 }) {
   const [abierto, setAbierto] = useState(false);
   const boton = useRef(null);
@@ -169,16 +173,19 @@ function BotonPublicacion({
     color = "var(--oxido)";
     titulo = `${itemId} ya no aparece entre tus publicaciones. Clic para cambiarla.`;
   } else {
-    const coincide = Number(pub.precio) === Number(precioCatalogo);
+    /* Contra el precio de LISTA: con una promo activa el publicado baja y la
+       celda marcaría óxido para siempre, como si el precio estuviera mal. */
+    const listado = precioListaDe(pub);
+    const coincide = listado === Number(precioCatalogo);
     // La de catálogo atrasada con la normal ya al día: ML la está sincronizando.
     const sincronizando = deCatalogo && !coincide && normalAlDia;
-    contenido = sincronizando ? "sincronizando" : pesos(pub.precio);
+    contenido = sincronizando ? "sincronizando" : pesos(listado);
     color = coincide ? "var(--verde)" : sincronizando ? "var(--humo)" : "var(--oxido)";
     // En la de catálogo, "el catálogo" se confundiría con el catálogo de ML.
     const nuestro = deCatalogo ? "la app" : "el catálogo";
     titulo = `${deCatalogo ? "Publicación de catálogo: " : ""}${pub.titulo} (${pub.id}) · ${detallePublicacion(pub)}. ${
       sincronizando
-        ? `Todavía tiene ${pesos(pub.precio)}: la normal ya tiene ${pesos(precioCatalogo)} y ML se lo pasa a la de catálogo en unos segundos. Se relee sola después de actualizar; si no, tocá Releer.`
+        ? `Todavía tiene ${pesos(listado)}: la normal ya tiene ${pesos(precioCatalogo)} y ML se lo pasa a la de catálogo en unos segundos. Se relee sola después de actualizar; si no, tocá Releer.`
         : coincide
         ? `Mismo precio que ${nuestro}.`
         : `${deCatalogo ? "La app" : "El catálogo"} dice ${pesos(precioCatalogo)}.`
@@ -213,6 +220,21 @@ function BotonPublicacion({
         {deCatalogo && itemId && <span style={{ color: "var(--humo)" }}>cat. </span>}
         {contenido}
       </button>
+      {/* La promo que ML tiene puesta ahora. En humo: no es un error ni una
+          ganancia, es a cuánto se está vendiendo hoy. El número de arriba sigue
+          siendo el precio de lista, que es contra el que se compara el catálogo. */}
+      {!deCatalogo && promo && (
+        <span
+          className="k-num block truncate px-1 text-right text-[10px] leading-tight"
+          style={{ color: "var(--humo)" }}
+          title={`${nombreDeTipoPromo(promo.tipo)}${promo.nombre ? `: "${promo.nombre}"` : ""}. El comprador paga ${pesos(
+            promo.paga
+          )}${promo.coFondeada && promo.poneML > 0 ? `, de los cuales ML pone ${pesos(promo.poneML)}` : ""}.`}
+        >
+          {promo.descuento ? `promo −${pctCorto(promo.descuento)} · ` : "promo · "}
+          {pesos(promo.paga)}
+        </span>
+      )}
       {abierto && (
         <BuscadorPublicacion
           ancla={boton}
