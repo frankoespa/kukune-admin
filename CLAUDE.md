@@ -888,22 +888,77 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   `envioGratisDesde` (ver abajo), `comision` (la de Tiendanube, se suma a la de
   cada forma), `redondeo` y `formas: [{id, nombre, comision, descuento, minimo}]`.
 
-- La comisión de cada forma se carga **sin IVA**, como la muestra el medio de
-  pago; `comisionRealTN()` le aplica el 21%. Comisión + financiación de la
-  pasarela se suman a mano en el mismo número.
+- La comisión de cada forma se carga **sin IVA ni percepciones**, como la
+  muestra el medio de pago; `comisionRealTN()` les suma las dos cosas (ver
+  "Percepciones" más abajo). Comisión + financiación de la pasarela se suman a
+  mano en el mismo número.
 - **El costo por transacción de Tiendanube (CPT) NO lleva IVA y va aparte**:
   columna **Costo TN** de cada forma (`forma.costoTN`, fracción; 2% en el plan
   de Franco con pasarelas que no son Pago Nube, donde está bonificado). El Centro
   de Ayuda ("¿Cómo se calculan los costos por transacción?") da 1% de $100 =
-  $1, al lado de Mercado Pago "4,15% + IVA". `comisionRealTN = comisión × 1,21 +
-  costoTNDeForma()`, que es `ajustesTN.comision` (el general, que tampoco lleva
-  IVA) + `forma.costoTN`. En `analisisTiendaNube` el IVA va solo sobre la
-  comisión de la pasarela. Ejemplo real: GOcuotas 9,10% + IVA y CPT 2% = 13,01%;
+  $1, al lado de Mercado Pago "4,15% + IVA". `comisionRealTN = comisión ×
+  (1 + IVA + percepciones) + costoTNDeForma()`, que es `ajustesTN.comision`
+  (el general, que tampoco lleva IVA) + `forma.costoTN`. En
+  `analisisTiendaNube` el IVA y las percepciones van solo sobre la comisión de
+  la pasarela. Ejemplo real: GOcuotas 9,10% + IVA y CPT 2% = 13,01%;
   cargado todo junto en la comisión (11,10%) daba 13,43%.
   Antes el CPT se sumaba a la comisión y llevaba IVA. Con los datos del
   13/11/2026 no se movió ningún precio (general en 0 y sin `costoTN`). Las formas
   que tienen el CPT sumado a mano en la comisión (la de Mercado Pago dice "3,46% +
   CPT 2%" y tiene 5,46%) siguen con IVA de más hasta que Franco lo separe.
+- **Sobre la comisión no va solo el IVA: va también la percepción de IIBB**
+  (`ajustes.tiendaNube.percepciones`, fracción, campo "Percepciones" al lado de
+  Comisión TN y con `CampoProtegido` como el resto del canal). El multiplicador
+  pasa a ser `1 + IVA + percepciones`; **arranca en 0, así que sin cargarlo la
+  app hace exactamente lo de antes** (`× 1,21`) y abrir no escribe ni mueve
+  ningún precio (verificado sobre el catálogo real: 0 precios movidos).
+  - **Está medido, no deducido.** La venta real del 18/11/2026 (Rayhaan Tropical
+    Vibe, 6 cuotas) descontó **30,3676%** sobre el total **con el envío adentro**;
+    la forma publica **24,49%**. 30,3676 / 24,49 = **1,24000** exacto, y la misma
+    cuenta da 1,24000 por separado en las dos líneas del detalle
+    (procesamiento / 3,49% y cuotas / 21,00%). O sea **21% de IVA + 3% de
+    percepción**, y el `× 1,21` de la app se quedaba corto. El detalle de la
+    venta lo dice con todas las letras en las dos líneas: *"Incluye IVA +
+    percepción IIBB"*.
+  - **Es sobre la comisión, no sobre la venta.** En esa venta fueron **$738**
+    (3% de los $24.606 de comisión neta), no $3.014 (3% de los $100.473
+    cobrados). Si alguna vez los números no cierran, empezar por ahí.
+  - **Se cuenta como costo porque Franco es monotributista**: no descuenta
+    crédito fiscal de IVA, así que el IVA y la percepción son plata que no
+    vuelve. Para un responsable inscripto esto estaría al revés —las dos cosas
+    son crédito— y habría que revisar también el `× 1,21` de toda la vida.
+  - De paso, esa venta **confirma** lo que acá figuraba como "lo esperable y no
+    está confirmado": la pasarela cobra sobre el total **incluyendo el envío**.
+    Medido contra el producto solo daba 32,9%, un número que no es ninguna tarifa.
+  - **El porcentaje de la forma no se toca** (decisión de Franco, y tiene razón):
+    ahí va la comisión **publicada** del medio de pago, que es la referencia
+    contra la que se compara el resumen de Tiendanube. Meterle el 3% adentro la
+    volvería un número que no figura en ningún lado. Por eso es un campo propio,
+    uno para toda la tienda.
+  - **Confirmado por segunda vez con otra forma de pago**: venta del Afnan 9PM
+    Night Out, 1 pago con Pago Nube, $148.000. Le descontaron **$6.404,84** =
+    **4,3276%**, y 4,3276 / 1,24 = **3,49%**, la tasa de esa forma. La app da
+    $6.404,85. Dos ventas, dos formas, el mismo 1,24.
+  - **Lo que se puede comprobar contra una venta es la COMISIÓN, no la
+    ganancia**: la ganancia arrastra además el envío, que la app *supone* en
+    `envioGratis`. Con el envío real de cada venta la ganancia da exacta
+    ($10.042 en la del 18/11); con el supuesto de $10.000 da $9.365, y esos
+    $677 son **solo** la comisión sobre los $2.227 de envío de más. Está bien
+    que quede más baja: es el lado conservador elegido.
+  - **Trampa que ya costó una conclusión falsa**: antes de arreglar el bug de
+    abajo, la app daba $10.047 contra $10.042 y parecía clavada. Eran **dos
+    errores cancelándose** —la percepción que faltaba ($681) contra el envío
+    supuesto de más ($677)—. Si un número da bien, mirar que dé bien **por el
+    motivo correcto**.
+  - **El bug que esto destapó**: `analisisTiendaNube` arma el desglose
+    `comision` + `iva` + `percepcion` a mano, y la primera versión sumó la
+    percepción en `tasaReal` pero **no** en `total` ni en `llega`. O sea que el
+    porcentaje decía 4,33% y lo que descontaba era 4,02%. La percepción solo
+    llegaba a `comisionEnvio`, que sí usa `comisionRealTN`. **La identidad que
+    tiene que valer siempre es `total === paga × tasaReal`**, y hay un test que
+    la comprueba. Si se agrega otro sumando a `comisionRealTN`, agregarlo
+    también acá.
+  - **Franco lo carga él**: es su dato y `datos/` no se toca desde acá.
 - Redondea con `redondearPrecio()`, igual que directo y ML (ver "Precios del
   catálogo"), usando el `k` de la forma de pago que manda. Su default es $1.000.
   Antes "Sin redondear" subía al peso siguiente y el `=` podía mostrar 40,4%
@@ -1150,6 +1205,12 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   números de ese momento, por si sirven de referencia: 34 perfumes debajo, con
   envío gratis vendidos solos Hawas Verde ($120.000 justo, inclusivo), Rayhaan
   Italia y 9PM Night Out, y +$340.000 contra el envío gratis siempre.
+- **Al comparar una venta vieja contra la app, el umbral de ESE día no es el de
+  hoy.** Una venta del Afnan de $148.000 salió con envío gratis y con el ajuste
+  en $150.000 parecía una promoción mal configurada; era simplemente anterior al
+  cambio. Vale para todos los ajustes del canal, no solo para éste: lo único que
+  se puede verificar contra una venta sin reconstruir la configuración de su
+  fecha es **la comisión**, que sale de la tasa de la forma de pago.
 
 ## Simulador de carrito (Tiendanube)
 - Banda **"Simular carrito"** en la pestaña Tiendanube (`src/SimuladorCarrito.jsx`),

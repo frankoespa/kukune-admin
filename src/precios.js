@@ -359,10 +359,34 @@ export const IVA = 0.21;
 export const costoTNDeForma = (forma, ajustesTN = {}) =>
   (Number(ajustesTN.comision) || 0) + (Number(forma?.costoTN) || 0);
 
-/* La comisión real de una forma de pago: la suya con IVA, más el costo por
-   transacción de Tiendanube (sin IVA). */
+/* La percepción de INGRESOS BRUTOS que la pasarela suma a la factura de la
+   comisión: actúa como agente de percepción, así que a la comisión le agrega el
+   IVA Y un porcentaje más, calculado sobre el MISMO neto que el IVA (no sobre
+   el neto con IVA). Es sobre la comisión que te cobran, NO sobre lo que
+   vendiste: 3% de la comisión, no del precio.
+
+   Medido en la venta real del Rayhaan Tropical Vibe (18/11/2026, 6 cuotas con
+   Pago Nube): lo descontado dividido por la tasa publicada dio **1,24000 exacto
+   en las dos líneas por separado** —procesamiento 3,49% y financiación 21,00%—,
+   o sea IVA 21% + 3% de percepción, y el detalle de Tiendanube lo confirma al
+   pie de la letra ("Incluye IVA + percepción IIBB" en las dos). Va aparte de la
+   comisión a propósito: en cada forma se sigue viendo la tasa que publica la
+   pasarela, que es la referencia, y la percepción vale para todas.
+
+   Se cuenta como costo porque Franco es MONOTRIBUTISTA: no descuenta crédito
+   fiscal de IVA. Para un responsable inscripto esto estaría mal —el IVA y la
+   percepción vuelven— y habría que revisar también el 1,21 de siempre.
+
+   Ausente o 0 = como antes: abrir la app no reprecia nada. */
+export const percepcionesTN = (ajustesTN = {}) => Number(ajustesTN.percepciones) || 0;
+
+/* La comisión real de una forma de pago: la suya con IVA y percepciones, más el
+   costo por transacción de Tiendanube (sin IVA). */
 export function comisionRealTN(forma, ajustesTN = {}) {
-  return (Number(forma.comision) || 0) * (1 + IVA) + costoTNDeForma(forma, ajustesTN);
+  return (
+    (Number(forma.comision) || 0) * (1 + IVA + percepcionesTN(ajustesTN)) +
+    costoTNDeForma(forma, ajustesTN)
+  );
 }
 
 const aplicaTN = (forma, precio) => {
@@ -451,7 +475,7 @@ export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon, forma
 
   const formas = (ajustesTN.formas ?? []).map((forma) => {
     const descuento = Number(forma.descuento) || 0;
-    // La comisión de la pasarela lleva IVA; el costo de Tiendanube, no.
+    // La comisión de la pasarela lleva IVA y percepción; el costo de Tiendanube, no.
     const pasarela = Number(forma.comision) || 0;
     const base = pasarela + tn + (Number(forma.costoTN) || 0);
     const real = comisionRealTN(forma, ajustesTN);
@@ -463,7 +487,12 @@ export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon, forma
     const aplica = minimo <= 0 || paga >= minimo;
     const comision = paga * base;
     const iva = paga * pasarela * IVA;
-    const llega = paga - comision - iva;
+    /* La percepción de IIBB va sobre el MISMO neto que el IVA. Se desglosa
+       aparte para que el detalle la muestre, pero el total tiene que dar
+       `paga * real`: si acá se olvida un sumando, `tasaReal` dice una cosa y
+       lo que descuenta dice otra. Ya pasó. */
+    const percepcion = paga * pasarela * percepcionesTN(ajustesTN);
+    const llega = paga - comision - iva - percepcion;
     // La comisión total de la forma, con IVA y costo TN, sobre el envío del cliente.
     const comisionEnvio = envioCliente * real;
     return {
@@ -476,7 +505,8 @@ export function analisisTiendaNube({ costo, precio, ajustesTN = {}, cupon, forma
       paga,
       comision,
       iva,
-      total: comision + iva,
+      percepcion,
+      total: comision + iva + percepcion,
       tasaBase: base,
       tasaReal: real,
       llega,

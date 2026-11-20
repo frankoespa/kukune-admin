@@ -150,6 +150,21 @@ export function AjustesTiendaNube({ tn, onCambiar, onConfirmar, categorias = nul
             />
           </div>
         </div>
+        {/* Va aparte de la comision de cada forma a proposito: en la forma se
+            ve la tasa que publica la pasarela, que es la referencia, y esto lo
+            agrega Tiendanube en la factura para todas por igual. */}
+        <div className="block" title="Lo que Tiendanube suma a la factura de la comision ademas del IVA, porque actua como agente de percepcion. Se calcula sobre el mismo neto que el IVA. En una venta real de 6 cuotas con Pago Nube dio 3%: lo descontado sobre la tasa publicada daba 1,24 y no 1,21.">
+          {rotulo("Percepciones")}
+          <div className="w-[88px]">
+            <CampoProtegido
+              valor={+((tn.percepciones || 0) * 100).toFixed(2)}
+              onCambiar={(v) => cambiar({ percepciones: Math.max(0, v) / 100 })}
+              mostrar={(v) => porcentaje((v || 0) / 100)}
+              suffix="%"
+              etiqueta="las percepciones de Tiendanube"
+            />
+          </div>
+        </div>
         <SelectorRedondeo valor={tn.redondeo} onCambiar={(redondeo) => cambiar({ redondeo })} />
         {/* Solo el que se PROPONE al mandar precios con promoción: no cambia
             ninguna cuenta ni ningún precio del catálogo. */}
@@ -221,7 +236,8 @@ export function AjustesTiendaNube({ tn, onCambiar, onConfirmar, categorias = nul
       {abierto && (
         <div className="mt-3 border-t pt-2" style={{ borderColor: "var(--zona-tn-honda)" }}>
           <p className="mb-2 max-w-[560px] text-[11px]" style={{ color: "var(--humo)" }}>
-            Comision como figura en la pantalla del medio de pago, <b>sin IVA</b> (se suma sola).
+            Comision como figura en la pantalla del medio de pago, <b>sin IVA ni percepciones</b>
+            (se suman solas, con lo que cargues arriba).
             Si hay varias —comision + financiacion o CPT— sumalas. <b>Costo TN</b> es el costo por
             transaccion de Tiendanube con esa forma (2% en tu plan si no es Pago Nube, donde esta
             bonificado): <b>no lleva IVA</b>. "Desde" es la compra minima para que aplique (0 = siempre).
@@ -289,7 +305,7 @@ function FilaForma({ forma, tn, nueva, onCambiar, onQuitar }) {
         etiqueta="el nombre de la forma de pago"
         abiertoAlInicio={nueva}
       />
-      <div title={`Con IVA y el costo de Tiendanube: ${porcentaje(comisionRealTN(forma, tn))}`}>
+      <div title={`Con IVA, percepciones y el costo de Tiendanube: ${porcentaje(comisionRealTN(forma, tn))}`}>
         <CampoProtegido
           valor={+((forma.comision || 0) * 100).toFixed(2)}
           onCambiar={(v) => onCambiar({ comision: v / 100 })}
@@ -336,7 +352,9 @@ function FilaForma({ forma, tn, nueva, onCambiar, onQuitar }) {
       <span />
       <span className="k-num col-span-2 -mt-1.5 text-left text-[10.5px]" style={{ color: "var(--humo-claro)" }}>
         = {porcentaje(comisionRealTN(forma, tn))}{" "}
-        {(Number(forma.costoTN) || 0) + (Number(tn.comision) || 0) > 0 ? "total (c/IVA + TN)" : "c/IVA"}
+        {(Number(forma.costoTN) || 0) + (Number(tn.comision) || 0) > 0
+          ? `total (c/IVA${(Number(tn.percepciones) || 0) > 0 ? " y perc." : ""} + TN)`
+          : `c/IVA${(Number(tn.percepciones) || 0) > 0 ? " y perc." : ""}`}
       </span>
       <span className="col-span-3" />
     </>
@@ -351,6 +369,9 @@ function FilaForma({ forma, tn, nueva, onCambiar, onQuitar }) {
    despeja solo. `precio` llega ya resuelto desde la lista, así que al tipear se
    ven el precio y todas las filas nuevas. */
 export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSoltar, onOferta, cuponesTienda = [], productosTN = [] }) {
+  /* Con percepción cargada, comisión + IVA ya no da el total: hay un tercer
+     sumando. La columna lo dice en vez de parecer una suma mal hecha. */
+  const hayPercepcion = (Number(tn.percepciones) || 0) > 0;
   const [copiado, setCopiado] = useState(false);
   /* Oferta REAL: el tachado es este precio y el cliente paga menos. El % se
      tantea acá (estado local, en número: 15 = 15%) y solo "Poner en oferta"
@@ -874,7 +895,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
               <th className={`${th} text-left`}>Si paga con</th>
               <th className={th}>{r.unidades > 1 ? `Paga el cliente (${r.unidades} u.)` : "Paga el cliente"}</th>
               <th className={th}>Comisión</th>
-              <th className={th}>IVA</th>
+              <th className={th}>{hayPercepcion ? "IVA + perc." : "IVA"}</th>
               <th className={th}>Total comisión</th>
               <th className={th}>Te llega</th>
               <th className={th}>{envio > 0 ? "Ganás (ya sin envío)" : "Ganás"}</th>
@@ -1015,10 +1036,21 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                     )}
                   </td>
                   <td className={td} style={{ color: "var(--humo)" }}>
-                    −{pesos(f.iva)}
+                    −{pesos(f.iva + (f.percepcion || 0))}
                     <small className="block text-[10.5px]" style={{ color: "var(--humo-claro)" }}>
-                      {porcentaje(IVA)}
+                      {porcentaje(IVA + (Number(tn.percepciones) || 0))}
                     </small>
+                    {/* Desglosado porque son dos impuestos distintos sobre el mismo
+                        neto, y porque si no la columna no cierra con la de al lado. */}
+                    {hayPercepcion && (
+                      <small
+                        className="block text-[10.5px]"
+                        style={{ color: "var(--humo-claro)" }}
+                        title={`IVA ${pesos(f.iva)} + percepción de IIBB ${pesos(f.percepcion)}, las dos sobre la comisión sin impuestos (${pesos(f.comision)}).`}
+                      >
+                        {pesos(f.iva)} + {pesos(f.percepcion)} IIBB
+                      </small>
+                    )}
                   </td>
                   <td className={td} style={{ color: "var(--tinta)" }}>
                     <b>−{pesos(f.total)}</b>

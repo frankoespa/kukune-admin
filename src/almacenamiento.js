@@ -139,6 +139,12 @@ export const AJUSTES_POR_DEFECTO = {
        clave) = siempre gratis, lo de siempre: abrir la app no reprecia nada. */
     envioGratisDesde: 0,
     comision: 0, // la de Tiendanube, que se suma a la de cada forma de pago
+    /* La percepción de Ingresos Brutos que la pasarela agrega a la factura de
+       la comisión, además del IVA. Se calcula sobre el mismo neto que el IVA, y
+       sobre la COMISIÓN, no sobre la venta. 0 (o sin la clave) = como antes:
+       abrir la app no reprecia nada. Medido en una venta real: 3%
+       (ver `percepcionesTN` en precios.js). */
+    percepciones: 0,
     redondeo: 1000,
     // El % que se propone al mandar precios con promoción (precio tachado).
     descuentoMostrado: 0.2,
