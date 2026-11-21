@@ -47,7 +47,7 @@ function Renglon({ titulo, detalle, monto, nota }) {
         · te deja
       </span>
       {/* Ámbar: es plata que te queda, el único uso legítimo del color. */}
-      <span className="k-num text-[13px]" style={{ color: monto >= 0 ? "var(--ambar)" : "var(--oxido)" }}>
+      <span className="k-num text-[13px]" style={{ color: monto >= 0 ? "var(--verde)" : "var(--oxido)" }}>
         {pesos(monto)}
       </span>
       {nota && (

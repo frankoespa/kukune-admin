@@ -176,7 +176,7 @@ export function CuerpoDescuento({ perfume, planes, pubPorId, promos, ajustes, es
           <strong
             className="k-num"
             style={{
-              color: r.ganancia == null ? "var(--humo)" : r.ganancia > 0 ? "var(--ambar)" : "var(--oxido)",
+              color: r.ganancia == null ? "var(--humo)" : r.ganancia > 0 ? "var(--verde)" : "var(--oxido)",
             }}
           >
             {r.ganancia == null ? "—" : pesos(r.ganancia)}

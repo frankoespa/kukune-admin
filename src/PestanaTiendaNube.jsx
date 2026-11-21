@@ -5,6 +5,9 @@ import { analisisDePrecio, analisisTiendaNube, objetivoTN, ofertaDeTN, precioTie
 import { AjustesTiendaNube, DetalleTiendaNube } from "./TiendaNube";
 import { NumberCell } from "./NumberCell";
 import { buscarPerfumes, ConVistaPrevia, margenReal, pesos } from "./Catalogo";
+import { ordenar, siguienteOrden } from "./orden";
+import { ColumnaOrdenable } from "./ColumnaOrdenable";
+import { ALTO_TABLA, anchoDeColumnas } from "./tabla";
 import { actualizarVarianteTN, cambiosParaTN, crearVarianteTN, enviarCodigoTN, estadoTN, leerCategoriasTN, leerCuponesTN, leerProductosTN, pedirAutorizacionTN, vinculoTN } from "./clienteTN";
 import { ajustesTNDeDecants, decantsComoVendibles, nombreDeTipo, tiposDeDecant } from "./cuentasDecant";
 import { BandaConexionTN, CeldaTN, PanelActualizarTN } from "./ConexionTN";
@@ -39,7 +42,6 @@ import { zonaEnvioTN } from "./umbralEnvioTN";
 
 // foto · nombre · costo · ganancia directa ‖ precio · margen · ganancia · en Tiendanube
 const COLUMNAS_TN = "52px minmax(200px,1fr) 100px 100px 124px 88px 100px 132px";
-const ANCHO_MINIMO = 52 + 200 + 200 + 312 + 132;
 
 /* Frascos o decants: nunca mezclados en la tabla (pedido de Franco, más
    práctico). Se recuerda entre visitas; es una preferencia de pantalla. */
@@ -296,25 +298,49 @@ export default function PestanaTiendaNube({ perfumes: frascos, ajustes: ajustesT
 
   /* Orden alfabético congelado por conjunto, como en el catálogo y en ML: acá se
      escriben precios y la lista no debe moverse por eso. */
-  const orden = useRef({ clave: null, ids: [] });
+  const [orden, setOrden] = useState({ col: "nombre", dir: "asc" });
+  const onOrdenar = useCallback((col) => setOrden((o) => siguienteOrden(o, col)), []);
+  const alfabetico = useRef({ clave: null, dir: null, ids: [] });
   const visibles = useMemo(() => {
     const filtrados = buscarPerfumes(perfumes, consulta);
+
+    if (orden.col !== "nombre") {
+      /* Margen y ganancia son los de la forma que MANDA (la fijada, o la que
+         menos deja), que es exactamente lo que muestra la fila. */
+      const deTN = (p) => {
+        if (!(Number(p.costo) > 0) || !(Number(p.precioTN) > 0)) return null;
+        return analisisTiendaNube({
+          costo: p.costo,
+          precio: Number(p.precioTN),
+          ajustesTN: ajustes.tiendaNube,
+          formaId: objetivoTN(p)?.formaId,
+        });
+      };
+      const valorDe = {
+        costo: (p) => (Number(p.costo) > 0 ? Number(p.costo) : null),
+        gananciaDirecta: (p) =>
+          Number(p.costo) > 0 && Number(p.precioPublico) > 0 ? p.precioPublico - p.costo : null,
+        precio: (p) => (Number(p.precioTN) > 0 ? Number(p.precioTN) : null),
+        margen: (p) => deTN(p)?.margenManda ?? null,
+        ganancia: (p) => deTN(p)?.gananciaManda ?? null,
+      }[orden.col];
+      if (valorDe) return ordenar(filtrados, valorDe, orden.dir);
+    }
+
     const porId = new Map(filtrados.map((p) => [p.id, p]));
     const clave = filtrados
       .map((p) => p.id)
       .sort()
       .join(",");
-    if (orden.current.clave !== clave) {
-      orden.current = {
+    if (alfabetico.current.clave !== clave || alfabetico.current.dir !== orden.dir) {
+      alfabetico.current = {
         clave,
-        ids: filtrados
-          .slice()
-          .sort((a, b) => a.nombre.localeCompare(b.nombre, "es", { numeric: true }))
-          .map((p) => p.id),
+        dir: orden.dir,
+        ids: ordenar(filtrados, (p) => p.nombre, orden.dir).map((p) => p.id),
       };
     }
-    return orden.current.ids.map((id) => porId.get(id)).filter(Boolean);
-  }, [perfumes, consulta]);
+    return alfabetico.current.ids.map((id) => porId.get(id)).filter(Boolean);
+  }, [perfumes, consulta, orden, ajustes.tiendaNube]);
 
   /* Los que alcanzan el monto del envío gratis VENDIDOS SOLOS: ahí el envío lo
      paga el negocio. Sale del catálogo entero, no de los visibles, para que el
@@ -525,9 +551,9 @@ export default function PestanaTiendaNube({ perfumes: frascos, ajustes: ajustesT
                 : "Ningún perfume coincide con la búsqueda."}
         </p>
       ) : (
-        <div className="overflow-x-auto pb-2">
-          <div style={{ minWidth: ANCHO_MINIMO }}>
-            <Encabezado />
+        <div className="overflow-auto pb-2" style={{ maxHeight: ALTO_TABLA }}>
+          <div style={{ minWidth: anchoDeColumnas(COLUMNAS_TN) }}>
+            <Encabezado orden={orden} onOrdenar={onOrdenar} />
             <ul className="grid gap-1.5">
               {alaVista.map((p) => (
                 <FilaTN
@@ -552,11 +578,16 @@ export default function PestanaTiendaNube({ perfumes: frascos, ajustes: ajustesT
 
 /* Dos niveles, como el catálogo y ML: mismas columnas y mismo `border`
    transparente que las filas. */
-function Encabezado() {
-  const col = (texto, fondo, alineado = "text-right") => (
-    <span className={`k-col px-2 py-1.5 ${alineado}`} style={{ background: fondo, color: "var(--humo)" }}>
-      {texto}
-    </span>
+function Encabezado({ orden, onOrdenar }) {
+  const col = (texto, fondo, clave, alineado = "text-right") => (
+    <ColumnaOrdenable
+      texto={texto}
+      clave={clave}
+      orden={orden}
+      onOrdenar={onOrdenar}
+      fondo={fondo}
+      alineado={alineado}
+    />
   );
   return (
     <div className="sticky top-0 z-[5] pb-1.5 pt-1" style={{ background: "var(--vidrio)" }}>
@@ -573,19 +604,21 @@ function Encabezado() {
       </div>
       <div className="grid items-center border border-transparent" style={{ gridTemplateColumns: COLUMNAS_TN }}>
         <span />
-        {col("Perfume", "transparent", "text-left")}
-        {col("Costo", "var(--zona-directa)")}
-        {col("Gan. directa", "var(--zona-directa)")}
-        {col("Precio", "var(--zona-tn)")}
-        {col("Margen", "var(--zona-tn)")}
-        {col("Ganancia", "var(--zona-tn)")}
+        {col("Perfume", "transparent", "nombre", "text-left")}
+        {col("Costo", "var(--zona-directa)", "costo")}
+        {col("Gan. directa", "var(--zona-directa)", "gananciaDirecta")}
+        {col("Precio", "var(--zona-tn)", "precio")}
+        {col("Margen", "var(--zona-tn)", "margen")}
+        {col("Ganancia", "var(--zona-tn)", "ganancia")}
+        {/* "En Tiendanube" no ordena: es la celda del vínculo con la variante,
+            no una cifra del negocio. */}
         {col("En Tiendanube", "var(--zona-tn)")}
       </div>
     </div>
   );
 }
 
-const colorGanancia = (g) => (g === null ? "var(--humo-claro)" : g >= 0 ? "var(--ambar)" : "var(--oxido)");
+const colorGanancia = (g) => (g === null ? "var(--humo-claro)" : g >= 0 ? "var(--verde)" : "var(--oxido)");
 
 function FilaTN({ perfume, ajustes, onCambiar, onSoltarMargenTN, onFijarObjetivoTN, conexion, cuponesTienda, productosTN }) {
   const r = analisisDePrecio({

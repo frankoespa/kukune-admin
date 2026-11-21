@@ -345,7 +345,7 @@ function FotoCell({ value, onChange, nombre }) {
         }}
       >
         {cargando ? (
-          <span className="text-[9px] text-[#A39E93]">···</span>
+          <span className="text-[9px] text-[var(--humo-claro)]">···</span>
         ) : value ? (
           <img
             src={value}
@@ -353,7 +353,7 @@ function FotoCell({ value, onChange, nombre }) {
             className="h-full w-full object-cover"
           />
         ) : (
-          <ImagePlus size={16} className="mx-auto text-[#A39E93]" />
+          <ImagePlus size={16} className="mx-auto text-[var(--humo-claro)]" />
         )}
       </button>
       {value && !cargando && (
@@ -1328,10 +1328,20 @@ export default function App() {
     setAvisoCarga("");
   };
 
+  /* Lo que ve el motor, que no es lo que se guarda. En un pedido en pesos el
+     dólar del cálculo vale 1 —el proveedor ya cobra en pesos— pero el
+     `precioUsdt` que escribió el usuario queda intacto en el estado, para
+     cuando vuelva a dólares. Mismo molde que `productosVista`, que le pasa
+     `vendeML: false` al motor sin escribirlo en el archivo. */
+  const globalsMotor = useMemo(
+    () => (globals.monedaPedido === "ARS" ? { ...globals, precioUsdt: 1 } : globals),
+    [globals]
+  );
+
   // Pasada previa: las filas clavadas a un margen reciben su Precio Final
   // despejado. Recién después corre el motor de siempre, sin enterarse.
   const productosResueltos = useMemo(() => {
-    const conPrecio = resolverPrecios(globals, productos);
+    const conPrecio = resolverPrecios(globalsMotor, productos);
     // El nombre lo manda el catálogo. En la fila queda una copia (hace legible
     // el JSON y sirve de red si la referencia se rompiera), pero si el catálogo
     // dice otra cosa, gana el catálogo: renombrar ahí tiene que verse acá.
@@ -1343,7 +1353,7 @@ export default function App() {
       return { ...p, producto: nombre };
     });
     return cambio ? conNombre : conPrecio;
-  }, [globals, productos, perfumePorId]);
+  }, [globalsMotor, productos, perfumePorId]);
 
   /* Lo que se VE y se CALCULA, que no es lo que se guarda.
      · Mercado Libre salió de la mesa (tiene su pestaña): toda fila se cuenta como
@@ -1372,8 +1382,8 @@ export default function App() {
     [productosResueltos, perfumePorId, estadoPedido]
   );
   const R = useMemo(
-    () => calcular(globals, productosVista),
-    [globals, productosVista]
+    () => calcular(globalsMotor, productosVista),
+    [globalsMotor, productosVista]
   );
   const D = useMemo(() => descomponerIngreso(R.filas), [R.filas]);
 
@@ -1819,17 +1829,20 @@ export default function App() {
   const enPesos = globals.monedaPedido === "ARS";
   const monedaCosto = enPesos ? "ARS" : "USD";
   const montoCosto = enPesos ? ars : usd; // formatea las columnas de costo base
+  /* Cambiar de moneda **no toca el dólar que escribiste**. Antes, pasar a
+     pesos lo pisaba con 1 y volver a dólares ponía el default: si habías
+     cargado 1700, al volver te encontrabas 1570 y no había forma de
+     recuperarlo. El 1 que necesita el motor se lo pasa `globalsMotor`, que es
+     una vista: el estado —y el archivo— se quedan con tu cotización.
+     La única excepción es un pedido guardado con el comportamiento viejo, que
+     tiene el dólar en 1 de verdad: ahí sí hace falta un valor de arranque. */
   const cambiarMoneda = (moneda) =>
     setGlobals((g) => ({
       ...g,
       monedaPedido: moneda,
-      precioUsdt:
-        moneda === "ARS"
-          ? 1
-          : // Al volver a dólares, un dólar en 1 quedó del modo pesos: no sirve.
-          g.precioUsdt === 1
-          ? DEFAULT_GLOBALS.precioUsdt
-          : g.precioUsdt,
+      ...(moneda === "USD" && g.precioUsdt === 1
+        ? { precioUsdt: DEFAULT_GLOBALS.precioUsdt }
+        : null),
     }));
   const setP = (id, k, v) =>
     setProductos((ps) =>
@@ -2569,7 +2582,7 @@ export default function App() {
             </h2>
             {/* El margen se mide sobre las mismas filas que la barra, no sobre
                 todo el pedido: si no, la línea y la barra se contradicen. */}
-            <p className="k-num text-[11px]" style={{ color: "#7C8177" }}>
+            <p className="k-num text-[11px]" style={{ color: "#8E938A" }}>
               {D.cotizadas > 0
                 ? `${ars(D.ingresos)} de venta · ${
                     D.costo > 0 ? pct(D.neta / D.costo) : "0,0%"
@@ -2590,10 +2603,17 @@ export default function App() {
             <h2 className="k-rotulo mb-3">Lo que ajustás</h2>
             <div className="grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-4">
               <SelectorMoneda valor={globals.monedaPedido} onChange={cambiarMoneda} />
-              {/* En pesos no hay conversión que hacer: el campo Dólar no va. */}
+              {/* En pesos no hay conversión que hacer: el campo Dólar no va.
+                  El sufijo dice la unidad de la CIFRA, que es una cotización:
+                  con "ARS" a secas se lee como si el campo fuera un importe en
+                  pesos. */}
               {!enPesos && (
-                <Field label="Dólar" hint="ARS por USD">
-                  <NumberCell value={globals.precioUsdt} onChange={setG("precioUsdt")} suffix="ARS" />
+                <Field label="Dólar" hint="cuántos pesos vale un dólar">
+                  <NumberCell
+                    value={globals.precioUsdt}
+                    onChange={setG("precioUsdt")}
+                    suffix="ARS/USD"
+                  />
                 </Field>
               )}
               <Field label="Comisión red">
@@ -2649,8 +2669,8 @@ export default function App() {
       {/* Barra de acciones */}
       <section className="mx-auto max-w-[1400px] px-6 pt-6 pb-2 flex items-center justify-between">
         <h2 className="text-[13px] font-semibold text-[#373737]">
-          Perfumes <span className="text-[#A39E93] font-normal">({productos.length})</span>
-          <span className="text-[#A39E93] font-normal">
+          Perfumes <span className="text-[var(--humo-claro)] font-normal">({productos.length})</span>
+          <span className="text-[var(--humo-claro)] font-normal">
             {" · "}
             {productos.reduce((s, p) => s + (Number(p.cantidad) || 0), 0)} unidades
           </span>
@@ -2705,7 +2725,10 @@ export default function App() {
                 <GroupHead label="Producto" span={4} accent="var(--tinta)" />
                 <GroupHead label="Costo" span={6} accent="#4A4F45" />
                 <GroupHead label="Venta directa" span={2} accent="#5A5F55" />
-                <GroupHead label="Resultado" span={2} accent={AMBER} />
+                {/* La banda del grupo que contiene la ganancia: verde, como la
+                    ganancia. Antes era ámbar y el rótulo blanco encima daba
+                    3,24:1. */}
+                <GroupHead label="Resultado" span={2} accent="var(--verde)" />
                 <th className="sticky top-0 z-20" style={{ background: "var(--tinta)" }} />
               </tr>
               <tr>
@@ -2825,7 +2848,7 @@ export default function App() {
               ))}
               {R.filas.length === 0 && (
                 <tr>
-                  <td colSpan={COLUMNAS_PEDIDO} className="px-6 py-12 text-center text-[#A39E93] text-[13px]">
+                  <td colSpan={COLUMNAS_PEDIDO} className="px-6 py-12 text-center text-[var(--humo-claro)] text-[13px]">
                     No hay perfumes cargados. Tocá <b>Agregar perfume</b> para empezar.
                   </td>
                 </tr>
@@ -2846,7 +2869,7 @@ export default function App() {
             </tfoot>
           </table>
         </div>
-        <p className="mt-3 text-[11.5px] text-[#A39E93]">
+        <p className="mt-3 text-[11.5px] text-[var(--humo-claro)]">
           <IndicadorGuardado modo={modoGuardado} ruta={rutaArchivo} guardando={guardando} />{" "}
           El "Precio Final" es el de venta directa del catálogo (o el que escribas en la fila);
           el <b>Margen</b> dice cuánto te deja este pedido, con lo que le pagaste a este proveedor, a ese precio.
@@ -2875,7 +2898,7 @@ function BarraDelPedido({ d }) {
     { id: "otras", etiqueta: "Otras comisiones", valor: d.otras, color: "#A9AEA3" },
     ...(perdida
       ? []
-      : [{ id: "neta", etiqueta: "Te queda", valor: d.neta, color: "var(--ambar)" }]),
+      : [{ id: "neta", etiqueta: "Te queda", valor: d.neta, color: "var(--verde-vivo)" }]),
   ].filter((t) => t.valor > 0.5);
 
   const leyenda = perdida
@@ -2959,7 +2982,7 @@ function BarraDelPedido({ d }) {
                 className="k-col"
                 style={{
                   color:
-                    t.id === "neta" ? "var(--ambar-vivo)" : t.id === "falta" ? "#E8917F" : "#8E938A",
+                    t.id === "neta" ? "var(--verde-vivo)" : t.id === "falta" ? "#E8917F" : "#8E938A",
                 }}
               >
                 {t.etiqueta}
@@ -2973,7 +2996,7 @@ function BarraDelPedido({ d }) {
                 lineHeight: 1.1,
                 color:
                   t.id === "neta"
-                    ? "var(--ambar-vivo)"
+                    ? "var(--verde-vivo)"
                     : t.id === "falta"
                     ? "#E8917F"
                     : "#D3D7CE",
@@ -2981,7 +3004,8 @@ function BarraDelPedido({ d }) {
             >
               {ars(t.valor)}
             </div>
-            <div className="k-num mt-0.5 text-[10.5px]" style={{ color: "#787D74" }}>
+            {/* Gris de la banda oscura: #787D74 daba 3,86:1 sobre la tinta. */}
+            <div className="k-num mt-0.5 text-[10.5px]" style={{ color: "#8E938A" }}>
               {pct(t.valor / base)}
             </div>
           </div>

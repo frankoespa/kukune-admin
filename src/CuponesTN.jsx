@@ -152,7 +152,7 @@ function AvisoDePerdida({ impacto, abierto, onAbrir }) {
           <span style={{ color: "var(--humo)" }}>
             {" "}
             · el que menos deja: {peor.perfume.nombre},{" "}
-            <span className="k-num" style={{ color: peor.ganancia < 0 ? "var(--oxido)" : "var(--ambar)" }}>
+            <span className="k-num" style={{ color: peor.ganancia < 0 ? "var(--oxido)" : "var(--verde)" }}>
               {pesos(peor.ganancia)}
             </span>
           </span>
@@ -195,7 +195,7 @@ function AvisoDePerdida({ impacto, abierto, onAbrir }) {
                   <span
                     key={i}
                     className={`k-num text-right ${i === f.define ? "font-semibold underline decoration-dotted underline-offset-2" : ""}`}
-                    style={{ color: fo.ganancia < 0 ? "var(--oxido)" : "var(--ambar)" }}
+                    style={{ color: fo.ganancia < 0 ? "var(--oxido)" : "var(--verde)" }}
                     title={`${fo.nombre}: con el cupón ${pesos(fo.ganancia)}${fo.sinCupon !== null ? ` · sin cupón ${pesos(fo.sinCupon)}` : ""}${
                       i === f.define ? " · la que menos deja" : ""
                     }`}

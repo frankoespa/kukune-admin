@@ -38,7 +38,7 @@ const RELEER_DE_NUEVO = 10000;
 // foto · perfume · plan · lista · paga · pone ML · te queda · margen · hoy · dif · acción
 const COLUMNAS = "52px minmax(170px,1fr) 84px 96px 112px 92px 104px 68px 104px 104px 120px";
 
-const colorGanancia = (g) => (g == null ? "var(--humo-claro)" : g > 0 ? "var(--ambar)" : "var(--oxido)");
+const colorGanancia = (g) => (g == null ? "var(--humo-claro)" : g > 0 ? "var(--verde)" : "var(--oxido)");
 // Una diferencia es una comparación, no plata que queda: verde u óxido, nunca ámbar.
 const colorDiferencia = (d) => (d == null ? "var(--humo-claro)" : d >= 0 ? "var(--verde)" : "var(--oxido)");
 

@@ -462,11 +462,33 @@ export default function pluginML() {
         scrollId = r.scroll_id;
         if (!scrollId) break;
       }
+      /* La consulta múltiple va por `/items/bulk`, no por `/items?ids=`.
+         ML deprecó el multiget viejo con fecha 25/10/2026 y pasada esa fecha
+         devuelve **403 "Resource deprecated - client no longer allowed to
+         consume this resource"**, que es lo que dejó la pestaña de ML sin
+         publicaciones. El `search` del vendedor (arriba, con `scan`) no se
+         tocó: la doc lo marca como "se mantiene".
+         Dos diferencias con el viejo:
+         - los atributos van con el prefijo `body.`;
+         - **el elemento ya no trae el código de estado**. La doc dice que
+           `code` pasó a llamarse `status_code` y que vendría un `id` en la
+           raíz; medido contra la cuenta real el 20/11/2026, no viene ninguno
+           de los dos: cada elemento es `{body}` y nada más. Por eso lo que
+           decide si un ítem entra es **que tenga `body.id`**, y el código de
+           estado se mira solo si algún día aparece. Si se filtrara por
+           `status_code === 200` se caerían los 18 ítems en silencio, con un
+           200 en la respuesta, que es justo lo que pasó al migrar. */
+      const atributos = ATRIBUTOS.split(",")
+        .map((a) => `body.${a}`)
+        .join(",");
       const items = [];
       for (let i = 0; i < ids.length; i += 20) {
         const lote = ids.slice(i, i + 20).join(",");
-        const r = await ml(`/items?ids=${lote}&attributes=${ATRIBUTOS}`);
-        for (const x of r) if (x.code === 200) items.push(resumir(x.body));
+        const r = await ml(`/items/bulk?ids=${lote}&attributes=${atributos}`);
+        for (const x of r ?? []) {
+          const estado = x.status_code ?? x.code;
+          if (x.body?.id && (estado === undefined || estado === 200)) items.push(resumir(x.body));
+        }
       }
       return items;
     };

@@ -5,9 +5,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # KUKUNE · Análisis de Pedido
 
 ## Qué es
-App React (Vite + Tailwind) de una sola pantalla que replica la hoja
-"AnalisisPedido" de un Excel. Calcula costos y márgenes de perfumes para
-un negocio que vende en Mercado Libre y Tiendanube (Argentina, en ARS).
+App React (Vite + Tailwind) que calcula costos y márgenes de perfumes para un
+negocio que vende en mano, en Mercado Libre y en Tiendanube (Argentina, en ARS).
+Nació como réplica de la hoja "AnalisisPedido" de un Excel —eso es hoy la **Mesa
+de precios**— y hoy son **cinco pantallas**: Mesa de precios, Catálogo, Decants,
+Mercado Libre y Tiendanube.
+
+## Quién la usa
+- **Hoy, Franco y nadie más.** Conoce la app entera porque la fue pidiendo
+  función por función: la densidad no le estorba y la pantalla no tiene que
+  enseñarle nada que ya sepa.
+- **Algún día la va a usar un ayudante.** Confirmado por Franco, sin fecha y sin
+  apuro. No obliga a rehacer nada, pero es el porqué de fondo de una regla que
+  ya está más abajo: **lo que explica un campo va escrito en pantalla, no en un
+  `title`**. Lo que para Franco es memoria muscular, para el que llega es una
+  celda rota — ya pasó dos veces con él mismo ("Sin publicar" leído como el
+  total, el campo Stock del panel de publicar en ML).
+- **Quiere consultar precios y stock desde el celular**: consultar, no cargar.
+  Hoy no está cubierto, y no es un bug: la mesa tiene 15 columnas con scroll
+  horizontal y el catálogo más de 20, pensadas para escritorio. **Cargar datos
+  desde el celular NO es un objetivo**, así que la salida no es encoger la
+  tabla; si alguna vez se hace, es otra vista.
 
 ## Comandos
 - Instalar: `npm install`
@@ -532,14 +550,14 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
     fue "lo veo complicado de elegir". Debajo de los campos, recalculándose con
     cada tecla: el reparto, el rango de margen, cuántos suben y bajan, y
     —lo que más pesa para decidir— **cuánto ganás en total contra hoy**
-    (verde/óxido, nunca ámbar: es una comparación, no plata que te queda).
+    (verde si entra plata, óxido si sale).
     Encabezado y filas comparten **una sola constante** (`COLUMNAS_VISTA`), y el
     bloque va con `w-max`: con el nombre en `flex-1` los números se iban al
     borde derecho y costaba seguir el renglón.
     Cada fila lleva **flecha y diferencia en color** (↑ verde sube, ↓ óxido
     baja, "igual" en gris), con el mismo criterio que el total: plata que entra
     o sale. Sin precio hoy no hay con qué comparar y la fila va sin color.
-    La **ganancia** que le toca a cada uno va en ámbar y pegada al margen —son
+    La **ganancia** que le toca a cada uno va en verde y pegada al margen —son
     la misma cuenta mirada de dos maneras—, y es la columna donde mejor se ve
     dónde deja de mandar el piso: una tira de números repetidos y, a partir de
     ahí, creciendo.
@@ -643,13 +661,24 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   en el `title` de la ganancia: en columnas no entran.
 - La fila muestra **ganancia en pesos** al lado del **margen**, en los dos
   canales: son la misma cuenta mirada de dos maneras, cuántos pesos y qué
-  proporción del costo. La ganancia va en **ámbar** —es plata que queda, el único
-  uso legítimo de ese color— y en óxido si el precio no cubre el costo.
-- **Las zonas de color son territorio, no acento**: `--zona-directa` (verde muy
-  suave) y `--zona-ml` (azul grisáceo) pintan las columnas de cada canal y
-  también la caja de ajustes que las configura, para que se vea qué configura
-  qué. La versión `-honda` es para las bandas del encabezado. El ámbar no se usa
-  para esto: por eso el precio "publicar en ML" dejó de ser ámbar.
+  proporción del costo. La ganancia va en **verde** —plata que queda— y en
+  **óxido** si el precio no cubre el costo.
+- **Las zonas de color son territorio, no acento**: `--zona-directa` (verde),
+  `--zona-ml` (azul), `--zona-tn` (lila), `--zona-decant` (verde agua) y
+  `--zona-stock` (piedra) pintan las columnas de cada bloque y también la caja
+  de ajustes que lo configura, para que se vea qué configura qué. La versión
+  `-honda` es para las bandas del encabezado. El ámbar no se usa para esto: por
+  eso el precio "publicar en ML" dejó de ser ámbar.
+- **Tenues sí, indistinguibles no.** La primera versión tenía `--zona-directa`
+  en `#eaefe6` contra un fondo de página `#e6e9e3` —4 unidades de 255— y Stock
+  sin color propio, así que la franja de Venta directa y la de Stock eran el
+  mismo color y no se veía dónde terminaba una. Ahora cada zona está a 10
+  unidades o más del vidrio y de las demás. Al agregar una zona nueva,
+  comprobarlo contra TODAS, no solo contra el fondo.
+- **Stock no es un canal**, es dónde están los frascos: por eso va en piedra
+  (neutro cálido) y no en otro verde. No se confunde con el ámbar —ámbar es
+  tinta saturada sobre una cifra, esto es un fondo al 94% de luz—, pero por las
+  dudas no se le sube la saturación.
 - El catálogo tiene, además, el grupo **Stock** (sin publicar · En ML · En TN ·
   total) entre Venta directa y Usos. Va ahí y no al lado del Costo porque Costo
   sale de `Precios` junto con las cuatro columnas de venta directa.
@@ -658,12 +687,29 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   en el catálogo: ahí ya no entraban. Lo de arriba sobre `preciosML`, `margenesML`
   y cuotas sigue valiendo igual; los datos no se movieron de `perfumes.json`.
 - **La tabla tiene encabezado de dos niveles** (canal arriba —en ML, una banda
-  por plan— y columnas abajo), `sticky top-0` contra la ventana: esta pantalla
-  scrollea con la página, no tiene contenedor propio como la del pedido.
+  por plan— y columnas abajo), `sticky top-0`.
   Encabezado y filas reciben **las mismas `columnas`** (`COLUMNAS_CATALOGO` en el
   catálogo, `columnasDeML(planes)` en ML), y los dos llevan `border`
   (transparente en el encabezado) para que el borde de la fila no corra las
   columnas un píxel.
+- **Las cuatro tablas tienen su propio scrollport, igual que la mesa del
+  pedido**: `overflow: auto` con `maxHeight: ALTO_TABLA` (`src/tabla.js`). **El
+  alto máximo no es cosmético: es lo único que hace que el encabezado se
+  pegue.** `overflow-x: auto` ya convierte al contenedor en el scrollport del
+  `sticky` (el navegador fuerza `overflow-y: auto`), pero sin alto máximo ese
+  contenedor nunca scrollea por dentro —`scrollHeight === clientHeight`— así
+  que el encabezado se pegaba a una caja que se iba con la página. Medido en el
+  catálogo antes de arreglarlo: con 1500px de scroll el encabezado estaba en
+  `top: -837` y las 14 columnas quedaban sin nombre durante el 85% del
+  recorrido. Es la misma nota que ya estaba escrita para la mesa del pedido,
+  que acá faltaba.
+- **El ancho mínimo sale de la grilla, no se escribe a mano**
+  (`anchoDeColumnas()` en `src/tabla.js`). Estaba a mano en las cuatro y en dos
+  se había quedado corto: el catálogo pedía 1216px y decía 1120, decants pedía
+  1617 y decía 1208. Con la fila en `overflow-hidden`, eso no es "queda
+  apretado": **las últimas columnas no se alcanzan nunca**, porque el
+  contenedor solo scrollea hasta donde le da el ancho declarado. En el catálogo
+  se comía Usos y el tacho de borrar.
 - Esas columnas van como **`gridTemplateColumns` en línea, no como clase de
   Tailwind**: en ML la cantidad depende de cuántos planes se publiquen, y Tailwind
   genera sus clases leyendo el código, así que un `grid-cols-[...]` armado en
@@ -780,8 +826,41 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   en cero el scroll de todo lo que lleve `data-scroll` cada vez que se abre: el
   navegador conserva el scroll y la lista aparecía empezada por el medio.
 
-- El orden "Por margen" **no se congela** como el alfabético, porque mira los
-  precios: es para revisar, no para escribir. Los sin precio van al final.
+- **Las tablas se ordenan tocando el encabezado de cualquier columna**, y es el
+  mismo gesto en las cuatro (catálogo, Mercado Libre, Tiendanube y decants):
+  un clic ordena de menor a mayor, otro invierte. El botón vive en
+  **`src/ColumnaOrdenable.jsx`**, compartido; las puras, en **`src/orden.js`**
+  (sin imports, probadas desde Node). **Ninguno de los dos se puede llamar
+  `Orden.jsx` ni `columnaOrdenable.js`**, por lo de Windows.
+  - Es un `<button>` de verdad (se llega con Tab, se activa con Enter) con una
+    flecha que ocupa su lugar siempre: apagada, al 40% al pasar el mouse,
+    entera en la columna que manda. Así el encabezado no se mueve al tocarlo y
+    se ve que las columnas se pueden tocar.
+  - **Las columnas que se repiten llevan el contexto en el nombre accesible**
+    (`contexto`): en ML hay un "Precio" por plan de cuotas y en pantalla se
+    distinguen por la banda de arriba, que un lector de pantalla no lee. Queda
+    "Precio de 6 cuotas: ordenar de menor a mayor".
+  - **No ordenan** las celdas de vínculo con el canal ("En ML", "En Tiendanube")
+    ni la casilla de ofrecer un decant: no son cifras del negocio. En el
+    catálogo "En ML" y "En TN" **sí** ordenan, porque ahí son unidades de stock.
+  - En ML y Tiendanube los valores salen de **la misma función que usa la fila**
+    (`analisisDePrecio`, `analisisTiendaNube`): una sola puerta, imposible de
+    desfasar. En ML la clave lleva el plan (`precio:6`).
+  - **Ojo con la firma de `col()`**: pasó a ser `(texto, fondo, clave,
+    alineado)`. En decants el fragmento por tipo pasaba la alineación en tercer
+    lugar y quedaron tres botones vacíos "ordenables" hasta que se corrigió.
+  - **Lo que no se sabe va SIEMPRE al final, en los dos sentidos.** Un perfume
+    sin costo no es el más barato, y un canal que todavía no se leyó (`null`) o
+    que no lleva la cuenta (`"inf"`) no tiene cero unidades. Es la misma regla
+    que hace que la celda muestre `—` y `?` en vez de 0. Un total a medias
+    (`parcial`) tampoco es un total: va con los que no se saben.
+  - El orden **por nombre sigue congelado** (ver arriba): es el único que se
+    recalcula solo cuando cambia el conjunto visible, para que escribir un
+    nombre no mueva la fila. Los demás miran números y se recalculan en vivo:
+    son para revisar, no para escribir.
+  - Reemplazó al botón **"Por margen"**, que hacía esto para una sola columna.
+    Tocar el encabezado de Margen da exactamente lo mismo; dos formas de hacer
+    lo mismo era una de más.
 - "PDF de precios" (`construirPDFPrecios`) es para clientes: nombre, foto y
   **precio de venta directa**, nunca el de ML ni el margen. Acá sí va la marca
   KUKUNE, al contrario del PDF del proveedor.
@@ -970,7 +1049,7 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - Clic en el precio (o el icono de lista, con precio a mano) abre
   `DetalleTiendaNube` (`src/TiendaNube.jsx`, portal al body): precio + "Copiar
   número" y la tabla por forma de pago. El precio grande va en **tinta**, no en
-  ámbar como en el HTML original: el ámbar es solo la ganancia.
+  ámbar como en el HTML original: el ámbar no lleva cifras (ver Convenciones).
 - Las formas por defecto (`FORMAS_TN_POR_DEFECTO`, ids fijos) viven en
   `almacenamiento.js`, solo como arranque de un archivo sin la clave. Al leer,
   las guardadas **reemplazan enteras** a las de ejemplo (una lista no se
@@ -1044,7 +1123,7 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   (llega como `onConfirmar` por la pestaña). Ya no existe "Volver a los
   ejemplos": pisaba de un clic las formas que Franco había cargado.
 - Zona de color `--zona-tn` / `--zona-tn-honda`. No va al PDF de precios ni al
-  orden "Por margen" (que siguen mirando la venta directa).
+  orden por Margen del catálogo (que siguen mirando la venta directa).
 
 ## Envío gratis a partir de un monto (Tiendanube)
 - `ajustes.tiendaNube.envioGratisDesde` es la **compra mínima** para que el
@@ -1129,7 +1208,7 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   carrito 2× Kiss $202.800 que deja $20.886); para no dejar menos de $10.000,
   **$104.600**; de $15.000, **$138.400**. Los 37 están con `igualarDirecto`, así
   que **el monto no mueve ningún precio**: solo cambia cuánto queda.
-- **La ganancia si el cliente retira en Rosario** va de renglón chico, en ámbar,
+- **La ganancia si el cliente retira en Rosario** va de renglón chico, en verde,
   debajo de la ganancia de cada forma de pago en `DetalleTiendaNube`, y el pie
   del popup lo explica con palabras. Es `f.ganancia + envioAplicado`: **no hay
   cuenta nueva**, es el mismo número mirado sin el envío, y por eso es un
@@ -1396,6 +1475,23 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   Windows choca con `MercadoLibre.jsx` y `import "./MercadoLibre"` agarra el que no es.
 - **El refresh token de ML rota en cada uso.** Se guarda siempre el nuevo y las
   renovaciones van de a una (`renovando`); dos a la vez queman el token.
+- **La consulta múltiple de ítems va por `/items/bulk?ids=`, no por
+  `/items?ids=`.** ML deprecó el multiget viejo con fecha 25/10/2026 y después
+  de esa fecha devuelve **403 "Resource deprecated - client no longer allowed
+  to consume this resource"**. Apareció solo, sin que se tocara nada: el
+  20/11/2026 la pestaña de ML estaba conectada pero sin ninguna publicación.
+  El `search` del vendedor (`/users/<id>/items/search`, con `scan` incluido) la
+  doc lo marca como "se mantiene" y no hubo que tocarlo.
+  - Los atributos van con el prefijo **`body.`** (`attributes=body.id,body.price`).
+  - **El elemento no trae código de estado.** La doc dice que `code` pasó a
+    llamarse `status_code` y que vendría un `id` en la raíz; **medido contra la
+    cuenta real, no viene ninguno de los dos**: cada elemento es `{body}` y
+    nada más. Por eso lo que decide si un ítem entra es que tenga `body.id`, y
+    el estado se mira solo si aparece. Filtrar por `status_code === 200` se
+    lleva puestos todos los ítems **en silencio**, con 200 en la respuesta y la
+    lista vacía: pasó al migrar y costó un rato entender por qué.
+  - Si algún día algo más devuelve ese 403, el sospechoso es otro recurso
+    deprecado, no el token: `/api/ml/estado` sigue diciendo "conectado".
 - Hubo un script suelto de preguntas (`mercado_libre/preguntas-ml.ps1`), nunca
   usado; se borró. Las preguntas, cuando se hagan, van en esta pestaña.
 - Conectar: ML no acepta `localhost` como redirect, así que vuelve a
@@ -1444,7 +1540,7 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   la app y la de catálogo no, la de catálogo dice "sincronizando" en gris, no en
   óxido: no es un error. Antes había que recargar la página para verla al día.
 - La celda "En ML" muestra el precio publicado: verde si coincide con el del
-  catálogo, óxido si no (compara, no es ganancia: nada de ámbar).
+  catálogo, óxido si no (compara, no es ganancia).
 - **"Actualizar precios en ML"** relee las publicaciones, arma
   `cambiosParaML(perfumesResueltos, publicaciones, planes)` (pura, en
   `clienteML.js`) y muestra **todos** los cambios con tilde por renglón. Nada se
@@ -1565,7 +1661,7 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   después no la deja volver: por eso el diálogo de sacar lo avisa.
 - En **Precios** la promo no ocupa columna: va de renglón chico bajo la celda
   "En ML" (`promo −10% · $108.000`, en humo, que no es un error) y bajo la
-  Ganancia del plan (`en promo $X`, en ámbar, óxido si no cubre el costo). El
+  Ganancia del plan (`en promo $X`, en verde, óxido si no cubre el costo). El
   número grande sigue siendo **el del precio de lista**: es el que compara planes
   y el que usan el `=` y el margen clavado. Botón-filtro **"N en promo"**, con la
   regla de los demás. Arriba de la tabla, **escrito y no en un `title`**, que en
@@ -1863,9 +1959,40 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   `--tinta`, `--ambar`, `--verde`, `--oxido`…). Usarlas, no hardcodear hex nuevos.
   El fondo es sage frío (`#E6E9E3`, vidrio de frasco) y la tinta va corrida al
   marrón (`#22201C`), a propósito: el crema `#FAFAF7` anterior era el default.
-- **El ámbar `#B8862F` está reservado para una sola cosa: la ganancia.** Si
-  aparece ámbar en pantalla, es plata que le queda al usuario. No usarlo de
-  acento decorativo.
+- **El semáforo de la plata es el de todo el mundo: verde lo que ganás, óxido
+  lo que perdés** (pedido de Franco, 20/11/2026). `--verde` para la ganancia,
+  `--verde-vivo` para la ganancia sobre la banda oscura, `--oxido` para la
+  pérdida. Antes la ganancia iba en ámbar y era la regla más firme del
+  proyecto; se dio vuelta a propósito.
+  - **Por qué se cambió, además de la convención**: el ámbar daba **2,53:1**
+    sobre la zona lila de Tiendanube, o sea que la cifra más importante de la
+    app era la peor legible. El verde y el óxido pasan AA en todos los fondos
+    (5,01 a 6,44), así que el cambio arregló el contraste de paso.
+  - **Lo que se perdió, y hay que saberlo**: el verde ya significaba "este
+    número da bien" en las celdas calculadas y en las comparaciones (la vista
+    previa de la banda, por ejemplo). Ahora significa las dos cosas. Si alguna
+    vez hace falta distinguir "plata que te queda" de "comparación que da a
+    favor", el color ya no alcanza.
+  - **El ámbar `#B8862F` pasó a ser la marca, no el semáforo**: nav activa,
+    botón-filtro activo, los botones de PDF, el borde de un objetivo clavado y
+    el anillo de foco. **Ninguna cifra va en ámbar. Si un número está en
+    ámbar, está mal.**
+- **Los grises están calibrados para pasar AA (4,5:1) sobre todos los fondos en
+  los que se usan**, incluido el peor, la zona lila de Tiendanube. Medido en
+  las cinco pantallas con la fórmula de WCAG: **0 fallas en todo lo que no sea
+  ámbar** (1.778 nodos). Antes fallaban los 14 encabezados de columna
+  (4,01) y, peor, `—`, `?`, "sin usar" y los sufijos de unidad (2,19), que son
+  justo los marcadores que el producto declara críticos. Al agregar un color de
+  texto o un fondo de zona, medirlo contra el peor fondo, no contra el blanco.
+  - Los dos grises quedaron a 10 unidades uno del otro y **no da para un tercer
+    nivel**: el techo para 4,5:1 sobre la zona lila está en ~#5F635A. La
+    jerarquía entre ellos la hace el tamaño y el peso; la que se ve es contra
+    `--tinta`.
+  - El placeholder de Tailwind (`gray-400`, #9CA3AF, 2,54:1) está pisado en
+    `index.css`: no es un gris de la paleta y es texto que explica el campo.
+  - Con la ganancia en verde, **las cinco pantallas quedaron en 0 fallas**
+    (1.774 nodos medidos). El ámbar que queda es de marca y ninguno lleva
+    texto chico encima.
 - Dos familias, con roles fijos: **Montserrat** para marca y rótulos, **IBM Plex
   Mono** (clase `.k-num`) para *toda* cifra. Los helpers de clase están en
   `index.css`: `.k-num`, `.k-rotulo` (rótulo de sección), `.k-col` (encabezado
@@ -1886,12 +2013,24 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
   `otrasComis: 0`) y se multiplican/dividen por 100 solo en el `NumberCell`.
 - **`globals.monedaPedido`** (`"USD" | "ARS"`) dice en qué moneda cobra el
   proveedor de ese pedido. **No entra en ninguna fórmula**: con `"ARS"` el
-  `precioUsdt` queda en 1 y el motor es el mismo de siempre. Lo único que cambia
+  motor recibe el dólar en 1 y es el mismo de siempre. Lo único que cambia
   son los rótulos (`monedaCosto`), el formateador de las columnas de costo
   (`montoCosto`) y que el campo Dólar y el indicador "Inversión USD" se ocultan.
   Los pedidos guardados antes de que existiera el campo se migran una sola vez
   en `normalizarEstado()`: si no hay `monedaPedido` y el dólar está en 1, era un
   pedido en pesos.
+- **Ese 1 lo pone una vista, no el estado** (`globalsMotor`, molde de
+  `productosVista`). **Cambiar de moneda no toca el `precioUsdt` que escribió
+  el usuario.** Antes `cambiarMoneda` lo pisaba con 1 al pasar a pesos, y al
+  volver a dólares, como lo encontraba en 1, ponía el default: el que había
+  cargado 1700 volvía y se encontraba 1570, **sin forma de recuperarlo**. Lo
+  reportó Franco el 20/11/2026. La única excepción que quedó es un pedido
+  guardado con el comportamiento viejo —dólar en 1 de verdad—, que al pasarlo
+  a dólares arranca en el default porque 1 no sirve de cotización.
+- El sufijo del campo Dólar es **`ARS/USD`**, no `ARS`: la cifra es una
+  cotización y con "ARS" a secas se lee como si el campo fuera un importe en
+  pesos (también lo reportó Franco). Vale para cualquier campo que guarde una
+  tasa y no un monto.
 - **Precio sugerido por margen** (`src/precios.js`): `margenObjetivo` en el
   producto (fracción, o `null` = precio a mano). Si tiene valor, el Precio Final
   se despeja de ahí. `resolverPrecios()` corre **antes** de `calcular()` y le

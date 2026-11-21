@@ -10,6 +10,9 @@ import { NumberCell } from "./NumberCell";
 import { CampoProtegido } from "./CampoProtegido";
 import { pctSinMiles as pctCorto } from "./numeros";
 import { estaSinStock, stockPorPerfume, totalEnMano } from "./stock";
+import { ordenar, siguienteOrden } from "./orden";
+import { ColumnaOrdenable } from "./ColumnaOrdenable";
+import { ALTO_TABLA, anchoDeColumnas } from "./tabla";
 import { pasesDeMedida } from "./cuentasDecant";
 import { actualizarPublicacionML, estadoML, leerPublicacionesML } from "./clienteML";
 import { actualizarVarianteTN, estadoTN, leerProductosTN, vinculoTN } from "./clienteTN";
@@ -356,7 +359,11 @@ export default function Catalogo({
   const [soloFueraDeBanda, setSoloFueraDeBanda] = useState(false);
   const [soloSinStock, setSoloSinStock] = useState(false);
   const [soloSinMl, setSoloSinMl] = useState(false);
-  const [porMargen, setPorMargen] = useState(false);
+  /* Por qué columna se ordena la tabla. Reemplaza al botón "Por margen", que
+     hacía esto para una sola columna: tocar el encabezado de Margen da
+     exactamente lo mismo, y ahora vale para todas. */
+  const [orden, setOrden] = useState({ col: "nombre", dir: "asc" });
+  const ordenarPor = useCallback((col) => setOrden((o) => siguienteOrden(o, col)), []);
   const [nuevo, setNuevo] = useState("");
   const columnas = COLUMNAS_CATALOGO;
 
@@ -436,8 +443,9 @@ export default function Catalogo({
      visibles (alta, baja o búsqueda), nunca cuando cambia un nombre. Si se
      reordenara por nombre, cada letra que escribís mueve la fila de lugar y se
      te va de abajo del cursor. Se reacomoda al agregar o borrar algo, al buscar,
-     o al volver a entrar a esta pantalla. */
-  const orden = useRef({ clave: null, ids: [] });
+     o al volver a entrar a esta pantalla. Las demás columnas miran números y no
+     se congelan: son para revisar, no para escribir. */
+  const alfabetico = useRef({ clave: null, dir: null, ids: [] });
 
   const visibles = useMemo(() => {
     const conFiltro = soloFueraDeBanda ? perfumes.filter((p) => fueraDeBanda.has(p.id)) : perfumes;
@@ -445,33 +453,61 @@ export default function Catalogo({
     const conMl = soloSinMl ? conStock.filter((p) => !(Number(p.ml) > 0)) : conStock;
     const base = soloSinFoto ? conMl.filter((p) => !p.foto) : conMl;
     const filtrados = buscarPerfumes(base, consulta);
-    const porId = new Map(filtrados.map((p) => [p.id, p]));
 
-    // Ordenar por margen sí mira los precios, así que ese orden no se congela:
-    // es para revisar, no para escribir.
-    if (porMargen) {
-      const m = (p) =>
-        (p.costo || 0) > 0 && (p.precioPublico || 0) > 0
-          ? (p.precioPublico - p.costo) / p.costo
-          : Infinity; // los que no tienen precio, al final
-      return filtrados.slice().sort((a, b) => m(a) - m(b));
+    if (orden.col !== "nombre") {
+      /* `null` es "no se sabe" y `ordenar()` lo manda al final en los dos
+         sentidos: un perfume sin costo no es el más barato, y un canal sin
+         leer no tiene cero unidades. */
+      const num = (v) => (Number(v) > 0 ? Number(v) : null);
+      const canal = (p, k) => enCanales.get(p.id)?.[k] ?? null;
+      const valorDe = {
+        ml: (p) => num(p.ml),
+        costo: (p) => num(p.costo),
+        precio: (p) => num(p.precioPublico),
+        margen: (p) =>
+          num(p.costo) && num(p.precioPublico) ? (p.precioPublico - p.costo) / p.costo : null,
+        conEnvio: (p) => (num(p.precioPublico) ? p.precioPublico + (ajustes.envioLocal || 0) : null),
+        ganancia: (p) => (num(p.costo) && num(p.precioPublico) ? p.precioPublico - p.costo : null),
+        base: (p) => (p.stock === undefined || p.stock === null ? null : Number(p.stock)),
+        enMl: (p) => canal(p, "ml"),
+        enTn: (p) => canal(p, "tn"),
+        total: (p) => {
+          const t = totalEnMano(p.stock, canal(p, "ml"), canal(p, "tn"));
+          // Un total a medias no es un total: va con los que no se saben.
+          return t.infinito || t.parcial ? null : t.total;
+        },
+        usos: (p) => usos?.[p.id]?.total ?? null,
+      }[orden.col];
+      if (valorDe) return ordenar(filtrados, valorDe, orden.dir);
     }
 
+    const porId = new Map(filtrados.map((p) => [p.id, p]));
     const clave = filtrados
       .map((p) => p.id)
       .sort()
       .join(",");
-    if (orden.current.clave !== clave) {
-      orden.current = {
+    if (alfabetico.current.clave !== clave || alfabetico.current.dir !== orden.dir) {
+      alfabetico.current = {
         clave,
-        ids: filtrados
-          .slice()
-          .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"))
-          .map((p) => p.id),
+        dir: orden.dir,
+        ids: ordenar(filtrados, (p) => p.nombre, orden.dir).map((p) => p.id),
       };
     }
-    return orden.current.ids.map((id) => porId.get(id)).filter(Boolean);
-  }, [perfumes, consulta, soloSinFoto, porMargen, soloFueraDeBanda, fueraDeBanda, soloSinStock, sinStock, soloSinMl]);
+    return alfabetico.current.ids.map((id) => porId.get(id)).filter(Boolean);
+  }, [
+    perfumes,
+    consulta,
+    soloSinFoto,
+    orden,
+    soloFueraDeBanda,
+    fueraDeBanda,
+    soloSinStock,
+    sinStock,
+    soloSinMl,
+    enCanales,
+    usos,
+    ajustes.envioLocal,
+  ]);
 
   /* Confirmación con la lista entera: es el nombre que ven los pedidos, los
      PDF y los buscadores, y conviene leerlo antes de aceptar. */
@@ -659,20 +695,6 @@ export default function Catalogo({
         )}
 
         <button
-          onClick={() => setPorMargen((v) => !v)}
-          aria-pressed={porMargen}
-          title="Ordena de menor a mayor margen: arriba queda lo que estas vendiendo mas barato"
-          className="k-col rounded-[3px] border px-3 py-[7px] transition"
-          style={{
-            borderColor: porMargen ? "var(--ambar)" : "var(--linea)",
-            color: porMargen ? "var(--ambar)" : "var(--humo)",
-            background: porMargen ? "#FFFDF7" : "transparent",
-          }}
-        >
-          Por margen
-        </button>
-
-        <button
           onClick={onExportarPrecios}
           disabled={conPrecio === 0 || exportando}
           title={
@@ -776,9 +798,9 @@ export default function Catalogo({
           )}
         </div>
       ) : (
-        <div className="overflow-x-auto pb-2">
-          <div style={{ minWidth: 1120 }}>
-            <EncabezadoCatalogo columnas={columnas} />
+        <div className="overflow-auto pb-2" style={{ maxHeight: ALTO_TABLA }}>
+          <div style={{ minWidth: anchoDeColumnas(columnas) }}>
+            <EncabezadoCatalogo columnas={columnas} orden={orden} onOrdenar={ordenarPor} />
             <ul className="grid gap-1.5">
               {visibles.map((p) => (
                 <FilaPerfume
@@ -812,7 +834,7 @@ export default function Catalogo({
    para que el borde de la fila no le corra las columnas un píxel.
    Va `sticky` contra la ventana: esta pantalla scrollea con la página, no tiene
    contenedor propio como la tabla del pedido. */
-function EncabezadoCatalogo({ columnas }) {
+function EncabezadoCatalogo({ columnas, orden, onOrdenar }) {
   const grupo = (texto, fondo, span) => (
     <span
       className="k-col px-2 py-1.5"
@@ -821,36 +843,46 @@ function EncabezadoCatalogo({ columnas }) {
       {texto}
     </span>
   );
-  const col = (texto, fondo, alineado = "text-right") => (
-    <span className={`k-col px-2 py-1.5 ${alineado}`} style={{ background: fondo, color: "var(--humo)" }}>
-      {texto}
-    </span>
+  // El botón de cada columna vive en `ColumnaOrdenable`, compartido con las
+  // otras tres tablas para que el gesto sea el mismo en toda la app.
+  const col = (texto, fondo, clave, alineado = "text-right") => (
+    <ColumnaOrdenable
+      texto={texto}
+      clave={clave}
+      orden={orden}
+      onOrdenar={onOrdenar}
+      fondo={fondo}
+      alineado={alineado}
+    />
   );
 
   return (
     <div className="sticky top-0 z-[5] pb-1.5 pt-1" style={{ background: "var(--vidrio)" }}>
       <div className="grid items-center border border-transparent" style={{ gridTemplateColumns: columnas }}>
-        <span className="col-span-4 k-col px-2 py-1.5" style={{ color: "var(--humo)" }}>
+        <span
+          className="col-span-4 k-col px-2 py-1.5"
+          style={{ background: "var(--vidrio-hondo)", color: "var(--tinta)" }}
+        >
           Perfume
         </span>
         {grupo("Venta directa", "var(--zona-directa-honda)", 4)}
-        {grupo("Stock", "transparent", 4)}
+        {grupo("Stock", "var(--zona-stock-honda)", 4)}
         <span className="col-span-2" />
       </div>
       <div className="grid items-center border border-transparent" style={{ gridTemplateColumns: columnas }}>
         <span />
-        {col("Perfume", "transparent", "text-left")}
-        {col("ml", "transparent")}
-        {col("Costo", "transparent")}
-        {col("Precio", "var(--zona-directa)")}
-        {col("Margen", "var(--zona-directa)")}
-        {col("Con envio", "var(--zona-directa)")}
-        {col("Ganancia", "var(--zona-directa)")}
-        {col("Sin publicar", "transparent")}
-        {col("En ML", "var(--zona-ml)")}
-        {col("En TN", "var(--zona-tn)")}
-        {col("Total", "transparent")}
-        {col("Usos", "transparent")}
+        {col("Perfume", "transparent", "nombre", "text-left")}
+        {col("ml", "transparent", "ml")}
+        {col("Costo", "transparent", "costo")}
+        {col("Precio", "var(--zona-directa)", "precio")}
+        {col("Margen", "var(--zona-directa)", "margen")}
+        {col("Con envío", "var(--zona-directa)", "conEnvio")}
+        {col("Ganancia", "var(--zona-directa)", "ganancia")}
+        {col("Sin publicar", "var(--zona-stock)", "base")}
+        {col("En ML", "var(--zona-ml)", "enMl")}
+        {col("En TN", "var(--zona-tn)", "enTn")}
+        {col("Total", "var(--zona-stock)", "total")}
+        {col("Usos", "transparent", "usos")}
         <span />
       </div>
     </div>
@@ -887,7 +919,7 @@ function Precios({ perfume, ajustes, onCambiar, onSoltarMargen, onFijarObjetivo,
   );
 
   const colorGanancia = (g) =>
-    g === null ? "var(--humo-claro)" : g >= 0 ? "var(--ambar)" : "var(--oxido)";
+    g === null ? "var(--humo-claro)" : g >= 0 ? "var(--verde)" : "var(--oxido)";
   const colorMargen = (m) =>
     m === null ? "var(--humo-claro)" : m >= 0 ? "var(--verde)" : "var(--oxido)";
 
@@ -1201,6 +1233,7 @@ function CeldasDeStock({ perfume, enCanales, onCambiar, onMoverCanal }) {
     <>
       <div
         className="px-1.5"
+        style={{ background: "var(--zona-stock)" }}
         title={
           cargado
             ? "Los frascos que no están en ninguna publicación. Se edita a mano; las unidades entran solas al cerrar un pedido y salen al asignarlas a un canal."
@@ -1221,6 +1254,7 @@ function CeldasDeStock({ perfume, enCanales, onCambiar, onMoverCanal }) {
       <CeldaDeCanal {...comun("tn", tn)} fondo="var(--zona-tn)" vinculado={!!perfume.publicacionTN} />
       <div
         className="px-2 text-right"
+        style={{ background: "var(--zona-stock)" }}
         title={
           infinito
             ? "No hay total posible: un canal no lleva la cuenta del stock."

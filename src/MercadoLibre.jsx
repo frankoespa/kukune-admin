@@ -6,6 +6,9 @@ import { SelectorRedondeo } from "./TiendaNube";
 import { NumberCell } from "./NumberCell";
 import { pctSinMiles as pctCorto } from "./numeros";
 import { buscarPerfumes, ConVistaPrevia, margenReal, pesos } from "./Catalogo";
+import { ordenar, siguienteOrden } from "./orden";
+import { ColumnaOrdenable } from "./ColumnaOrdenable";
+import { ALTO_TABLA, anchoDeColumnas } from "./tabla";
 import {
   actualizarPublicacionML,
   cambiosParaML,
@@ -55,7 +58,6 @@ const columnasDeML = (planes) =>
     planes.map(() => "112px 88px 100px 104px").join(" "),
   ].join(" ");
 
-const anchoMinimo = (planes) => 52 + 200 + 200 + planes.length * 404;
 
 export default function MercadoLibre({
   perfumes,
@@ -369,26 +371,60 @@ export default function MercadoLibre({
     });
 
   /* Orden alfabético congelado por conjunto, como en el catálogo. Acá no se
-     escriben nombres, pero sí precios, y la lista no debe moverse por eso. */
-  const orden = useRef({ clave: null, ids: [] });
+     escriben nombres, pero sí precios, y la lista no debe moverse por eso.
+     Las demás columnas miran números y se recalculan en vivo; las de cada plan
+     llevan el plan en la clave (`precio:6`), porque una publicación por plan
+     es una columna por plan. */
+  const [orden, setOrden] = useState({ col: "nombre", dir: "asc" });
+  const onOrdenar = useCallback((col) => setOrden((o) => siguienteOrden(o, col)), []);
+  const alfabetico = useRef({ clave: null, dir: null, ids: [] });
   const visibles = useMemo(() => {
     const filtrados = buscarPerfumes(perfumes, consulta).filter((p) => !soloPromo || tienePromo(p));
+
+    if (orden.col !== "nombre") {
+      const [campo, plan] = orden.col.split(":");
+      // La misma cuenta que hace cada fila: una sola puerta, imposible de desfasar.
+      const analisis = (p) =>
+        analisisDePrecio({
+          costo: p.costo,
+          precioPublico: p.precioPublico,
+          perfume: p,
+          comisionML: ajustes.comisionML,
+          envioML: ajustes.envioML,
+          envioLocal: ajustes.envioLocal,
+          cuotasML: ajustes.cuotasML,
+          planes,
+          redondeoML: ajustes.redondeoML,
+          promosPorPlan: promosDePerfume.get(p.id) ?? {},
+        });
+      const delPlan = (p, campo) => {
+        const e = analisis(p).ml.find((x) => String(x.plan) === plan);
+        return e ? (e[campo] ?? null) : null;
+      };
+      const valorDe = {
+        costo: (p) => (Number(p.costo) > 0 ? Number(p.costo) : null),
+        gananciaDirecta: (p) => analisis(p).directo.ganancia,
+        precio: (p) => delPlan(p, "precio"),
+        margen: (p) => delPlan(p, "margen"),
+        ganancia: (p) => delPlan(p, "ganancia"),
+      }[campo];
+      if (valorDe) return ordenar(filtrados, valorDe, orden.dir);
+    }
+
     const porId = new Map(filtrados.map((p) => [p.id, p]));
     const clave = filtrados
       .map((p) => p.id)
       .sort()
       .join(",");
-    if (orden.current.clave !== clave) {
-      orden.current = {
+    if (alfabetico.current.clave !== clave || alfabetico.current.dir !== orden.dir) {
+      alfabetico.current = {
         clave,
-        ids: filtrados
-          .slice()
-          .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"))
-          .map((p) => p.id),
+        dir: orden.dir,
+        ids: ordenar(filtrados, (p) => p.nombre, orden.dir).map((p) => p.id),
       };
     }
-    return orden.current.ids.map((id) => porId.get(id)).filter(Boolean);
-  }, [perfumes, consulta, soloPromo, promosDePerfume]);
+    return alfabetico.current.ids.map((id) => porId.get(id)).filter(Boolean);
+  }, [perfumes, consulta, soloPromo, promosDePerfume, orden, ajustes, planes]);
 
   return (
     <section className="mx-auto max-w-[1480px] px-6 py-8">
@@ -542,9 +578,14 @@ export default function MercadoLibre({
                 : "Ningún perfume coincide con la búsqueda."}
             </p>
           ) : (
-            <div className="overflow-x-auto pb-2">
-              <div style={{ minWidth: anchoMinimo(planes) }}>
-                <EncabezadoML planes={planes} columnas={columnas} />
+            <div className="overflow-auto pb-2" style={{ maxHeight: ALTO_TABLA }}>
+              <div style={{ minWidth: anchoDeColumnas(columnas) }}>
+                <EncabezadoML
+                  planes={planes}
+                  columnas={columnas}
+                  orden={orden}
+                  onOrdenar={onOrdenar}
+                />
                 <ul className="grid gap-1.5">
                   {visibles.map((p) => (
                     <FilaML
@@ -651,11 +692,17 @@ function AjustesML({ ajustes, onAjustes }) {
 
 /* Dos niveles, como el catálogo: una banda por plan arriba y las columnas
    abajo. Mismas `columnas` y mismo `border` transparente que las filas. */
-function EncabezadoML({ planes, columnas }) {
-  const col = (texto, fondo, alineado = "text-right") => (
-    <span className={`k-col px-2 py-1.5 ${alineado}`} style={{ background: fondo, color: "var(--humo)" }}>
-      {texto}
-    </span>
+function EncabezadoML({ planes, columnas, orden, onOrdenar }) {
+  const col = (texto, fondo, clave, alineado = "text-right", contexto) => (
+    <ColumnaOrdenable
+      texto={texto}
+      clave={clave}
+      orden={orden}
+      onOrdenar={onOrdenar}
+      fondo={fondo}
+      alineado={alineado}
+      contexto={contexto}
+    />
   );
 
   return (
@@ -682,14 +729,16 @@ function EncabezadoML({ planes, columnas }) {
       </div>
       <div className="grid items-center border border-transparent" style={{ gridTemplateColumns: columnas }}>
         <span />
-        {col("Perfume", "transparent", "text-left")}
-        {col("Costo", "var(--zona-directa)")}
-        {col("Gan. directa", "var(--zona-directa)")}
+        {col("Perfume", "transparent", "nombre", "text-left")}
+        {col("Costo", "var(--zona-directa)", "costo")}
+        {col("Gan. directa", "var(--zona-directa)", "gananciaDirecta")}
         {planes.map((plan) => (
           <Fragment key={plan}>
-            {col("Precio", "var(--zona-ml)")}
-            {col("Margen", "var(--zona-ml)")}
-            {col("Ganancia", "var(--zona-ml)")}
+            {col("Precio", "var(--zona-ml)", `precio:${plan}`, "text-right", nombreDePlan(plan))}
+            {col("Margen", "var(--zona-ml)", `margen:${plan}`, "text-right", nombreDePlan(plan))}
+            {col("Ganancia", "var(--zona-ml)", `ganancia:${plan}`, "text-right", nombreDePlan(plan))}
+            {/* "En ML" no ordena: es la celda del vínculo con la publicación,
+                no una cifra del negocio. */}
             {col("En ML", "var(--zona-ml)")}
           </Fragment>
         ))}
@@ -699,7 +748,7 @@ function EncabezadoML({ planes, columnas }) {
 }
 
 const colorGanancia = (g) =>
-  g === null ? "var(--humo-claro)" : g >= 0 ? "var(--ambar)" : "var(--oxido)";
+  g === null ? "var(--humo-claro)" : g >= 0 ? "var(--verde)" : "var(--oxido)";
 
 /* Qué dice el `title` de la ganancia cuando hay una promo puesta. Lo importante
    es que en una co-fondeada lo que paga el comprador NO es lo que te llega. */
@@ -948,7 +997,7 @@ function FilaML({
               x.promo?.ganancia == null ? null : (
                 <div
                   className="k-num text-[10px] leading-tight"
-                  style={{ color: x.promo.ganancia > 0 ? "var(--ambar)" : "var(--oxido)" }}
+                  style={{ color: x.promo.ganancia > 0 ? "var(--verde)" : "var(--oxido)" }}
                 >
                   en promo {pesos(x.promo.ganancia)}
                 </div>

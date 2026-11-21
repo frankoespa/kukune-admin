@@ -31,7 +31,7 @@ const Rotulo = ({ children }) => (
   </span>
 );
 
-const colorGanancia = (g) => (g === null || g === undefined ? "var(--humo-claro)" : g >= 0 ? "var(--ambar)" : "var(--oxido)");
+const colorGanancia = (g) => (g === null || g === undefined ? "var(--humo-claro)" : g >= 0 ? "var(--verde)" : "var(--oxido)");
 const selectorEstilo = { borderColor: "var(--linea)", background: "var(--papel)", color: "var(--tinta)" };
 
 /* Buscador para agregar: lista en un portal al body, como `BuscadorPerfume`, y
@@ -595,7 +595,7 @@ export default function SimuladorCarrito({ perfumes, tn, cuponesTienda = [], pro
                         <td className={`${td} font-semibold`} style={{ color: colorGanancia(f.ganancia) }}>
                           {f.ganancia === null ? "—" : pesos(f.ganancia)}
                           {siRetira !== null && (
-                            <small className="block text-[10.5px] font-normal" style={{ color: "var(--ambar)" }}>
+                            <small className="block text-[10.5px] font-normal" style={{ color: "var(--verde)" }}>
                               {pesos(siRetira)} si retira
                             </small>
                           )}

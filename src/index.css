@@ -15,25 +15,57 @@
   --vidrio-hondo: #dce0d8; /* franjas y hover */
   --tinta: #22201c; /* texto y bandas oscuras */
   --tinta-suave: #34322b;
-  --humo: #6e7269; /* texto secundario */
-  --humo-claro: #9aa094;
+  /* Los dos grises están calibrados para pasar AA (4,5:1 de WCAG) sobre TODOS
+     los fondos en los que se usan, incluido el peor, que es la zona lila de
+     Tiendanube. Antes `--humo` daba 4,01 sobre el vidrio y `--humo-claro`
+     2,19 — y justo ahí viven los marcadores que el producto declara críticos
+     (`—`, `?`, "sin usar", los sufijos de unidad).
+
+     **Quedaron a 10 unidades uno del otro, y es lo que hay**: con esta paleta
+     clara no entra un tercer nivel de gris que además se lea. El techo para
+     4,5:1 sobre la zona lila está en ~#5F635A, así que el tercer nivel tiene
+     que estar ahí o más abajo, y el segundo apenas más oscuro. La jerarquía
+     entre los dos la termina de hacer el tamaño y el peso, no el color; la
+     que sí se ve es contra `--tinta`, que está muy por encima de los dos. */
+  --humo: #55594f; /* texto secundario */
+  --humo-claro: #5f635a; /* tercer nivel: `—`, `?`, "sin usar", sufijos */
   --linea: #cfd4c9; /* hairlines sobre el fondo */
   --papel: #ffffff; /* celdas que se editan */
-  --ambar: #b8862f; /* la ganancia, y nada más */
-  --ambar-vivo: #d9a63f;
-  --verde: #1f6b4f;
-  --oxido: #a63a2a;
+  /* El semáforo de la plata: **verde lo que ganás, óxido lo que perdés**, que
+     es lo que todo el mundo espera. Los dos pasan AA sobre todos los fondos
+     (5,01 a 6,44), así que la cifra más importante de la app dejó de ser la
+     peor legible: en ámbar daba 2,53:1 sobre la zona lila. */
+  --verde: #1f6b4f; /* la ganancia */
+  --verde-vivo: #46b98c; /* la ganancia sobre la banda oscura — 6,64:1 */
+  --oxido: #a63a2a; /* la pérdida, y lo que se corrió de su lugar */
 
-  /* Fondos de canal en el catálogo: no son acentos, son territorio. Lo
-     suficientemente tenues como para que las cifras sigan mandando. */
-  --zona-directa: #eaefe6;
-  --zona-directa-honda: #dde5d8;
-  --zona-ml: #e9edf2;
-  --zona-ml-honda: #d9e1ea;
-  --zona-tn: #eeebf1;
-  --zona-tn-honda: #e1dce8;
-  --zona-decant: #e6eeec; /* decants: verde agua, lejos del ámbar */
-  --zona-decant-honda: #d6e3e0;
+  /* El ámbar ya no es el semáforo: es **la marca**. Nav activa, filtro
+     activo, los botones de PDF, el borde de un objetivo clavado y el anillo
+     de foco. No vuelve a usarse para una cifra: si un número está en ámbar,
+     está mal. */
+  --ambar: #b8862f;
+  --ambar-vivo: #d9a63f; /* ámbar sobre la banda oscura */
+
+  /* Fondos de zona: no son acentos, son territorio. Tenues para que las cifras
+     sigan mandando, pero **cada uno de un tono claramente distinto**: antes
+     `--zona-directa` (#eaefe6) y el fondo de la página (#e6e9e3) se llevaban 4
+     unidades de 255, así que la franja de Venta directa y la de Stock —que no
+     tenía color propio— se veían iguales y no se sabía dónde terminaba una.
+     Cada zona está ahora a 10 unidades o más del vidrio y de las demás.
+
+     Stock no es un canal: es dónde están los frascos. Por eso va en piedra
+     (neutro cálido) y no en otro verde. No se confunde con el ámbar: el ámbar
+     es tinta saturada sobre la cifra, esto es un fondo al 94% de luz. */
+  --zona-directa: #dfedd6; /* venta directa: verde */
+  --zona-directa-honda: #cbe0bd;
+  --zona-ml: #dce7f3; /* Mercado Libre: azul */
+  --zona-ml-honda: #c3d8ee;
+  --zona-tn: #eae0f0; /* Tiendanube: lila */
+  --zona-tn-honda: #dccbea;
+  --zona-stock: #efeae0; /* stock: piedra, no es un canal */
+  --zona-stock-honda: #e3dac9;
+  --zona-decant: #d6ebe6; /* decants: verde agua, lejos del ámbar */
+  --zona-decant-honda: #bedfd7;
 
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
   --sans: "Montserrat", ui-sans-serif, system-ui, sans-serif;
@@ -90,6 +122,15 @@ body {
 }
 .k-scroll-espejo::-webkit-scrollbar-thumb:hover {
   background: var(--humo);
+}
+
+/* El placeholder de Tailwind es `gray-400` (#9CA3AF): un gris que no está en
+   la paleta y que sobre blanco da 2,54:1. Es texto que explica qué va en el
+   campo ("Marca + nombre (los ml van aparte)"), así que tiene que leerse. */
+input::placeholder,
+textarea::placeholder {
+  color: var(--humo-claro);
+  opacity: 1; /* Firefox le baja la opacidad por su cuenta */
 }
 
 /* Foco visible en todo lo que se puede tocar con el teclado. */

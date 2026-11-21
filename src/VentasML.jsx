@@ -63,7 +63,7 @@ const COLUMNAS_VINCULADAS = "104px 52px minmax(180px,1fr) 84px 52px 104px 96px 8
 // fecha · publicación · MLA · cant · ingreso · comisión · envío · impuestos · te queda
 const COLUMNAS_SUELTAS = "104px minmax(240px,1fr) 128px 52px 104px 96px 88px 92px 104px";
 
-const colorGanancia = (g) => (g == null ? "var(--humo-claro)" : g >= 0 ? "var(--ambar)" : "var(--oxido)");
+const colorGanancia = (g) => (g == null ? "var(--humo-claro)" : g >= 0 ? "var(--verde)" : "var(--oxido)");
 
 export default function VentasML({ perfumes, cuenta }) {
   const [rango, setRango] = useState(() => rangoDe("mes"));

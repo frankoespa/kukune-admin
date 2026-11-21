@@ -396,7 +396,7 @@ export default function AplicarATodos({
                   {/* La ganancia que le toca. Ámbar: acá sí es plata que te
                       queda, el único uso del color. Va pegada al margen porque
                       son la misma cuenta mirada de dos maneras. */}
-                  <span className="k-num text-right" style={{ color: "var(--ambar)" }}>
+                  <span className="k-num text-right" style={{ color: "var(--verde)" }}>
                     {pesos(f.ganancia)}
                   </span>
                   <span className="k-num text-right" style={{ color: "var(--humo)" }}>
@@ -408,7 +408,7 @@ export default function AplicarATodos({
                   {vistaPrevia.conTN && (
                     <span
                       className="k-num text-right"
-                      style={{ color: f.tn == null ? "var(--humo-claro)" : "var(--ambar)" }}
+                      style={{ color: f.tn == null ? "var(--humo-claro)" : "var(--verde)" }}
                       title={
                         f.tn == null
                           ? "Este perfume no tiene precio calculado en Tiendanube"

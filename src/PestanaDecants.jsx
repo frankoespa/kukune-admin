@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Plus, Search, Trash2, X } from "lucide-react";
 import { urlFoto } from "./almacenamiento";
 import { objetivoDirecto } from "./precios";
@@ -6,6 +6,9 @@ import { NumberCell } from "./NumberCell";
 import { CampoProtegido } from "./CampoProtegido";
 import { SelectorRedondeo } from "./TiendaNube";
 import { buscarPerfumes, ConVistaPrevia, pesos } from "./Catalogo";
+import { ordenar, siguienteOrden } from "./orden";
+import { ColumnaOrdenable } from "./ColumnaOrdenable";
+import { ALTO_TABLA, anchoDeColumnas } from "./tabla";
 import { pctSinMiles } from "./numeros";
 import {
   CLAVES_DIRECTO,
@@ -34,7 +37,7 @@ const ANCHO_FIJO = "52px minmax(200px,1fr) 56px 84px";
 const ANCHO_TIPO = "40px 84px 104px 84px 96px";
 const columnasDe = (n) => [ANCHO_FIJO, ...Array.from({ length: n }, () => ANCHO_TIPO)].join(" ");
 
-const colorGanancia = (g) => (g === null ? "var(--humo-claro)" : g >= 0 ? "var(--ambar)" : "var(--oxido)");
+const colorGanancia = (g) => (g === null ? "var(--humo-claro)" : g >= 0 ? "var(--verde)" : "var(--oxido)");
 
 const nuevoId = () => crypto.randomUUID().slice(0, 8);
 
@@ -80,18 +83,33 @@ export default function PestanaDecants({ perfumes, ajustes, onAjustes, onCambiar
 
   /* Orden alfabético congelado por conjunto, como en el catálogo: acá se
      escriben precios y la lista no se mueve por eso. */
-  const orden = useRef({ clave: null, ids: [] });
+  const [orden, setOrden] = useState({ col: "nombre", dir: "asc" });
+  const onOrdenar = useCallback((col) => setOrden((o) => siguienteOrden(o, col)), []);
+  const alfabetico = useRef({ clave: null, dir: null, ids: [] });
   const visibles = useMemo(() => {
     let base = perfumes;
     if (soloSinMl) base = base.filter((p) => !(Number(p.ml) > 0));
     if (soloConDecant) base = base.filter((p) => (p.decants ?? []).length > 0);
     const filtrados = buscarPerfumes(base, consulta);
+
+    if (orden.col !== "nombre") {
+      const valorDe = {
+        ml: (p) => (Number(p.ml) > 0 ? Number(p.ml) : null),
+        porMl: (p) => costoPorMl(p) || null,
+      }[orden.col];
+      if (valorDe) return ordenar(filtrados, valorDe, orden.dir);
+    }
+
     const porId = new Map(filtrados.map((p) => [p.id, p]));
     const clave = filtrados.map((p) => p.id).sort().join(",");
-    if (orden.current.clave !== clave)
-      orden.current = { clave, ids: filtrados.slice().sort((a, b) => a.nombre.localeCompare(b.nombre, "es")).map((p) => p.id) };
-    return orden.current.ids.map((id) => porId.get(id)).filter(Boolean);
-  }, [perfumes, consulta, soloSinMl, soloConDecant]);
+    if (alfabetico.current.clave !== clave || alfabetico.current.dir !== orden.dir)
+      alfabetico.current = {
+        clave,
+        dir: orden.dir,
+        ids: ordenar(filtrados, (p) => p.nombre, orden.dir).map((p) => p.id),
+      };
+    return alfabetico.current.ids.map((id) => porId.get(id)).filter(Boolean);
+  }, [perfumes, consulta, soloSinMl, soloConDecant, orden]);
 
   const sinMl = perfumes.filter((p) => !(Number(p.ml) > 0)).length;
   const conDecant = perfumes.filter((p) => (p.decants ?? []).length > 0).length;
@@ -229,9 +247,9 @@ export default function PestanaDecants({ perfumes, ajustes, onAjustes, onCambiar
           Ningún perfume coincide.
         </p>
       ) : (
-        <div className="overflow-x-auto pb-2">
-          <div style={{ minWidth: 52 + 200 + 140 + tipos.length * 408 }}>
-            <Encabezado tipos={tipos} columnas={columnas} />
+        <div className="overflow-auto pb-2" style={{ maxHeight: ALTO_TABLA }}>
+          <div style={{ minWidth: anchoDeColumnas(columnas) }}>
+            <Encabezado tipos={tipos} columnas={columnas} orden={orden} onOrdenar={onOrdenar} />
             <ul className="grid gap-1.5">
               {visibles.map((p) => (
                 <FilaDecants
@@ -425,11 +443,16 @@ function FilaTipo({ tipo, formas, usos, onCambiar, onQuitar }) {
 
 /* ---------- Tabla ---------- */
 
-function Encabezado({ tipos, columnas }) {
-  const col = (texto, fondo, alineado = "text-right") => (
-    <span className={`k-col px-2 py-1.5 ${alineado}`} style={{ background: fondo, color: "var(--humo)" }}>
-      {texto}
-    </span>
+function Encabezado({ tipos, columnas, orden, onOrdenar }) {
+  const col = (texto, fondo, clave, alineado = "text-right") => (
+    <ColumnaOrdenable
+      texto={texto}
+      clave={clave}
+      orden={orden}
+      onOrdenar={onOrdenar}
+      fondo={fondo}
+      alineado={alineado}
+    />
   );
   return (
     <div className="sticky top-0 z-[5] pb-1.5 pt-1" style={{ background: "var(--vidrio)" }}>
@@ -445,9 +468,9 @@ function Encabezado({ tipos, columnas }) {
       </div>
       <div className="grid items-center border border-transparent" style={{ gridTemplateColumns: columnas }}>
         <span />
-        {col("Perfume", "transparent", "text-left")}
-        {col("ml", "transparent")}
-        {col("$ por ml", "transparent")}
+        {col("Perfume", "transparent", "nombre", "text-left")}
+        {col("ml", "transparent", "ml")}
+        {col("$ por ml", "transparent", "porMl")}
         {tipos.map((t) => (
           <FragmentoEncabezado key={t.id} col={col} />
         ))}
@@ -459,7 +482,8 @@ function Encabezado({ tipos, columnas }) {
 function FragmentoEncabezado({ col }) {
   return (
     <>
-      {col("", "var(--zona-decant)", "text-center")}
+      {/* La casilla de ofrecer el decant: no es una cifra, no ordena. */}
+      {col("", "var(--zona-decant)", null, "text-center")}
       {col("Costo", "var(--zona-decant)")}
       {col("Precio", "var(--zona-decant)")}
       {col("Margen", "var(--zona-decant)")}

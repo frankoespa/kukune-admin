@@ -511,7 +511,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
               </button>
             </div>
             {r.ganancia !== null && (
-              <p className="mt-1 text-[12.5px] font-semibold" style={{ color: r.ganancia >= 0 ? "var(--ambar)" : "var(--oxido)" }}>
+              <p className="mt-1 text-[12.5px] font-semibold" style={{ color: r.ganancia >= 0 ? "var(--verde)" : "var(--oxido)" }}>
                 {simulando
                   ? `Con ${[conOferta && "la oferta", conPromo && "la promo", cuponEnCuenta && r.cuponAplica && "el cupón"].filter(Boolean).join(" y ")} ganás al menos `
                   : "Vas a ganar al menos "}
@@ -615,7 +615,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                               {base.formas[indiceFija].ganancia !== null && (
                                 <>
                                   . Te quedan{" "}
-                                  <b className="k-num" style={{ color: base.formas[indiceFija].ganancia >= 0 ? "var(--ambar)" : "var(--oxido)" }}>
+                                  <b className="k-num" style={{ color: base.formas[indiceFija].ganancia >= 0 ? "var(--verde)" : "var(--oxido)" }}>
                                     {pesos(base.formas[indiceFija].ganancia)}
                                   </b>
                                   {gananciaDirecta !== null && (
@@ -1063,7 +1063,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                   </td>
                   {(() => {
                     const colorGan =
-                      f.ganancia === null ? "var(--humo-claro)" : f.ganancia >= 0 ? "var(--ambar)" : "var(--oxido)";
+                      f.ganancia === null ? "var(--humo-claro)" : f.ganancia >= 0 ? "var(--verde)" : "var(--oxido)";
                     const colorMargen =
                       f.ganancia === null ? "var(--humo-claro)" : f.ganancia >= 0 ? "var(--verde)" : "var(--oxido)";
                     // Sobre el costo de lo que se lleva: con un carrito de N, N costos.
@@ -1088,7 +1088,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                               </small>
                             )}
                             {siRetira !== null && (
-                              <small className="block text-[10.5px] font-normal" style={{ color: "var(--ambar)" }}>
+                              <small className="block text-[10.5px] font-normal" style={{ color: "var(--verde)" }}>
                                 {pesos(siRetira)} si retira
                               </small>
                             )}
@@ -1125,7 +1125,7 @@ export function DetalleTiendaNube({ perfume, precio, tn, onCerrar, onFijar, onSo
                           {/* Debajo del campo: el que retira no es un objetivo
                               que se fije, es la consecuencia del que sí. */}
                           {siRetira !== null && (
-                            <small className="mt-0.5 block text-[10.5px]" style={{ color: "var(--ambar)" }}>
+                            <small className="mt-0.5 block text-[10.5px]" style={{ color: "var(--verde)" }}>
                               {pesos(siRetira)} si retira
                             </small>
                           )}
