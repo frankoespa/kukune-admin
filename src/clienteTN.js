@@ -55,6 +55,11 @@ export const actualizarVarianteTN = (productId, variantId, cambios) =>
 export const crearVarianteTN = (productId, { valor, precio, stock = null }) =>
   pedir(`/productos/${productId}/variantes`, { method: "POST", body: JSON.stringify({ valor, precio, stock }) });
 
+/* ESCRIBE EN TIENDANUBE: crea un producto nuevo de una sola variante (la caja
+   de descubrimiento). -> { producto } con su variante. Solo tras confirmar. */
+export const crearProductoTN = ({ nombre, descripcion, precio, stock = null, categoria = null, publicado = false }) =>
+  pedir("/productos", { method: "POST", body: JSON.stringify({ nombre, descripcion, precio, stock, categoria, publicado }) });
+
 /* Las categorías de la tienda, solo lectura: [{ id, nombre }]. */
 export const leerCategoriasTN = async () => (await pedir("/categorias")).categorias;
 

@@ -8,8 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 App React (Vite + Tailwind) que calcula costos y márgenes de perfumes para un
 negocio que vende en mano, en Mercado Libre y en Tiendanube (Argentina, en ARS).
 Nació como réplica de la hoja "AnalisisPedido" de un Excel —eso es hoy la **Mesa
-de precios**— y hoy son **cinco pantallas**: Mesa de precios, Catálogo, Decants,
-Mercado Libre y Tiendanube.
+de precios**— y hoy son **seis pantallas**: Mesa de precios, Catálogo, Decants,
+Cajas, Mercado Libre y Tiendanube.
 
 ## Quién la usa
 - **Hoy, Franco y nadie más.** Conoce la app entera porque la fue pidiendo
@@ -346,6 +346,61 @@ automática es `npm run build`; el resto se comprueba a ojo en el navegador.
 - **Probado solo en la copia con Tiendanube falsa** (`POST` con `{"values":
   [{"es":"10 ml"}],"price":24800,"stock":3}`, el error sin "Tamaño", `PUT` del
   precio). La primera variante real la crea Franco.
+
+## Cajas de descubrimiento
+- Una caja con N decants **del mismo tamaño** (un tipo de decant), de
+  perfumes **fijos que elige Franco**, que se vende directo y en Tiendanube
+  como **un producto propio**. Pestaña **Cajas** (`vista === "cajas"`,
+  `src/PestanaCajas.jsx`); cuentas puras en **`src/cuentasCaja.js`** (probadas
+  desde Node). Pedido de Franco, con estas decisiones suyas.
+- Viven en **`ajustes.cajas`** (no está en `AJUSTES_POR_DEFECTO`: abrir no
+  escribe; verificado por md5 entrando a las seis pantallas). Cada caja:
+  `{id, nombre, tipo, perfumes: [perfumeId…], costos: [{id, nombre, costo}]}` +
+  **las mismas claves de objetivo que un perfume** (`margenObjetivo`,
+  `gananciaObjetivo`, `margenTN`, `gananciaTN`, `igualarDirectoTN`, `formaTN`) +
+  `precioPublico`, `precioTN`, `publicacionTN`, `ofertaTN`. La cantidad de la
+  caja es el largo de `perfumes` (se puede repetir un perfume a propósito).
+- **Costo** = Σ decants **sin la cajita individual** (`costoDecant(p, tipo,
+  { sinCaja: true })`: adentro va el frasquito solo) + Σ la lista de costos
+  (caja, espuma, tarjeta…, libre, de cada caja; "Duplicar" la copia). Un solo
+  decant sin costo (perfume borrado, sin costo, sin `ml`) deja la caja **sin
+  costo** (`—`) y la tarjeta dice cuál y por qué: no se inventa a medias.
+- **Sin herencia**: la caja tiene su objetivo o precio a mano. Soltar escribe
+  `null` **y** el precio resuelto juntos, como siempre. Redondea con el redondeo
+  de los decants (directo y Tiendanube).
+- `resolverCajas(perfumesResueltos, ajustes)` corre en `ajustesResueltos` de App,
+  después de los decants; **lo que se guarda son esos ajustes** (mismo motivo
+  que `perfumesResueltos`). Devuelve el mismo objeto si nada cambió.
+- **Una caja es un "vendible"** (`vendibleDeCaja`, id `caja:<id>`, `esCaja`), así
+  que la pestaña Tiendanube la trata como a un frasco: tercer modo
+  **Frascos | Decants | Cajas**, con detalle, oferta, Aplicar a todos y
+  Actualizar precios trabajando solo sobre el modo; cupones, carrito y envío
+  gratis miran la tienda entera (cajas incluidas). Los escritores de App
+  (`fijarObjetivoTN`, `soltarMargenTNDelCatalogo`, `fijarObjetivoDirecto`,
+  `soltarMargenDelCatalogo`, `cambiarPerfume`) hacen además
+  `setAjustes(a => aplicarACajas(a, ids, …))`, que devuelve el mismo objeto si
+  ningún id es de caja. La banda de ganancia no se aplica a cajas.
+- **Crear el producto en Tiendanube**: botón en la tarjeta, con `Dialogo`
+  (nombre, stock —vacío = sin llevar la cuenta—, categoría, la descripción
+  precargada con la lista de perfumes, y "publicarlo visible ya", apagado por
+  defecto: nace **oculto** hasta que Franco le ponga fotos en el panel).
+  `POST /api/tn/productos` → `pedidoDeProducto()` pura en `vite-plugin-tn.js`
+  (doc "Product" 2025-03: `name`/`description` por idioma, descripción en HTML
+  con `descripcionHTML()`, `categories` ids, una variante con `price` y
+  `stock`, y `published` —nunca junto con `visibility`, da 422—). La variante
+  devuelta queda en `publicacionTN` de la caja. Una caja creada a mano en el
+  panel se vincula desde el modo Cajas con el buscador de siempre.
+- **Una caja no tiene stock base**: su stock vive en Tiendanube y venderla no
+  descuenta nada de los perfumes (igual que un decant).
+- **Probado solo en la copia con Tiendanube falsa**: el `POST` llevó
+  `{"name":{"es":"Caja prueba x3"},"variants":[{"price":"29100.00","stock":5}],
+  "published":false,"description":{…<ul><li>…},"categories":[77]}`, y cambiar
+  el margen en el modo Cajas mandó un solo `PUT {"price":30600,
+  "promotional_price":null}`. **El primer producto real lo crea Franco.**
+- En la copia, `vite-plugin-tn.js` no se puede copiar ni editar por shell (lo
+  traba el guardián de privacidad porque tiene el correo del User-Agent): la
+  config de la copia lo importa por ruta absoluta desde el proyecto y la
+  Tiendanube falsa va en un módulo aparte que se importa primero.
 
 ## Catálogo de perfumes
 - El nombre y la foto de cada perfume viven **una sola vez** en

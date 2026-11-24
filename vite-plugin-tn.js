@@ -24,6 +24,7 @@ import { loadEnv } from "vite";
    · PUT  /api/tn/variantes/<prod>/<var>    {price?, promotional_price?, stock?} (ESCRIBE)
    · GET  /api/tn/categorias                -> {categorias: [{id, nombre}]}
    · PUT  /api/tn/productos/<prod>/categorias {agregar|quitar: id}   (ESCRIBE)
+   · POST /api/tn/productos                 crea un producto nuevo (caja de descubrimiento) (ESCRIBE)
    · GET  /api/tn/cupones                   los cupones de la tienda (permiso de cupones)
    · POST /api/tn/cupones                   crea un cupón (ESCRIBE)
    · PUT  /api/tn/cupones/<id>              cambia un cupón, solo lo que cambió (ESCRIBE)
@@ -113,6 +114,51 @@ export function pedidoDeVariante({ producto, valor, precio, stock = null }) {
     cuerpo.stock = n;
   }
   return { cuerpo };
+}
+
+/* Crear un producto nuevo de una variante (doc "Product" 2025-03): lo usa la
+   caja de descubrimiento, que en la tienda es un producto propio. `name` y
+   `description` van por idioma, la descripción es HTML, `categories` son ids y
+   el precio y el stock van en la única variante. Sin `stock` la variante nace
+   sin llevar la cuenta (infinito). `published` y no `visibility`: mandar los
+   dos da 422. Pura y exportada para probarla desde Node. Tira Error. */
+const escaparHTML = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const esItem = (r) => /^[-•]\s*/.test(r);
+export function descripcionHTML(texto) {
+  return String(texto ?? "")
+    .trim()
+    .split(/\n\s*\n/)
+    .filter((b) => b.trim())
+    .map((b) => {
+      const renglones = b.split("\n").map((r) => r.trim()).filter(Boolean);
+      const resto = renglones.filter((r) => !esItem(r));
+      const items = renglones.filter(esItem);
+      const p = resto.length ? `<p>${resto.map(escaparHTML).join("<br>")}</p>` : "";
+      const ul = items.length ? `<ul>${items.map((r) => `<li>${escaparHTML(r.replace(/^[-•]\s*/, ""))}</li>`).join("")}</ul>` : "";
+      return p + ul;
+    })
+    .join("");
+}
+
+export function pedidoDeProducto({ nombre, descripcion = "", precio, stock = null, categoria = null, publicado = false }) {
+  const n = String(nombre ?? "").trim();
+  if (!n) throw new Error("Falta el nombre del producto");
+  if (!(Number(precio) > 0)) throw new Error("Precio inválido");
+  const variante = { price: Number(precio).toFixed(2) };
+  if (stock != null && stock !== "") {
+    const k = Number(stock);
+    if (!Number.isInteger(k) || k < 0) throw new Error("Stock inválido");
+    variante.stock = k;
+  }
+  const cuerpo = { name: { es: n }, variants: [variante], published: !!publicado };
+  const html = descripcionHTML(descripcion);
+  if (html) cuerpo.description = { es: html };
+  if (categoria != null && categoria !== "") {
+    const c = Number(categoria);
+    if (!(c > 0)) throw new Error("Categoría inválida");
+    cuerpo.categories = [c];
+  }
+  return cuerpo;
 }
 
 /* Lo que se le manda a Tiendanube para crear o cambiar un cupón, revisado antes
@@ -358,6 +404,22 @@ export default function pluginTN() {
         }
 
         if (req.method === "GET" && ruta === "/productos") return responder(res, { productos: await productos() });
+
+        /* Crear un producto nuevo (la caja de descubrimiento). Devuelve el
+           producto resumido: su única variante es la que se vincula. */
+        if (req.method === "POST" && ruta === "/productos") {
+          let cuerpoTN;
+          try {
+            cuerpoTN = pedidoDeProducto(await cuerpo(req));
+          } catch (e) {
+            throw new ErrorTN(400, e.message);
+          }
+          const r = await tn("/products", { method: "POST", body: JSON.stringify(cuerpoTN) });
+          const producto = resumirProducto(r);
+          if (!producto.variantes.length)
+            throw new ErrorTN(502, "Tiendanube creó el producto pero no devolvió su variante: buscalo y vinculalo a mano");
+          return responder(res, { producto }, 201);
+        }
 
         // Cupones: leer, crear y editar. No se borran desde acá.
         if (req.method === "GET" && ruta === "/cupones") return responder(res, { cupones: await cupones() });

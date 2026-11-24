@@ -10,6 +10,7 @@ import { ColumnaOrdenable } from "./ColumnaOrdenable";
 import { ALTO_TABLA, anchoDeColumnas } from "./tabla";
 import { actualizarVarianteTN, cambiosParaTN, crearVarianteTN, enviarCodigoTN, estadoTN, leerCategoriasTN, leerCuponesTN, leerProductosTN, pedirAutorizacionTN, vinculoTN } from "./clienteTN";
 import { ajustesTNDeDecants, decantsComoVendibles, nombreDeTipo, tiposDeDecant } from "./cuentasDecant";
+import { cajasComoVendibles } from "./cuentasCaja";
 import { BandaConexionTN, CeldaTN, PanelActualizarTN } from "./ConexionTN";
 import CuponesTN from "./CuponesTN";
 import AplicarATodos from "./AplicarATodos";
@@ -43,12 +44,13 @@ import { zonaEnvioTN } from "./umbralEnvioTN";
 // foto · nombre · costo · ganancia directa ‖ precio · margen · ganancia · en Tiendanube
 const COLUMNAS_TN = "52px minmax(200px,1fr) 100px 100px 124px 88px 100px 132px";
 
-/* Frascos o decants: nunca mezclados en la tabla (pedido de Franco, más
+/* Frascos, decants o cajas: nunca mezclados en la tabla (pedido de Franco, más
    práctico). Se recuerda entre visitas; es una preferencia de pantalla. */
 const CLAVE_MODO = "kukune:modo-tn";
 const leerModo = () => {
   try {
-    return localStorage.getItem(CLAVE_MODO) === "decants" ? "decants" : "frascos";
+    const m = localStorage.getItem(CLAVE_MODO);
+    return m === "decants" || m === "cajas" ? m : "frascos";
   } catch {
     return "frascos";
   }
@@ -66,28 +68,34 @@ export default function PestanaTiendaNube({ perfumes: frascos, ajustes: ajustesT
   };
   const [tipoFiltro, setTipoFiltro] = useState("");
   const enDecants = modo === "decants";
+  const enCajas = modo === "cajas";
+  // Decants y cajas redondean con el redondeo de los decants.
+  const conRedondeoDecant = enDecants || enCajas;
 
   /* Los decants como si fueran perfumes (`decantsComoVendibles`): así la fila,
      el detalle, Aplicar a todos y Actualizar precios sirven igual. Las
      escrituras llevan su id compuesto y App las enruta a la entrada del decant. */
   const decants = useMemo(() => decantsComoVendibles(frascos, ajustesTodos), [frascos, ajustesTodos]);
+  /* Las cajas de descubrimiento, igual: un vendible por caja (`cuentasCaja.js`),
+     con id `caja:<id>` que App enruta a `ajustes.cajas`. */
+  const cajas = useMemo(() => cajasComoVendibles(frascos, ajustesTodos), [frascos, ajustesTodos]);
   const tipos = tiposDeDecant(ajustesTodos);
-  // Lo que mira la tienda entera (cupones, envío gratis, vínculos) va con los dos.
-  const todos = useMemo(() => [...frascos, ...decants], [frascos, decants]);
+  // Lo que mira la tienda entera (cupones, envío gratis, vínculos) va con todos.
+  const todos = useMemo(() => [...frascos, ...decants, ...cajas], [frascos, decants, cajas]);
   // Los de la tabla: los del modo.
   const perfumes = useMemo(
-    () => (enDecants ? (tipoFiltro ? decants.filter((d) => d.tipo.id === tipoFiltro) : decants) : frascos),
-    [enDecants, decants, frascos, tipoFiltro]
+    () => (enCajas ? cajas : enDecants ? (tipoFiltro ? decants.filter((d) => d.tipo.id === tipoFiltro) : decants) : frascos),
+    [enCajas, cajas, enDecants, decants, frascos, tipoFiltro]
   );
   /* Los decants redondean con el suyo: todo lo que cuenta en la tabla usa los
      ajustes del modo. La caja de ajustes, en modo Decants, guarda el redondeo
      en `ajustes.decants.redondeoTN` y el resto en la tienda. */
   const ajustes = useMemo(
-    () => (enDecants ? { ...ajustesTodos, tiendaNube: ajustesTNDeDecants(ajustesTodos) } : ajustesTodos),
-    [enDecants, ajustesTodos]
+    () => (conRedondeoDecant ? { ...ajustesTodos, tiendaNube: ajustesTNDeDecants(ajustesTodos) } : ajustesTodos),
+    [conRedondeoDecant, ajustesTodos]
   );
   const cambiarAjustesTN = (tn) => {
-    if (!enDecants) return onAjustes({ tiendaNube: tn });
+    if (!conRedondeoDecant) return onAjustes({ tiendaNube: tn });
     const { redondeo, ...resto } = tn;
     onAjustes({
       tiendaNube: { ...resto, redondeo: ajustesTodos.tiendaNube?.redondeo },
@@ -276,7 +284,7 @@ export default function PestanaTiendaNube({ perfumes: frascos, ajustes: ajustesT
           infinito ? "infinito" : variante.stock
         } a ${stock} unidades. Se cambia en la tienda real.` +
         // Un decant no tiene stock base en el catálogo: no hay nada que mover.
-        (perfume.decantDe
+        (perfume.decantDe || perfume.esCaja
           ? ""
           : delta !== 0
           ? ` En el catálogo, el stock sin publicar de "${perfume.nombre}" ${delta > 0 ? "baja" : "sube"} ${Math.abs(delta)}.`
@@ -288,7 +296,7 @@ export default function PestanaTiendaNube({ perfumes: frascos, ajustes: ajustesT
         try {
           await actualizarVarianteTN(vinculoTN(perfume).productId, variante.id, { stock });
           traerProductos();
-          if (delta !== 0 && !perfume.decantDe) onStockBase?.(perfume.id, variante.stock, stock);
+          if (delta !== 0 && !perfume.decantDe && !perfume.esCaja) onStockBase?.(perfume.id, variante.stock, stock);
         } catch (e) {
           setErrorTN(`No se pudo cambiar el stock (${e.message}).`);
         }
@@ -370,7 +378,9 @@ export default function PestanaTiendaNube({ perfumes: frascos, ajustes: ajustesT
         <div>
           <h2 className="k-rotulo mb-1">Tiendanube</h2>
           <p className="text-[12.5px]" style={{ color: "var(--humo)" }}>
-            {enDecants
+            {enCajas
+              ? "Las cajas de descubrimiento, cada una un producto propio. Se arman (perfumes, costos) y se crean en la tienda desde la pestaña Cajas."
+              : enDecants
               ? "Los decants, cada uno con su precio. Van como variante del producto del frasco. El tipo, el costo y la venta directa se arman en la pestaña Decants."
               : "Un solo precio que deja la ganancia pague como pague el cliente. El nombre, la foto y el costo se cargan en el catálogo."}
           </p>
@@ -380,6 +390,7 @@ export default function PestanaTiendaNube({ perfumes: frascos, ajustes: ajustesT
           {[
             ["frascos", `Frascos (${frascos.length})`],
             ["decants", `Decants (${decants.length})`],
+            ["cajas", `Cajas (${cajas.length})`],
           ].map(([id, texto]) => (
             <button
               key={id}
@@ -541,7 +552,9 @@ export default function PestanaTiendaNube({ perfumes: frascos, ajustes: ajustesT
       {alaVista.length === 0 ? (
         <p className="py-12 text-center text-[13px]" style={{ color: "var(--humo-claro)" }}>
           {perfumes.length === 0
-            ? enDecants
+            ? enCajas
+              ? "No hay cajas. Se arman en la pestaña Cajas."
+              : enDecants
               ? "No hay decants asignados. Se arman en la pestaña Decants."
               : "El catálogo está vacío. Los perfumes se agregan en la pestaña Catálogo."
             : soloOferta && enOferta.size === 0

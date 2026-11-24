@@ -107,12 +107,16 @@ export function ajustesTNDeDecants(ajustes) {
 /* Costo de un decant: los ml que lleva, al costo por ml del frasco, más su
    frasquito y su caja. `null` si el perfume no tiene costo o no tiene `ml`.
    No se guarda: sigue al costo del perfume (y al dólar, si está atado). */
-export function costoDecant(perfume, tipo) {
+/* `sinCaja`: sin la cajita individual. Es como va adentro de una caja de
+   descubrimiento (`cuentasCaja.js`): el frasquito solo. */
+export function costoDecant(perfume, tipo, { sinCaja = false } = {}) {
   const costo = Number(perfume?.costo) || 0;
   const ml = Number(perfume?.ml) || 0;
   const mlDecant = Number(tipo?.ml) || 0;
   if (!(costo > 0) || !(ml > 0) || !(mlDecant > 0)) return null;
-  return Math.round((costo / ml) * mlDecant + (Number(tipo.costoFrasco) || 0) + (Number(tipo.costoCaja) || 0));
+  return Math.round(
+    (costo / ml) * mlDecant + (Number(tipo.costoFrasco) || 0) + (sinCaja ? 0 : Number(tipo.costoCaja) || 0)
+  );
 }
 
 export const costoPorMl = (perfume) => {

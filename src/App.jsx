@@ -47,6 +47,8 @@ import PestanaTiendaNube from "./PestanaTiendaNube";
 import { gananciaDeBanda, resolverPrecios, resolverPreciosDelCatalogo } from "./precios";
 import { aplicarAVendibles, asignarTipo, nombreConMedida, pasesDeMedida, resolverDecantsDelCatalogo, soltarEnDecant } from "./cuentasDecant";
 import PestanaDecants from "./PestanaDecants";
+import PestanaCajas from "./PestanaCajas";
+import { aplicarACajas, resolverCajas } from "./cuentasCaja";
 import { NumberCell } from "./NumberCell";
 import { ContextoBloqueo, useBloqueo } from "./bloqueo";
 
@@ -1238,6 +1240,12 @@ export default function App() {
     [perfumes, ajustes]
   );
 
+  /* Las cajas de descubrimiento viven en `ajustes.cajas` y su costo cuelga de
+     los perfumes ya resueltos: sus precios despejados están en estos ajustes, y
+     lo que se guarda son ellos (mismo motivo que `perfumesResueltos`).
+     Devuelve el mismo objeto si nada cambió. */
+  const ajustesResueltos = useMemo(() => resolverCajas(perfumesResueltos, ajustes), [perfumesResueltos, ajustes]);
+
   const perfumePorId = useMemo(
     () => new Map(perfumesResueltos.map((p) => [p.id, p])),
     [perfumesResueltos]
@@ -1420,7 +1428,7 @@ export default function App() {
   const guardaCatalogo = useRef(null);
   useEffect(() => {
     if (catalogoInicial.current === null) return; // todavía no cargó
-    const json = JSON.stringify({ perfumes: perfumesResueltos, ajustes });
+    const json = JSON.stringify({ perfumes: perfumesResueltos, ajustes: ajustesResueltos });
     if (json === catalogoInicial.current) return; // nada cambió
     // La marca se actualiza ACÁ, no cuando el PUT responde. Si se esperara a la
     // respuesta, un cambio hecho mientras la escritura anterior está en vuelo se
@@ -1431,13 +1439,13 @@ export default function App() {
     catalogoInicial.current = json;
     clearTimeout(guardaCatalogo.current);
     guardaCatalogo.current = setTimeout(() => {
-      escribirPerfumes(perfumesResueltos, ajustes).catch((e) => {
+      escribirPerfumes(perfumesResueltos, ajustesResueltos).catch((e) => {
         // Se suelta la marca para que el próximo cambio reintente.
         catalogoInicial.current = "";
         setErrorGuardado(`No se pudo guardar el catálogo (${e.message}).`);
       });
     }, 800);
-  }, [perfumesResueltos, ajustes]);
+  }, [perfumesResueltos, ajustesResueltos]);
 
   const [showHelp, setShowHelp] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -1955,7 +1963,7 @@ export default function App() {
      del estado crudo. */
   /* En un decant (id compuesto) cae en su entrada: con objetivo propio vuelve a
      heredar del tipo, heredando pasa a precio a mano (`soltarEnDecant`). */
-  const soltarMargenTNDelCatalogo = (id, precioResuelto) =>
+  const soltarMargenTNDelCatalogo = (id, precioResuelto) => {
     setPerfumes((ps) =>
       aplicarAVendibles(
         ps,
@@ -1967,6 +1975,14 @@ export default function App() {
         (e) => soltarEnDecant(e, "tn", precioResuelto)
       )
     );
+    /* Una caja no hereda de nadie: soltar la deja a mano, con su precio. */
+    setAjustes((a) =>
+      aplicarACajas(a, [id], (c) => {
+        const { gananciaTN, formaTN, igualarDirectoTN, ...resto } = c;
+        return { ...resto, margenTN: null, precioTN: precioResuelto };
+      })
+    );
+  };
 
   /* Fijar el objetivo de Tiendanube en uno o varios perfumes, en un solo
      `setPerfumes`: margen (fracción), ganancia en pesos, o igualar lo que paga
@@ -1978,26 +1994,27 @@ export default function App() {
   /* Los ids pueden ser de decants (`aplicarAVendibles`): la misma cuenta cae en
      su entrada, que pasa a tener objetivo propio y deja de heredar del tipo. */
   const fijarObjetivoTN = (ids, { margen, ganancia, igualarDirecto, formaId }) => {
-    setPerfumes((ps) =>
-      aplicarAVendibles(ps, ids, (p) => {
-        const { gananciaTN, formaTN, igualarDirectoTN, ...resto } = p;
-        const forma = formaId === undefined ? formaTN : formaId;
-        return {
-          ...resto,
-          ...(igualarDirecto
-            ? { margenTN: null, igualarDirectoTN: true }
-            : ganancia != null
-              ? { margenTN: null, gananciaTN: ganancia }
-              : { margenTN: margen }),
-          ...(forma != null ? { formaTN: forma } : {}),
-        };
-      })
-    );
+    const fijar = (p) => {
+      const { gananciaTN, formaTN, igualarDirectoTN, ...resto } = p;
+      const forma = formaId === undefined ? formaTN : formaId;
+      return {
+        ...resto,
+        ...(igualarDirecto
+          ? { margenTN: null, igualarDirectoTN: true }
+          : ganancia != null
+            ? { margenTN: null, gananciaTN: ganancia }
+            : { margenTN: margen }),
+        ...(forma != null ? { formaTN: forma } : {}),
+      };
+    };
+    setPerfumes((ps) => aplicarAVendibles(ps, ids, fijar));
+    // Los ids `caja:` caen en `ajustes.cajas`, con la misma cuenta.
+    setAjustes((a) => aplicarACajas(a, ids, fijar));
   };
 
   /* Soltar el objetivo de la venta directa (margen o ganancia fija): el precio
      resuelto va en el mismo movimiento, o el perfume vuelve al precio viejo. */
-  const soltarMargenDelCatalogo = (id, precioResuelto) =>
+  const soltarMargenDelCatalogo = (id, precioResuelto) => {
     setPerfumes((ps) =>
       aplicarAVendibles(
         ps,
@@ -2009,6 +2026,13 @@ export default function App() {
         (e) => soltarEnDecant(e, "directo", precioResuelto)
       )
     );
+    setAjustes((a) =>
+      aplicarACajas(a, [id], (c) => {
+        const { gananciaObjetivo, ...resto } = c;
+        return { ...resto, margenObjetivo: null, precioPublico: precioResuelto };
+      })
+    );
+  };
 
   /* Fijar el objetivo de la venta directa en uno o varios perfumes, en un solo
      `setPerfumes`: margen (fracción) o ganancia en pesos, uno borra al otro. Lo
@@ -2042,6 +2066,8 @@ export default function App() {
         (e) => (banda ? e : fijar(e))
       )
     );
+    // La banda es del frasco: a una caja no se le aplica.
+    if (!banda) setAjustes((a) => aplicarACajas(a, ids, fijar));
     if (banda) setAjustes((a) => ({ ...a, bandaDirecta: banda }));
   };
 
@@ -2049,7 +2075,7 @@ export default function App() {
      que las ventas de ML se midan contra el costo de su momento. */
   /* Con el id de un decant, los campos caen en su entrada (precio, oferta,
      vínculo con la variante). Un decant no tiene costo propio. */
-  const cambiarPerfume = (id, { costo, ...campos }) =>
+  const cambiarPerfume = (id, { costo, ...campos }) => {
     setPerfumes((ps) =>
       aplicarAVendibles(
         ps,
@@ -2062,6 +2088,9 @@ export default function App() {
         (e) => ({ ...e, ...campos })
       )
     );
+    // Una caja tampoco tiene costo propio: sale de sus decants y su lista.
+    setAjustes((a) => aplicarACajas(a, [id], (c) => ({ ...c, ...campos })));
+  };
 
   /* Ofrecer o dejar de ofrecer un tipo de decant en varios perfumes. */
   const asignarDecant = (ids, tipoId, ofrecer) => setPerfumes((ps) => asignarTipo(ps, ids, tipoId, ofrecer));
@@ -2306,6 +2335,7 @@ export default function App() {
                 ["pedido", "Mesa de precios"],
                 ["catalogo", "Catálogo"],
                 ["decants", "Decants"],
+                ["cajas", "Cajas"],
                 ["mercadolibre", "Mercado Libre"],
                 ["tiendanube", "Tiendanube"],
               ].map(([id, texto]) => (
@@ -2474,6 +2504,20 @@ export default function App() {
         />
       )}
 
+      {vista === "cajas" && (
+        <PestanaCajas
+          perfumes={perfumesResueltos}
+          ajustes={ajustesResueltos}
+          onCajas={(cambiar) => setAjustes((a) => ({ ...a, cajas: cambiar(Array.isArray(a.cajas) ? a.cajas : []) }))}
+          onCambiar={cambiarPerfume}
+          onFijarObjetivo={fijarObjetivoDirecto}
+          onSoltarMargen={soltarMargenDelCatalogo}
+          onFijarObjetivoTN={fijarObjetivoTN}
+          onSoltarMargenTN={soltarMargenTNDelCatalogo}
+          onConfirmar={setDialogo}
+        />
+      )}
+
       {vista === "mercadolibre" && (
         <MercadoLibre
           perfumes={perfumesResueltos}
@@ -2489,7 +2533,7 @@ export default function App() {
       {vista === "tiendanube" && (
         <PestanaTiendaNube
           perfumes={perfumesResueltos}
-          ajustes={ajustes}
+          ajustes={ajustesResueltos}
           onAjustes={(campos) => setAjustes((a) => ({ ...a, ...campos }))}
           onCambiar={cambiarPerfume}
           onSoltarMargenTN={soltarMargenTNDelCatalogo}
